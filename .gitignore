@@ -424,3 +424,36 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+# ---- Node / Next.js (frontend) ----
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+.pnpm-debug.log*
+
+# ---- Secrets & môi trường (QUAN TRỌNG vì repo có thể public) ----
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+secrets.json
+*.pem
+*.key
+*.pfx
+
+# ---- IaC / AWS ----
+*.tfstate
+*.tfstate.*
+.terraform/
+cdk.out/
+.aws-sam/
+
+# ---- Khác ----
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
