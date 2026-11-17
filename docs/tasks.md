@@ -61,7 +61,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 | ID | Việc | Người | Tham chiếu | Xong khi |
 |---|---|---|---|---|
-| 0.1 | Cấu hình GitHub: ruleset `main`, Squash merge, tự xóa nhánh, Actions read-only, Secret scanning + Push protection + Dependabot; bật 2FA cả 4 người; mời thành viên (2 Admin, 2 Write); bật "Require review from Code Owners" | DEV-B (chủ repo) + OPS-2 (Admin dự phòng) | B1–B7, A7 | Không push thẳng được vào `main` |
+| 0.1 | Cấu hình GitHub: ruleset `main` (chỉ Merge commit) + `dev` (chặn xóa/force push) + tag, Squash cho PR vào `dev`, tự xóa nhánh ngắn, Actions read-only, Secret scanning + Push protection + Dependabot; bật 2FA cả 4 người; mời thành viên (2 Admin, 2 Write); bật "Require review from Code Owners" | DEV-B (chủ repo) + OPS-2 (Admin dự phòng) | B1–B7, A7 | Không push thẳng được vào `main` |
 | 0.2 | **ERD** đầy đủ (mục 8, gồm `payload`, snapshot, job, audit) | DEV-A soạn, DEV-B review | C7, mục 8 | `docs/erd.md` được cả 2 dev duyệt |
 | 0.3 | **API contract** OpenAPI (mục 9.1 + lỗi `problem+json`, phân trang) | DEV-B soạn, DEV-A review | C7, mục 9 | `docs/api/openapi.yaml` — **frontend và backend cùng bám file này** |
 | 0.4 | Bảng ngân sách: điền mục 6 bằng AWS Pricing Calculator; DEV-B cung cấp ước lượng token/lần sinh | OPS-2 (+ DEV-B) | C5, mục 6 | Tổng ≤ $200, có dự phòng; chốt mức dự phòng |
@@ -155,7 +155,7 @@ Các điểm chặn chính:
 - `backend/src/ExamMaker.Worker` và thư mục AI trong `Application`/`Infrastructure`: **DEV-B**.
 - `frontend/`: **DEV-B** sở hữu khung (B1, B2); DEV-A thêm màn hình trong thư mục tính năng riêng (`admin`, `questions`, `review`), không sửa khung nếu chưa báo.
 - `infra/`, `.github/`: **OPS** (đúng CODEOWNERS); dev chỉ nhờ thêm/sửa workflow qua PR.
-- Mỗi PR nhỏ, một việc (một ID trong bảng trên), tên nhánh `feat/…`, `fix/…`, `infra/…`; chỉ Squash merge.
+- Mỗi PR nhỏ, một việc (một ID trong bảng trên), tên nhánh `feat/…`, `fix/…`, `infra/…` tách từ `dev`; PR vào `dev` merge bằng Squash, PR `dev` → `main` chỉ dùng Merge commit (xem `CONTRIBUTING.md`).
 
 ## Định nghĩa "xong"
 

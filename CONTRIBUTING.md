@@ -4,10 +4,14 @@
 
 ## Quy trình
 
-1. Tạo nhánh ngắn từ `main`: `feat/<mô-tả>`, `fix/<mô-tả>`, `infra/<mô-tả>`. Không có nhánh `develop`.
+Mô hình nhánh: `main` (ổn định, được bảo vệ) ← `dev` (nhánh tích hợp, sống lâu) ← nhánh ngắn.
+
+1. Tạo nhánh ngắn **từ `dev`**: `feat/<mô-tả>`, `fix/<mô-tả>`, `infra/<mô-tả>`.
 2. Commit nhỏ, rõ nghĩa; **commit message và tên nhánh viết bằng tiếng Anh** (vd `feat: add question approval endpoint`). Không push thẳng vào `main`.
-3. Mở Pull Request, điền template. Cần 1 approval (và review của Code Owner), CI pass, resolve hết conversation.
-4. Chỉ dùng **Squash merge**. Nhánh tự xoá sau khi merge.
+3. Mở Pull Request **vào `dev`**, điền template, merge bằng **Squash**. Nhánh ngắn tự xoá sau khi merge.
+4. Khi `dev` ổn định, mở PR **`dev` → `main`**: cần 1 approval (và review của Code Owner), CI pass, resolve hết conversation. PR này **chỉ** được merge bằng **Merge commit** (không Squash) để `dev` và `main` không bị lệch nhau.
+5. Không xoá, không force push `dev` và `main` (đã bị chặn bằng ruleset).
+6. Trước khi tạo nhánh mới, `git pull` `dev`; sau khi `dev` → `main` được merge, `git pull origin main` vào `dev` nếu `dev` báo lệch.
 
 ## Quy tắc bảo mật (bất biến)
 
