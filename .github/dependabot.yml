@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Bật các mục dưới đây khi đã có package.json / *.csproj trong thư mục tương ứng.
+  # Nếu bật khi chưa có file manifest, Dependabot sẽ báo lỗi.
+  #
+  # - package-ecosystem: npm
+  #   directory: /frontend
+  #   schedule:
+  #     interval: weekly
+  #   commit-message:
+  #     prefix: "chore(deps)"
+  #
+  # - package-ecosystem: nuget
+  #   directory: /backend
+  #   schedule:
+  #     interval: weekly
+  #   commit-message:
+  #     prefix: "chore(deps)"
