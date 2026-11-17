@@ -1,0 +1,512 @@
+# AI Exam Maker — Project Context
+
+> **Phiên bản 0.3** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
+
+---
+
+## 1. Tổng quan
+
+**AI Exam Maker** là web app giúp giáo viên THPT (Việt Nam) soạn đề thi bằng AI:
+
+1. Giáo viên dùng AI sinh **câu hỏi / bộ câu hỏi** theo môn, khối, chương, dạng câu, mức độ nhận thức.
+2. Câu hỏi được **lưu vào ngân hàng câu hỏi** để tái sử dụng.
+3. Giáo viên **ghép đề thi** từ ngân hàng câu hỏi.
+4. **Tổ trưởng chuyên môn** duyệt đề.
+5. **Admin** chọn đề (phiên bản đã duyệt) được đưa vào sử dụng chính thức cho thi cử.
+
+Đây là đồ án cuối khóa FCJ/FCAJ, triển khai trên AWS.
+
+**Ràng buộc quan trọng**
+- Ngân sách **$200 AWS credit** cho toàn bộ dự án (dev + demo). Đây là **hạn mức ngân sách, không phải cơ chế tự ngắt dịch vụ**: AWS Budgets chỉ cảnh báo, không chặn chi tiêu. Phải có quota ngay trong ứng dụng (đặc biệt cho Bedrock). Không mặc định $200 chắc chắn đủ — xem mục 6.
+- Chỉ dùng dịch vụ AWS thuộc phạm vi chương trình FCAJ. **Không ALB, không NAT Gateway, không Multi-AZ**; chấp nhận đánh đổi về tính sẵn sàng.
+- Ngôn ngữ giao diện: **tiếng Việt**. Code, tên biến/bảng, commit: tiếng Anh.
+
+---
+
+## 2. Phạm vi & luồng demo chính
+
+### 2.1 Luồng demo chính (ưu tiên số 1, mọi thứ khác phục vụ luồng này)
+
+```
+Teacher đăng nhập → sinh câu hỏi bằng AI (async) → rà soát/sửa → lưu ngân hàng → gửi duyệt câu
+ → Head duyệt câu (Approved) → ghép đề từ câu Approved → gửi tổ trưởng
+ → Head duyệt đề (Approved) → Admin publish → xem/xuất đề học sinh & file đáp án
+```
+
+### 2.2 MVP (bắt buộc)
+- Đăng nhập Cognito, 3 vai trò, phân quyền theo tổ chuyên môn
+- Sinh câu hỏi bằng AI **theo môn/khối/chương/dạng/mức độ + ghi chú yêu cầu thêm dạng văn bản ngắn** (chưa upload tài liệu)
+- Ngân hàng câu hỏi + quy trình duyệt câu hỏi
+- Ghép đề, **phiên bản đề + snapshot**, quy trình duyệt đề, publish
+- Xuất đề: bản **học sinh** (không đáp án) và bản **đáp án/lời giải** (cho giáo viên)
+- Audit log, quota AI, giám sát cơ bản
+- Dạng câu hỏi MVP: `MultipleChoice` bắt buộc; `TrueFalse`, `ShortAnswer` làm tiếp nếu kịp; `Essay` để sau. Data model hỗ trợ đủ 4 dạng ngay từ đầu để khỏi đổi schema.
+
+### 2.3 Sau MVP
+- Upload tài liệu (SGK/đề cũ) làm ngữ cảnh cho AI (RAG đơn giản)
+- Ma trận đề + sinh đề tự động, nhiều mã đề (xáo câu/đáp án)
+- Xuất DOCX; thống kê dùng AI; phát hiện câu trùng
+
+### 2.4 Ngoài phạm vi
+Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi cử" = đề được đánh dấu **Published** và xuất file; không phát đề/nhận bài của học sinh trên hệ thống.
+
+---
+
+## 3. Vai trò & phân quyền
+
+| Vai trò | Cognito group | Mô tả |
+|---|---|---|
+| Giáo viên | `teacher` | Sinh câu hỏi AI, quản lý câu hỏi/đề của mình, gửi duyệt |
+| Tổ trưởng | `head` | Quyền giáo viên + duyệt/từ chối câu hỏi và đề trong **tổ chuyên môn của mình** |
+| Quản trị | `admin` | Quản lý người dùng/tổ/môn; publish/unpublish đề; xem audit log, thống kê AI; duyệt thay khi cần. **Không** tạo nội dung (câu hỏi, đề) |
+
+### 3.1 Quy tắc chung
+- Mỗi user có đúng **một vai trò** và **một tổ chuyên môn** (admin không bắt buộc thuộc tổ).
+- **Không ai được duyệt nội dung do chính mình tạo.** Nếu người tạo là tổ trưởng → duyệt bởi **tổ trưởng khác cùng tổ**; nếu tổ không có tổ trưởng khác → **admin** duyệt thay.
+- Quyền kiểm tra ở backend (policy theo role + tổ + ownership). Frontend chỉ ẩn/hiện UI.
+- **Nguồn sự thật phân quyền là DB** (xem 3.3), không chỉ dựa vào claim trong token.
+
+### 3.2 Ma trận quyền chi tiết
+
+| Hành động | Teacher | Head | Admin |
+|---|---|---|---|
+| Sinh câu hỏi bằng AI (trong quota) | ✓ | ✓ | – |
+| Xem câu hỏi `Draft`/`Rejected` | của mình | của mình | tất cả (chỉ xem) |
+| Sửa/xóa câu hỏi `Draft`/`Rejected` của mình (xóa chỉ khi chưa được đề nào tham chiếu) | ✓ | ✓ | – |
+| Gửi duyệt / rút lại câu hỏi của mình (`Draft`/`Rejected` → `Submitted`) | ✓ | ✓ | – |
+| Đánh dấu "Đã rà soát" câu AI của mình (`mark-reviewed`) | ✓ | ✓ | – |
+| Archive câu hỏi `Approved` | của mình | cùng tổ | tất cả |
+| Duyệt/từ chối câu hỏi | – | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
+| Xem câu hỏi `Approved` | cùng tổ | cùng tổ | tất cả |
+| Tạo đề, ghép câu (của mình hoặc `Approved` cùng tổ) | ✓ | ✓ | – |
+| Gửi duyệt / rút lại phiên bản đề của mình (`Draft`/`Rejected` → `Submitted`) | ✓ | ✓ | – |
+| Tạo phiên bản mới từ đề đã có (của mình) | ✓ | ✓ | – |
+| Duyệt/từ chối phiên bản đề | – | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
+| Publish / Unpublish phiên bản đề `Approved` | – | – | ✓ |
+| Archive phiên bản đề `Approved`/`Rejected` | của mình | cùng tổ | tất cả |
+| Đọc danh mục môn/chương/tổ (`GET /subjects`, `/topics`, `/departments`) | ✓ | ✓ | ✓ |
+| Xuất đề học sinh | đề của mình & đề Published cùng tổ | như teacher | tất cả |
+| Xuất **file đáp án/lời giải** | đề của mình | đề trong tổ | tất cả |
+| Quản lý user, tổ, môn, chương | – | – | ✓ |
+| Xem audit log / thống kê AI | – | log trong tổ | tất cả |
+
+### 3.3 Đồng bộ Cognito ↔ PostgreSQL
+- **Tắt tự đăng ký** (self sign-up) trên User Pool. Admin tạo user qua API: gọi `AdminCreateUser` + `AdminAddUserToGroup` rồi ghi bảng `users` (có `cognito_sub`); nếu bước nào lỗi thì rollback/đền bù bước đã làm.
+- `users` trong DB là nguồn sự thật cho **role, department_id, is_active**. Cognito group chỉ là bản sao để cổng thô; API luôn đọc user từ DB theo `sub` (cache ngắn 1–5 phút) rồi mới áp policy.
+- Đổi vai trò/tổ: cập nhật DB **và** group Cognito; có hiệu lực ngay ở API vì API dựa vào DB. Token cũ vẫn hợp lệ đến hết hạn nhưng không đủ để vượt quyền DB.
+- Vô hiệu hóa user: `is_active=false` + `AdminDisableUser` + `AdminUserGlobalSignOut`.
+- Access token TTL ngắn (~60 phút); sau khi đăng nhập mà `sub` chưa có trong `users` → từ chối (không tự cấp quyền).
+- Job đối soát (admin chạy tay hoặc định kỳ): so group Cognito với `users.role`, báo lệch.
+- **Admin đầu tiên (bootstrap)**: vì self sign-up tắt, admin đầu tiên được tạo bằng script/lệnh chạy một lần bởi người triển khai (tạo user Cognito + group `admin` + dòng `users`), không qua API công khai. Ghi quy trình vào `docs/`.
+- **Đăng nhập lần đầu / mật khẩu**: admin tạo user với mật khẩu tạm → user phải đổi mật khẩu ở lần đăng nhập đầu (dùng giao diện đăng nhập của Cognito, Managed Login); có luồng quên mật khẩu. Đổi email phải cập nhật cả Cognito và `users.email`.
+
+---
+
+## 4. Luồng nghiệp vụ
+
+### 4.1 Sinh câu hỏi bằng AI (bất đồng bộ)
+
+```
+Teacher gửi yêu cầu → API kiểm tra quota → tạo AIGenerationJob(Queued) + gửi SQS {jobId}
+ → Worker nhận → claim job (idempotent) → gọi Bedrock → parse + validate JSON → (tuỳ chọn) bước kiểm chứng đáp án
+ → lưu Question(Draft, source=AI) + cập nhật job trong 1 transaction → xóa message SQS
+ → Frontend polling GET /ai/jobs/{id} → Teacher rà soát từng câu
+```
+
+#### 4.1.1 Worker: chống xử lý trùng & phục hồi
+SQS standard queue giao **at-least-once** nên có thể giao lại cùng message. Quy tắc bắt buộc:
+
+- **Idempotency theo `jobId`**: claim bằng cập nhật có điều kiện trong DB, nếu 0 dòng bị ảnh hưởng thì bỏ qua message:
+  `UPDATE jobs SET status='Running', attempt=attempt+1, lease_expires_at=now()+@lease WHERE id=@id AND attempt<@max AND (status='Queued' OR (status='Running' AND lease_expires_at<now()))`
+- Job đã `Succeeded`/`Failed` → xóa message, không làm gì.
+- **Chống ghi trùng**: câu sinh ra có khóa duy nhất `(ai_job_id, ordinal)`; lưu kết quả + đổi trạng thái job trong **một transaction**; chỉ xóa message SQS **sau khi commit**.
+- **Visibility timeout** > thời gian xử lý tối đa (timeout Bedrock × số lần thử trong một lần nhận); worker gia hạn bằng heartbeat khi cần.
+- **Giới hạn retry**: `maxReceiveCount` = 3 rồi chuyển **DLQ**; `max_attempts` trong DB khớp con số này.
+- **Phân loại lỗi**:
+  - *Retryable* (throttling, timeout, 5xx Bedrock, lỗi mạng) → không xóa message; SQS standard **không tự có backoff**, nên worker gọi `ChangeMessageVisibility` để tăng dần thời gian chờ (vd 30s → 120s → 300s) trước khi message được giao lại.
+  - *Non-retryable* (JSON hỏng sau N lần "sửa lại", vi phạm schema, nội dung bị từ chối) → đánh dấu `Failed` + lý do, xóa message, **không** tiêu thêm token.
+- **Phục hồi job treo**: tác vụ định kỳ (trong worker) tìm job `Running` có `lease_expires_at` đã qua → đưa về `Queued` (nếu còn lượt) hoặc `Failed`.
+- **Chống mất message khi enqueue**: API tạo job trong DB rồi mới gửi SQS; nếu gửi lỗi, job kẹt `Queued`. Tác vụ định kỳ tìm job `Queued` quá N phút → **gửi lại message** (an toàn vì worker idempotent theo `jobId`); quá M phút vẫn không chạy → cảnh báo.
+- **Prompt**: template prompt nằm trong code, có số phiên bản; job lưu `prompt_version` + `model_id`. Ghi chú của người dùng chèn vào prompt được coi là **không tin cậy** (có thể chứa prompt injection) — chỉ đóng vai trò dữ liệu, luôn qua validate schema, kết quả vẫn là `Draft`.
+- Ghi token vào job **theo từng lần gọi** để tính đúng chi phí kể cả khi retry.
+
+#### 4.1.2 Kiểm tra độ chính xác của AI
+AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và bắt buộc có người duyệt**. Thêm các lớp kiểm tra:
+
+1. **Validate cấu trúc** theo schema từng dạng (mục 8.2): đủ phương án, đúng 1 đáp án (trắc nghiệm), đúng 4 ý (đúng/sai), v.v.
+2. **Kiểm chứng độc lập (tùy chọn, cấu hình bật/tắt vì tốn token; chỉ áp dụng cho `MultipleChoice`, `TrueFalse`, `ShortAnswer` — `Essay` không so sánh tự động được)**: gọi model lần hai chỉ để *tự giải* câu hỏi (không cho xem đáp án) rồi so với đáp án gốc → lưu `ai_verification` = `Agree` / `Disagree` / `NotChecked`. `Disagree` → gắn cờ "cần xem kỹ".
+3. **Loại trùng**: so sánh nội dung chuẩn hóa với câu đã có trong cùng môn/chương (MVP: so khớp chuỗi; sau đó mới dùng embedding).
+4. **Checklist của người duyệt** hiển thị ở màn hình duyệt: đáp án đúng? lời giải khớp? đúng chương/mức độ? công thức hiển thị đúng?
+5. Teacher phải bấm **"Đã rà soát"** trên câu do AI sinh trước khi được gửi duyệt.
+
+### 4.2 Vòng đời câu hỏi
+
+```
+Draft ──submit──→ Submitted ──approve──→ Approved ──archive──→ Archived
+  ↑                 │    │                   │
+  └───withdraw──────┘    └─reject→ Rejected  └─ sửa nội dung → Draft (revision+1)
+                                    │
+                                    └─ sửa rồi submit lại → Submitted
+```
+
+- `Draft`: đang soạn (cá nhân). `Submitted`: chờ duyệt, khóa sửa; người tạo chỉ có thể **rút lại** (`withdraw` → `Draft`). `Approved`: dùng được cho cả tổ. `Rejected`: có `review_note`; người tạo **sửa được** và `submit` lại trực tiếp (không cần qua `Draft`). `Archived`: ngừng dùng, không khôi phục trong MVP (muốn dùng lại thì nhân bản thành câu mới).
+- Sửa nội dung câu `Approved` → quay về `Draft` và tăng `revision` (câu `Submitted` thì phải rút lại trước); các đề **đã snapshot** không bị ảnh hưởng (mục 4.3).
+- **Xóa**: chỉ xóa được câu `Draft`/`Rejected` **chưa được đề nào tham chiếu**; câu đã `Approved` thì dùng `Archive`, không xóa.
+- Mọi chuyển trạng thái ghi `AuditLog`.
+
+### 4.3 Đề thi: phiên bản & snapshot
+
+`Exam` là "danh tính" của đề; nội dung và trạng thái nằm ở **`ExamVersion`**.
+
+```
+ExamVersion:
+Draft ──submit──→ Submitted ──approve──→ Approved ──publish──→ Published
+  ↑                 │    │                 │  ↑                  │
+  └───withdraw──────┘    └─reject→ Rejected│  └────unpublish─────┘
+                                  │        └──archive──→ Archived  (từ Approved/Rejected)
+                                  └─ sửa rồi submit lại → Submitted
+```
+
+- `Draft`: người tạo chọn/sắp xếp câu hỏi, đặt điểm. Nội dung hiển thị là nội dung **hiện tại** của câu hỏi nguồn (có cảnh báo nếu câu nguồn đã đổi `revision`). Khi ghép có thể chọn câu của mình hoặc câu `Approved` cùng tổ, **nhưng khi `Submit` mọi câu phải đang `Approved`** (duyệt đề không thay cho duyệt câu).
+- **Khi gửi duyệt (`Submit`) → đóng băng**: sao chép **nội dung, đáp án, lời giải, điểm, dạng, mức độ** của từng câu vào `exam_version_questions` (snapshot) kèm `source_question_id`, `source_revision`; tính `content_hash` của cả phiên bản. Từ `Submitted` trở đi **không sửa được**.
+- Muốn sửa: người tạo **rút lại** (`Submitted → Draft`) trước khi có quyết định, hoặc **tạo phiên bản mới** (`POST /exams/{id}/versions`) sao chép từ phiên bản cũ.
+- `Rejected` luôn kèm lý do; người tạo **sửa được** (phiên bản được mở khóa), rồi `submit` lại trực tiếp — mỗi lần `Submit` lại **chụp snapshot mới** và tính lại `content_hash`. Hoặc tạo phiên bản mới.
+- `Published`: admin chọn. **Bất biến.** `Unpublish` đưa phiên bản về `Approved` (thu hồi, vẫn lưu lịch sử trong `audit_logs`; **không** có trạng thái `Unpublished` riêng). Một đề có tối đa **một phiên bản Published** tại một thời điểm; publish phiên bản khác khi đã có bản `Published` bị **từ chối (409)** — admin phải `Unpublish` bản cũ trước.
+- `Archived`: dành cho phiên bản `Approved`/`Rejected` không dùng nữa; không khôi phục trong MVP.
+- Xuất đề luôn lấy từ **snapshot**, không đọc câu hỏi gốc.
+
+### 4.4 Xuất đề
+Hai loại file riêng, **không bao giờ trộn**:
+- **Đề học sinh**: chỉ đề bài (không đáp án, không lời giải), có header (trường, môn, thời gian, mã đề). Trong MVP **mã đề = `exam_versions.version_no`** (chưa có nhiều mã đề xáo thứ tự).
+- **Đáp án/lời giải cho giáo viên**: đáp án, lời giải, thang điểm/rubric. Quyền truy cập chặt hơn (mục 3.2).
+
+Công thức Toán/Lý/Hóa dùng LaTeX/KaTeX. **Cách xuất MVP**: trang xem trước có CSS in, xuất PDF bằng trình duyệt (KaTeX hiển thị đúng, không cần server dựng công thức). **DOCX** (cần chuyển LaTeX→công thức Word) để sau MVP. Vì vậy MVP chưa bắt buộc bucket S3 cho file xuất.
+
+---
+
+## 5. Kiến trúc AWS
+
+### 5.1 Sơ đồ
+
+```mermaid
+flowchart LR
+  U[Người dùng] --> CF[CloudFront + ACM]
+  CF -->|"/* tĩnh (cache)"| S3W[(S3: Next.js static)]
+  CF -->|"/api/* (không cache) HTTPS"| NG
+  U -.đăng nhập PKCE.-> COG[Cognito]
+  subgraph EC2[EC2 + Elastic IP]
+    NG[Nginx :443] --> API[.NET 10 API]
+    WK[.NET Worker]
+  end
+  API --> RDS[(RDS PostgreSQL<br/>Single-AZ, private)]
+  WK --> RDS
+  API -->|gửi job| SQS[SQS + DLQ]
+  SQS -->|nhận job| WK
+  WK --> BR[Amazon Bedrock]
+  API -.đọc config.-> PS[Parameter Store + KMS]
+  EC2 -.log.-> CW[CloudWatch Logs 7 ngày]
+```
+
+### 5.2 Dịch vụ & vai trò
+
+| Dịch vụ | Vai trò |
+|---|---|
+| CloudFront + S3 + ACM | Host frontend (Next.js **static export**); HTTPS cho domain; cổng vào cho `/api/*` → EC2 |
+| Cognito | User Pool, 3 group; phát JWT; self sign-up **tắt** |
+| EC2 (t3.small hoặc t4g.small) + EBS 20–30 GB + Elastic IP | Nginx + .NET 10 API + Worker (BackgroundService đọc SQS) cùng máy |
+| RDS PostgreSQL (micro/small, Single-AZ) | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập |
+| SQS (+ DLQ) | Hàng đợi job AI |
+| S3 | Bucket frontend (qua OAC); bucket tài liệu/file xuất (sau MVP), private + presigned URL |
+| IAM | Instance profile EC2, least privilege (SQS, Bedrock, SSM, Cognito Admin*, S3 nếu dùng) |
+| KMS | Mã hóa; **ưu tiên key do AWS quản lý** (aws/ssm, aws/rds, aws/s3) để không phát sinh phí key riêng |
+| Parameter Store | Connection string, ModelId, cấu hình quota, ID Cognito, origin secret |
+| CloudWatch (retention 7 ngày) | Log, alarm, metric (mục 10) |
+| **Amazon Bedrock** | LLM sinh câu hỏi — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6 |
+
+### 5.3 CloudFront → EC2 (đã chốt hướng, **cần team xác nhận chi tiết**)
+
+Không dùng ALB, nên kết nối này phải tự bảo mật:
+
+- **Domain bắt buộc**: cần một domain có thể tạo bản ghi DNS. Frontend: `app.<domain>` (alias CloudFront). Origin API: `origin.<domain>` → A record trỏ **Elastic IP** (CloudFront yêu cầu origin là hostname, không dùng IP trần).
+- **HTTPS ở origin**: Nginx trên EC2 terminate TLS cho `origin.<domain>` bằng chứng chỉ **Let's Encrypt** (certbot). CloudFront origin: **Origin protocol = HTTPS only**, domain khớp chứng chỉ (CloudFront kiểm tra chứng chỉ origin, **không** chấp nhận self-signed). Gia hạn tự động bằng certbot timer. ACM chỉ dùng cho chứng chỉ phía CloudFront (phải ở us-east-1).
+  - Let's Encrypt HTTP-01 cần port 80 mở ra internet khi cấp/gia hạn: mở **80** chỉ để phục vụ challenge + trả lỗi cho request khác; **443** chỉ cho CloudFront. (Hoặc DNS-01 nếu DNS có API.)
+- **Security Group EC2**: 443 chỉ từ **managed prefix list của CloudFront** (`com.amazonaws.global.cloudfront.origin-facing`); lưu ý prefix list này chiếm nhiều dòng quota rule của SG — kiểm tra quota trước. SSH đóng; quản trị bằng SSM Session Manager.
+- **Chặn gọi trực tiếp vào origin**: CloudFront thêm **custom origin header** bí mật (vd `X-Origin-Verify: <secret>`, lưu Parameter Store); Nginx từ chối request thiếu/sai header.
+- **Behavior `/api/*`**:
+  - Allowed methods: `GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE`.
+  - Cache policy: **`CachingDisabled`** — không cache dữ liệu riêng tư.
+  - Origin request policy: **`AllViewerExceptHostHeader`** (chuyển tiếp `Authorization`, query, header; không chuyển `Host` để khớp chứng chỉ/`server_name` của origin).
+  - Origin read timeout mặc định đủ vì tác vụ AI chạy async; không cho API request dài.
+  - Nginx đặt `X-Forwarded-For/Proto`; .NET bật `ForwardedHeaders` và chỉ tin Nginx.
+- **Behavior mặc định (`/*`)**: S3 origin, cache bình thường; file có hash trong tên cache lâu, HTML cache ngắn; invalidate khi deploy.
+- Một domain cho cả web và API → không cần cấu hình CORS phức tạp.
+
+### 5.4 Các quyết định kiến trúc khác
+1. **Next.js static export** (`output: 'export'`): không SSR, Server Actions, middleware, ISR; toàn bộ dữ liệu qua REST API phía client. Chi tiết routing ở mục 9.
+2. **API + Worker chung máy**, tách project trong code (`ExamMaker.Worker`) để sau tách deploy dễ. Giới hạn bộ nhớ từng process (t3.small chỉ 2 GB RAM).
+3. **EC2 ở public subnet, RDS ở private subnet, không NAT Gateway** (NAT tốn phí đáng kể so với $200). Nếu chọn `t4g` (ARM) thì build `linux-arm64`.
+4. **Secrets/config chỉ qua Parameter Store**, EC2 dùng instance profile, không dùng access key.
+5. **Auth**: Authorization Code + PKCE với Cognito; API validate JWT (issuer, audience/client id, hết hạn) rồi tải user từ DB (mục 3.3).
+
+---
+
+## 6. Ngân sách AWS ($200)
+
+> Chưa có số liệu giá đã kiểm chứng. **Mỗi dòng phải được điền từ AWS Pricing Calculator theo region thực tế và số giờ chạy thực tế.** Không mặc định $200 chắc chắn đủ.
+
+**Giả định cần chốt trước khi tính:** region · số tháng chạy · dev/demo có tắt máy ngoài giờ không · số giáo viên demo · số lần sinh/ngày · model Bedrock.
+
+| Hạng mục | Cách tính | Chi phí/tháng (USD) | Số tháng | Tổng |
+|---|---|---|---|---|
+| EC2 (t3/t4g.small) | giá/giờ × giờ chạy | _điền_ | | |
+| EBS 20–30 GB | GB × giá/GB-tháng | _điền_ | | |
+| IPv4 công khai / Elastic IP | tính theo giờ | _điền_ | | |
+| RDS PostgreSQL instance | giá/giờ × giờ chạy | _điền_ | | |
+| RDS storage + backup | GB × giá | _điền_ | | |
+| CloudFront | thường trong free tier ở quy mô demo — kiểm tra | _điền_ | | |
+| S3 | dung lượng + request | _điền_ | | |
+| Cognito | kiểm tra free tier theo MAU | _điền_ | | |
+| SQS | số request | _điền_ | | |
+| CloudWatch (log, alarm, custom metric) | ingest + số alarm/metric | _điền_ | | |
+| Domain / Route 53 (nếu dùng) | phí domain + hosted zone | _điền_ | | |
+| **Bedrock** | (token vào × giá + token ra × giá) × số lần gọi (kể cả bước kiểm chứng + retry) | _điền_ | | |
+| **Dự phòng** | **≥ 20% (≈ $40)** **[GIẢ ĐỊNH]** | | | |
+| **Tổng** | | | | ≤ $200 |
+
+**Kiểm soát chi phí (nhiều lớp, vì Budgets không tự ngắt):**
+- AWS Budgets cảnh báo ở các mốc (vd 50% / 80% / 100%) gửi email cho cả nhóm.
+- **Quota ngay trong ứng dụng**: giới hạn số câu/lần, số lần sinh/ngày/user, tổng token/ngày toàn hệ thống; vượt quota → API từ chối trước khi vào hàng đợi. Cấu hình quota ở Parameter Store.
+- Model nhỏ/rẻ cho dev; bước kiểm chứng đáp án bật/tắt bằng cấu hình.
+- **Tắt EC2/RDS khi không dùng** (lưu ý RDS tự khởi động lại sau 7 ngày dừng).
+- Dọn tài nguyên sau demo: snapshot, EBS rời, Elastic IP không gắn.
+
+---
+
+## 7. Tech stack
+
+| Tầng | Công nghệ |
+|---|---|
+| Frontend | **Next.js** (App Router, TypeScript, static export), Tailwind CSS, TanStack Query, React Hook Form + Zod, **KaTeX** |
+| Backend | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, FluentValidation, Serilog → CloudWatch |
+| CSDL | PostgreSQL, EF Core migrations |
+| AWS SDK | SQS, SimpleSystemsManagement, BedrockRuntime, CognitoIdentityProvider (admin) |
+| CI/CD | GitHub Actions (mục 11) |
+
+Cấu trúc repo (monorepo):
+
+```
+/frontend                Next.js
+/backend
+  /src
+    ExamMaker.Api            endpoints, auth, DI
+    ExamMaker.Application    use case, DTO, validation, state machine
+    ExamMaker.Domain         entity, enum, quy tắc nghiệp vụ
+    ExamMaker.Infrastructure EF Core, SQS, Bedrock, SSM, Cognito admin
+    ExamMaker.Worker         BackgroundService xử lý job AI
+  /tests
+/infra                   script/IaC triển khai
+/docs                    context.md, ERD, API spec
+```
+
+---
+
+## 8. Mô hình dữ liệu
+
+### 8.1 Bảng chính
+
+- **users**: id, cognito_sub (unique), email, full_name, role, department_id, is_active
+- **departments** (tổ chuyên môn): id, name · tổ trưởng = các `users` có `role='head'` và `department_id` của tổ (một tổ có thể có nhiều tổ trưởng; không cần bảng riêng)
+- **subjects**: id, name, department_id · **topics** (chương): id, subject_id, grade (10/11/12), name, `sort_order` (tránh dùng từ khóa SQL `order` làm tên cột)
+- **questions**: id, subject_id, topic_id, **department_id** (lưu cố định lúc tạo, dùng cho phân quyền "cùng tổ"), grade, **type**, difficulty, **stem** (Markdown+LaTeX), **payload** (jsonb, theo dạng — mục 8.2), explanation, **status**, **revision**, source (`AI`/`Manual`), ai_job_id, ai_ordinal, **ai_verification** (`NotChecked/Agree/Disagree` + note), ai_reviewed_by_author (bool), created_by, submitted_at, reviewed_by, reviewed_at, review_note, timestamps
+  - unique `(ai_job_id, ai_ordinal)` chống ghi trùng khi worker chạy lại
+  - `difficulty`: `Recognition`, `Understanding`, `Application`, `HighApplication`
+  - CHECK: `type` thuộc enum; `payload` không null; kiểm tra sâu bằng FluentValidation theo từng dạng
+- **question_sets** + **question_set_items**: bộ câu hỏi của giáo viên
+- **exams**: id, title, subject_id, grade, department_id, created_by
+- **exam_versions**: id, exam_id, **version_no**, status, duration_minutes, total_points, content_hash, submitted_at, reviewed_by, reviewed_at, review_note, published_by, published_at · unique `(exam_id, version_no)`; partial unique index: tối đa 1 version `Published` / exam
+- **exam_version_questions**: exam_version_id, `sort_order`, points, **source_question_id**, **source_revision**, và (đóng băng khi Submit) **type, difficulty, stem_snapshot, payload_snapshot, explanation_snapshot** · sau `Submitted` chỉ đọc (chặn ở tầng app **và** trigger/ràng buộc nếu kịp)
+- **ai_generation_jobs**: id, requested_by, params (jsonb), status (`Queued/Running/Succeeded/Failed`), attempt, max_attempts, lease_expires_at, error_code, error_message, model_id, prompt_version, input_tokens, output_tokens (cộng dồn), created_at, started_at, finished_at
+- **ai_usage_daily** (quota): user_id, date, jobs, tokens
+- **audit_logs**: id, actor_id, entity_type (`Question/ExamVersion/User/AiJob/...`), entity_id, action, from_status, to_status, note, created_at
+
+### 8.2 Cấu trúc `payload` theo dạng câu hỏi
+
+| `type` | `payload` | Quy tắc |
+|---|---|---|
+| `MultipleChoice` | `{ "options":[{"label":"A","text":"…"},…4], "correctLabel":"B" }` | đúng 4 phương án, đúng 1 đáp án đúng |
+| `TrueFalse` | `{ "statements":[{"label":"a","text":"…","isTrue":true},…4] }` | đúng 4 ý a–d, mỗi ý có đúng/sai |
+| `ShortAnswer` | `{ "answerType":"number\|text", "acceptedAnswers":["12","12,0"], "unit":"m/s", "tolerance":0.01 }` | ≥ 1 đáp án chấp nhận; `tolerance` chỉ cho số |
+| `Essay` | `{ "modelAnswer":"…", "rubric":[{"criterion":"…","points":1.0}] }` | tổng điểm rubric = điểm câu |
+
+`payload_snapshot` của đề copy nguyên khối này khi Submit.
+
+### 8.3 Ràng buộc dữ liệu cần đảm bảo
+- Khi ghép (`Draft`): chỉ gồm câu của người tạo hoặc `Approved` cùng tổ, cùng môn/khối với đề. Khi `Submit`: mọi câu phải `Approved`.
+- Tổng điểm các câu = `total_points` của phiên bản. Điểm dùng kiểu `numeric`, không dùng float.
+- Câu hỏi `Submitted` không sửa (chỉ rút lại); câu `Approved` không sửa trực tiếp (sửa → về `Draft`, tăng `revision`).
+- Khóa ngoại từ `exam_version_questions.source_question_id` và từ đề `Draft` tới câu hỏi dùng `RESTRICT`: không xóa câu đang được tham chiếu.
+
+### 8.4 Dữ liệu khởi tạo (seed)
+- `departments`, `subjects`, `topics` (chương theo chương trình GDPT 2018, khối 10–12) được **seed bằng migration/script** từ file dữ liệu trong repo (không chứa nội dung có bản quyền, chỉ tên môn/chương); admin chỉnh sửa tiếp qua `/admin/*`.
+- Admin đầu tiên tạo theo mục 3.3.
+- Chuyển trạng thái chỉ đi qua state machine ở `Application`, không cập nhật cột `status` tùy ý.
+
+---
+
+## 9. API & Frontend
+
+### 9.1 REST (`/api/v1`)
+
+| Nhóm | Endpoint |
+|---|---|
+| Me | `GET /me` |
+| Catalog (mọi role đã đăng nhập, chỉ đọc) | `GET /departments`, `GET /subjects`, `GET /topics?subjectId=&grade=` |
+| Questions | `GET/POST /questions` (lọc `status`, `subjectId`, `topicId`, `mine`), `GET/PUT/DELETE /questions/{id}`, `POST /questions/{id}/submit`, `/withdraw`, `/approve`, `/reject`, `/archive`, `/mark-reviewed` |
+| Review queue | `GET /review/questions`, `GET /review/exam-versions` (mục `Submitted` trong tổ của Head / tất cả với Admin, loại trừ mục do chính người xem tạo) |
+| Question sets | CRUD `/question-sets`, `POST/DELETE /question-sets/{id}/items` |
+| AI | `POST /ai/generate` → `jobId`, `GET /ai/jobs/{id}`, `GET /ai/jobs`, `GET /ai/quota` |
+| Exams | `GET/POST /exams`, `GET/PUT /exams/{id}` (metadata) |
+| Exam versions | `GET /exams/{id}/versions`, `POST /exams/{id}/versions` (tạo phiên bản mới từ phiên bản cũ), `GET/PUT /exam-versions/{vid}` (PUT chỉ khi `Draft`/`Rejected`), `POST /exam-versions/{vid}/submit`, `/withdraw`, `/approve`, `/reject`, `/archive` |
+| Publishing | `POST /exam-versions/{vid}/publish`, `/unpublish` (admin) |
+| Export | `GET /exam-versions/{vid}/student-sheet`, `GET /exam-versions/{vid}/answer-key` (đọc từ snapshot; kiểm quyền riêng) |
+| Audit | `GET /audit-logs` (Head: giới hạn trong tổ; Admin: tất cả) |
+| Admin | CRUD `/admin/users`, `/admin/departments`, `/admin/subjects`, `/admin/topics`, `GET /admin/ai-usage`, `POST /admin/users/reconcile` |
+
+Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC ISO-8601; ID dạng GUID; thao tác trạng thái dùng `POST` hành động (không `PUT status`); mọi hành động ghi `audit_logs`; endpoint AI có rate limit + quota.
+
+### 9.2 Frontend (static export) — các điểm phải kiểm tra
+- **Routing**: bật `trailingSlash: true`; route động theo id **không** dùng `/exams/[id]` thuần (static export cần biết trước tham số) → dùng trang tĩnh đọc **query string** (`/exams/view?id=…`) hoặc client-side routing.
+- **Refresh/deep link**: dùng **CloudFront Function** (viewer request, chỉ gắn vào behavior `/*`) để ghép `…/` → `…/index.html`. **Không** dùng "custom error response 403/404 → index.html" vì cấu hình đó áp cho cả distribution và sẽ che lỗi của `/api/*`.
+- **Đăng nhập**: Authorization Code + PKCE; kiểm thử các ca: refresh trang giữa chừng, token hết hạn → refresh token, đăng xuất (xóa phiên Cognito), callback URL đúng domain. Cân nhắc nơi lưu token (SPA có rủi ro XSS → CSP chặt, không render HTML từ AI; render Markdown/KaTeX có sanitize).
+- **Auth guard** phía client chỉ là UX; quyền thật ở API.
+- **Job async**: polling `GET /ai/jobs/{id}` (backoff), hiển thị Queued/Running/Failed rõ ràng, cho phép rời trang và quay lại xem job.
+- **Màn hình duyệt**: hiển thị câu/đề + checklist duyệt + cờ `ai_verification`, nhập lý do khi từ chối.
+- **Xem trước & xuất**: hai chế độ riêng (đề học sinh / đáp án), CSS in, KaTeX.
+
+---
+
+## 10. Bảo mật & giám sát
+
+**Bảo mật**
+- HTTPS toàn bộ (viewer: CloudFront; origin: Nginx). S3 private, frontend qua OAC.
+- RDS private + mã hóa; SG chỉ cho SG của EC2.
+- IAM least privilege; không commit secret; không dùng access key trên EC2.
+- Validate JWT + kiểm tra role/tổ/ownership ở **mọi** endpoint; không tin dữ liệu client.
+- Phiên bản đề từ `Submitted` trở đi bất biến; publish/duyệt đều có audit log.
+- Rate limit + quota cho AI; giới hạn kích thước input; log không chứa token/PII nhạy cảm.
+- Nội dung do AI sinh coi là **không tin cậy**: sanitize khi hiển thị. Ghi chú người dùng đưa vào prompt cũng không tin cậy (prompt injection) — xem 4.1.1.
+- Dữ liệu cá nhân (họ tên, email giáo viên) chỉ lưu mức tối thiểu cần thiết; không đưa dữ liệu cá nhân hay nội dung có bản quyền (SGK...) vào prompt gửi AI hoặc vào repo.
+
+**Giám sát (CloudWatch)**
+- Alarm: CPU/EBS, 5xx của API, **DLQ depth > 0**, tuổi message cũ nhất trong SQS, số job `Running` quá lease, lỗi worker, RDS free storage/connections.
+- **Heartbeat worker** (log/metric định kỳ); không có heartbeat → cảnh báo.
+- Metric ứng dụng: token/ngày, số job lỗi, chi phí AI ước tính (lưu ở DB, hiển thị ở `/admin/ai-usage`).
+- **Cảnh báo chi phí**: AWS Budgets (mục 6) + quota ứng dụng. Nhớ đặt giới hạn số alarm/custom metric để khỏi tốn phí.
+- Log retention 7 ngày.
+
+---
+
+## 11. CI/CD, migration, rollback
+
+- **Frontend**: GitHub Actions → build → `aws s3 sync` → CloudFront invalidation. Rollback: deploy lại commit trước (giữ artifact build gần nhất).
+- **Backend**: build/publish (`linux-x64` hoặc `linux-arm64`) → đẩy artifact lên S3/SSM → trên EC2 giải nén vào thư mục theo phiên bản (`/opt/exammaker/releases/<id>`), đổi symlink `current`, restart service systemd (API + Worker). **Giữ N bản gần nhất** để rollback bằng cách đổi lại symlink. Kiểm tra health endpoint sau deploy.
+- **Migration**: dùng EF Core migration bundle chạy **trước** khi chuyển phiên bản mới; thay đổi schema theo kiểu **tương thích ngược** (thêm cột/bảng trước, xóa sau), để rollback code không vỡ DB. **Chụp snapshot RDS thủ công** trước migration lớn.
+- Môi trường: tối thiểu `local` + `demo/prod` (không dựng môi trường staging đầy đủ vì ngân sách); nêu rõ nếu dùng chung.
+
+---
+
+## 12. Yêu cầu phi chức năng, kiểm thử, dữ liệu & vận hành
+
+**Quy mô dự kiến**: demo ≤ ~20 người dùng đồng thời, vài chục giáo viên, vài nghìn câu hỏi. Mục tiêu: trang thường phản hồi < 1s ở API đọc; tác vụ AI chạy nền, hiển thị trạng thái; chấp nhận downtime ngắn khi deploy/restart (không Multi-AZ).
+
+**Kiểm thử**
+- **Unit test** cho state machine (mọi chuyển trạng thái hợp lệ/không hợp lệ) và policy phân quyền theo role/tổ/ownership.
+- **Integration test** với PostgreSQL thật (Testcontainers hoặc tương đương) cho repository, unique/partial index, transaction của worker, idempotency (xử lý trùng message).
+- **Test phía AI** dùng stub/fake Bedrock; không gọi Bedrock thật trong CI.
+- **E2E** tối thiểu cho luồng demo chính (mục 2.1) trước buổi demo.
+- CI chạy lint + build + test cho `frontend` và `backend` trên mỗi PR; là status check bắt buộc của `main`.
+
+**Dữ liệu & sao lưu**
+- RDS: bật automated backup (giữ ngắn để tiết kiệm), chụp snapshot thủ công trước migration lớn (mục 11); **thử khôi phục ít nhất một lần** trước demo.
+- Dữ liệu seed: mục 8.4. Thời gian lưu trong DB là UTC, hiển thị theo múi giờ Việt Nam ở frontend.
+
+**Dữ liệu cá nhân & bản quyền**
+- Chỉ lưu thông tin tối thiểu của giáo viên (họ tên, email, tổ). Không đưa dữ liệu thật của người dùng vào repo, ảnh chụp màn hình công khai, hay prompt gửi AI.
+- Không đưa nội dung có bản quyền (SGK, đề thương mại) vào repo hay dữ liệu seed.
+
+**Phân công**: chưa ghi ai phụ trách mảng nào (backend, frontend, AWS/DevOps, AI/Bedrock, database); thêm bảng phân công vào đây khi đã chia task.
+
+---
+
+## 13. Checklist trước khi giao AI agent viết code
+
+- [ ] Chốt quy trình duyệt câu hỏi và đề thi (mục 3–4) — **bắt buộc**
+- [ ] Chốt cấu hình CloudFront → EC2 + HTTPS + domain (mục 5.3) — **bắt buộc**
+- [ ] Phiên bản/snapshot đề thi (mục 4.3, 8) — **bắt buộc**
+- [ ] Idempotency + retry cho SQS Worker (mục 4.1.1) — **bắt buộc**
+- [ ] Tính ngân sách AWS + Bedrock (mục 6) — **bắt buộc**
+- [ ] Chốt dạng câu hỏi của MVP (mục 2.2)
+- [ ] Hoàn thiện ERD + API contract (mục 8–9)
+
+---
+
+## 14. Điểm cần chốt trong team
+
+Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là các điểm cần giá trị cụ thể từ nhóm AWS:
+
+1. Domain dùng cho `app.` và `origin.`; Let's Encrypt HTTP-01 hay DNS-01.
+2. Model Bedrock + region; mức quota AI/user/ngày; có bật bước kiểm chứng đáp án không.
+3. `t3.small` (x86) hay `t4g.small` (ARM).
+4. Công cụ IaC (CDK/Terraform/CloudFormation) hay dựng tay qua Console.
+5. Mức dự phòng ngân sách (đang đề xuất ≥ 20%, mục 6) — chốt cùng bảng chi phí.
+
+> Khi một điểm được chốt: chuyển sang mục "Quyết định đã chốt" bên dưới, gỡ tag **[GIẢ ĐỊNH]** ở chỗ tương ứng và ghi vào "Lịch sử thay đổi".
+
+### Quyết định đã chốt
+
+- **Submit đề yêu cầu mọi câu `Approved`**: duyệt đề không thay cho duyệt câu (mục 4.3). _Chốt 17/11/2026._
+- **Admin không tạo nội dung**: không sinh AI, không tạo câu/đề; chỉ quản trị, duyệt thay, publish/unpublish (mục 3, 3.2). _Chốt 17/11/2026._
+- **Publish khi đã có bản `Published` khác của cùng đề**: bị từ chối (409), admin phải `Unpublish` bản cũ trước (mục 4.3). _Chốt 17/11/2026._
+- **Dạng câu hỏi MVP**: `MultipleChoice` bắt buộc; `TrueFalse`, `ShortAnswer` làm tiếp nếu kịp; `Essay` để sau; data model hỗ trợ đủ 4 dạng (mục 2.2). _Chốt 17/11/2026._
+- **MVP chỉ sinh theo môn/chương + ghi chú**, chưa upload tài liệu (mục 2.2). _Chốt 17/11/2026._
+- **"Đưa vào thi cử" = đánh dấu `Published` + xuất file**; hệ thống không phát đề/nhận bài (mục 2.4). _Chốt 17/11/2026._
+- **Duyệt thay khi người tạo là tổ trưởng**: tổ trưởng khác cùng tổ; nếu không có thì admin (mục 3.1). _Chốt 17/11/2026._
+- **Một đề tối đa 1 phiên bản `Published`** tại một thời điểm (mục 4.3). _Chốt 17/11/2026._
+- **Xuất PDF bằng trình duyệt trong MVP**, DOCX để sau (mục 4.4). _Chốt 17/11/2026._
+- **Quy mô dự kiến** (mục 12). _Chốt 17/11/2026._
+
+---
+
+## 15. Quy ước cho AI coding agent
+
+- Không thêm dịch vụ AWS ngoài mục 5.2 khi chưa hỏi team (đặc biệt **không ALB, NAT Gateway, Multi-AZ, ECS/EKS**).
+- Frontend luôn tương thích **static export**; không dùng tính năng cần Node server; route động dùng query string.
+- Mọi phân quyền ở backend, dựa trên **DB user** (role, tổ, is_active), không chỉ claim token.
+- Mọi chuyển trạng thái đi qua state machine ở `Application` và ghi `audit_logs`; có test cho luồng duyệt và policy theo role/tổ.
+- Phiên bản đề từ `Submitted` trở đi **không bao giờ** sửa tại chỗ; xuất đề **chỉ** đọc snapshot.
+- Mọi gọi AI đi qua SQS + worker; worker **phải idempotent** theo `jobId`; kiểm quota trước khi enqueue và trước khi gọi Bedrock.
+- Xuất đề: tách riêng đề học sinh và đáp án; không để đáp án lọt vào file học sinh.
+- Nội dung AI là dữ liệu không tin cậy: validate schema khi nhận, sanitize khi hiển thị.
+- UI text tiếng Việt (tách khỏi code), code/comment kỹ thuật tiếng Anh; schema chỉ đổi qua EF Core migration.
+- Không chắc về nghiệp vụ → tham chiếu mục 3, 4, 14 hoặc hỏi lại, không tự bịa quy tắc.
+- Không tự `git commit`/`git push` khi người dùng chưa yêu cầu; không commit secret, `.env`, key, ID/ARN thật hay dữ liệu thật.
+- Commit message, tên nhánh, tên biến/bảng, comment kỹ thuật: tiếng Anh. Tài liệu trong `docs/`: tiếng Việt.
+- Mọi thay đổi phân quyền hoặc state machine phải có test (mục 12) và cập nhật mục 3–4 của file này cùng PR.
+
+---
+
+## Lịch sử thay đổi
+
+**0.3**
+- Vòng đời: `Rejected` sửa được và submit lại trực tiếp (câu hỏi và đề); `Unpublish` đưa về `Approved` (bỏ trạng thái `Unpublished`); thêm `Archive` cho phiên bản đề; quy tắc xóa câu hỏi.
+- Khi `Submit` đề, mọi câu phải `Approved`; luồng demo cập nhật tương ứng. Publish khi đã có bản `Published` bị từ chối.
+- Admin không tạo nội dung (bỏ quyền sinh AI); thêm các dòng còn thiếu vào ma trận quyền (`mark-reviewed`, archive, đọc danh mục).
+- Dữ liệu: `questions.department_id`; bỏ `department_heads`; đổi `order` → `sort_order`; `jobs.prompt_version`; FK `RESTRICT`; mục 8.4 seed; bootstrap admin đầu tiên và luồng mật khẩu lần đầu (3.3).
+- Worker: backoff bằng `ChangeMessageVisibility`; gửi lại message cho job kẹt `Queued`; quy tắc prompt/prompt injection; phạm vi bước kiểm chứng đáp án.
+- API: thêm catalog (`/departments`, `/subjects`, `/topics`), hàng đợi duyệt (`/review/*`), `/audit-logs` theo tổ, `GET /exams/{id}/versions`, `/archive` cho phiên bản đề.
+- Mục 12 thay bằng yêu cầu phi chức năng, kiểm thử, dữ liệu; bỏ bảng review cũ. Thêm mục "Quyết định đã chốt"; mở rộng mục 15.
+- Đã chốt (17/11/2026): Submit đề yêu cầu mọi câu `Approved`; admin không tạo nội dung; publish khi đã có bản `Published` thì từ chối (409); và toàn bộ điểm nghiệp vụ trước đây là **[GIẢ ĐỊNH]** (dạng câu MVP, chưa upload tài liệu, định nghĩa "thi cử", duyệt thay, 1 bản `Published`, xuất PDF qua trình duyệt, quy mô). Chỉ còn các điểm phía AWS ở mục 14 và mức dự phòng ngân sách ở mục 6.
+
+**0.2**
+- Chốt CloudFront → EC2 qua Nginx + HTTPS; thêm trạng thái `Submitted/Rejected` cho câu hỏi và quy tắc ai duyệt thay; worker SQS có idempotency, lease, DLQ, phục hồi job treo; đề thi có **phiên bản + snapshot**; khung ngân sách AWS kèm Bedrock; kiểm tra chất lượng AI, đồng bộ Cognito–DB, `payload` theo dạng câu, xuất đề học sinh/đáp án, ma trận phân quyền, routing static export, monitoring, CI/CD; thu hẹp MVP vào luồng demo chính.

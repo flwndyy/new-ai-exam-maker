@@ -1,0 +1,7 @@
+# TODO: thay bằng username GitHub thật của 2 người code và 2 người AWS.
+# Đến khi thay xong, KHÔNG bật "Require review from Code Owners".
+
+/frontend/  @DEV_1 @DEV_2
+/backend/   @DEV_1 @DEV_2
+/infra/     @DEVOPS_1 @DEVOPS_2
+/.github/   @DEVOPS_1 @DEVOPS_2
