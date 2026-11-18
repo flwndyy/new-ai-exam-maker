@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ExamMaker.Domain/ExamMaker.Domain.csproj" />
+    <Project Path="src/ExamMaker.Application/ExamMaker.Application.csproj" />
+    <Project Path="src/ExamMaker.Infrastructure/ExamMaker.Infrastructure.csproj" />
+    <Project Path="src/ExamMaker.Api/ExamMaker.Api.csproj" />
+    <Project Path="src/ExamMaker.Worker/ExamMaker.Worker.csproj" />
+  </Folder>
+</Solution>
