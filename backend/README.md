@@ -30,3 +30,16 @@ Keep HTTP mapping in API controllers and put each use case in Application.
 Domain owns business rules. Infrastructure implements integrations.
 The API and Worker are separate entry points. Add backend test projects
 under `tests/`.
+
+## Database
+
+The API reads the PostgreSQL connection string from `ConnectionStrings__ExamMaker`
+(environment variable or Parameter Store); never commit it. Create or update a
+migration from `backend/`:
+
+```powershell
+dotnet ef migrations add <Name> --project src/ExamMaker.Infrastructure --output-dir Persistence/Migrations
+dotnet ef migrations script --idempotent --project src/ExamMaker.Infrastructure
+```
+
+Generating migrations and scripts does not need a running database.
