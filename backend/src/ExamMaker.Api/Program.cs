@@ -1,4 +1,5 @@
 using ExamMaker.Infrastructure;
+using ExamMaker.Infrastructure.Persistence;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +12,7 @@ builder.Services.AddSerilog((services, logger) => logger
     .Enrich.FromLogContext()
     .WriteTo.Console());
 
+builder.Services.AddExamMakerPersistence(builder.Configuration);
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
