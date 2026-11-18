@@ -364,7 +364,7 @@ Cấu trúc repo (monorepo):
 | Catalog (mọi role đã đăng nhập, chỉ đọc) | `GET /departments`, `GET /subjects`, `GET /topics?subjectId=&grade=` |
 | Questions | `GET/POST /questions` (lọc `status`, `subjectId`, `topicId`, `mine`), `GET/PUT/DELETE /questions/{id}`, `POST /questions/{id}/submit`, `/withdraw`, `/approve`, `/reject`, `/archive`, `/mark-reviewed` |
 | Review queue | `GET /review/questions`, `GET /review/exam-versions` (mục `Submitted` trong tổ của Head / tất cả với Admin, loại trừ mục do chính người xem tạo) |
-| Question sets | CRUD `/question-sets`, `POST/DELETE /question-sets/{id}/items` |
+| Question sets | CRUD `/question-sets`, `POST /question-sets/{id}/items`, `DELETE /question-sets/{id}/items/{questionId}` |
 | AI | `POST /ai/generate` → `jobId`, `GET /ai/jobs/{id}`, `GET /ai/jobs`, `GET /ai/quota` |
 | Exams | `GET/POST /exams`, `GET/PUT /exams/{id}` (metadata) |
 | Exam versions | `GET /exams/{id}/versions`, `POST /exams/{id}/versions` (tạo phiên bản mới từ phiên bản cũ), `GET/PUT /exam-versions/{vid}` (PUT chỉ khi `Draft`/`Rejected`), `POST /exam-versions/{vid}/submit`, `/withdraw`, `/approve`, `/reject`, `/archive` |
