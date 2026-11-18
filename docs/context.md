@@ -442,10 +442,10 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 ## 13. Checklist trước khi giao AI agent viết code
 
 - [x] Chốt quy trình duyệt câu hỏi và đề thi (mục 3–4) — **bắt buộc**
-- [x] Chốt cấu hình CloudFront → EC2 + HTTPS + domain (mục 5.3) — **bắt buộc**
+- [ ] Chốt cấu hình CloudFront → EC2 + HTTPS + domain (mục 5.3) — **bắt buộc**
 - [x] Phiên bản/snapshot đề thi (mục 4.3, 8) — **bắt buộc**
 - [x] Idempotency + retry cho SQS Worker (mục 4.1.1) — **bắt buộc**
-- [x] Tính ngân sách AWS + Bedrock (mục 6) — **bắt buộc**
+- [ ] Tính ngân sách AWS + Bedrock (mục 6) — **bắt buộc**
 - [x] Chốt dạng câu hỏi của MVP (mục 2.2)
 - [x] Hoàn thiện ERD + API contract (mục 8–9)
 
@@ -475,7 +475,6 @@ Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là 
 - **Xuất PDF bằng trình duyệt trong MVP**, DOCX để sau (mục 4.4). _Chốt 17/11/2026._
 - **Quy mô dự kiến** (mục 12). _Chốt 17/11/2026._
 - **Mức dự phòng ngân sách ≥ 20% (≈ $40)** (mục 6). _Chốt 18/11/2026._
-- **Checklist mục 13 đã chốt đủ 7/7** (state machine duyệt, CloudFront→EC2, phiên bản/snapshot đề, idempotency SQS, ngân sách, dạng câu MVP, ERD + API contract); được phép bắt đầu code tính năng. _Chốt 18/11/2026._
 
 ---
 
@@ -500,7 +499,7 @@ Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là 
 ## Lịch sử thay đổi
 
 **0.4**
-- Tick đủ 7 mục checklist (mục 13) — được phép bắt đầu code tính năng. Chốt mức dự phòng ngân sách ≥ 20%, gỡ tag **[GIẢ ĐỊNH]** ở mục 6 (chốt 18/11/2026).
+- Tick 5/7 mục checklist (mục 13); **còn mở**: CloudFront → EC2 (chờ domain, HTTP-01/DNS-01 — mục 14) và ngân sách (chờ điền bảng chi phí mục 6, gồm Bedrock). Chốt mức dự phòng ngân sách ≥ 20%, gỡ tag **[GIẢ ĐỊNH]** ở mục 6 (chốt 18/11/2026).
 
 **0.3**
 - Vòng đời: `Rejected` sửa được và submit lại trực tiếp (câu hỏi và đề); `Unpublish` đưa về `Approved` (bỏ trạng thái `Unpublished`); thêm `Archive` cho phiên bản đề; quy tắc xóa câu hỏi.
