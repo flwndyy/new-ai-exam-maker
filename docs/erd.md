@@ -90,13 +90,13 @@ trạng thái sau, ghi chú và thời điểm.
 | `subjects` | PK `id`; FK `department_id → departments.id` | `name` |
 | `topics` | PK `id`; FK `subject_id → subjects.id` | `grade`, `name`, `sort_order` |
 | `questions` | PK `id`; FK `department_id`, `subject_id`, `topic_id`, `ai_job_id`; `created_by` và `reviewed_by` trỏ đến `users.id` | `grade`, `type`, `difficulty`, `stem`, `payload`, `explanation`, `status`, `revision`, `source`, `ai_ordinal`, `ai_verification` và ghi chú, `ai_reviewed_by_author`, `submitted_at`, `reviewed_at`, `review_note`, thời điểm tạo/cập nhật |
-| `question_sets` | PK `id`; đề xuất FK `created_by → users.id` | Đề xuất `name` |
-| `question_set_items` | Đề xuất PK ghép `(question_set_id, question_id)`; cả hai cột là FK đến bộ câu hỏi và câu hỏi tương ứng | — |
+| `question_sets` | PK `id`; FK `created_by → users.id` | `name` |
+| `question_set_items` | PK ghép `(question_set_id, question_id)`; cả hai cột là FK đến bộ câu hỏi và câu hỏi tương ứng | — |
 | `exams` | PK `id`; FK `subject_id`, `department_id`, `created_by → users.id` | `title`, `grade` |
 | `exam_versions` | PK `id`; FK `exam_id → exams.id`; `reviewed_by` và `published_by` trỏ đến `users.id` | `version_no`, `status`, `duration_minutes`, `total_points`, `content_hash`, `submitted_at`, `reviewed_at`, `review_note`, `published_at` |
-| `exam_version_questions` | Đề xuất PK ghép `(exam_version_id, sort_order)`; FK `exam_version_id → exam_versions.id`, `source_question_id → questions.id` | `points`, `source_revision`, `type`, `difficulty`, `stem_snapshot`, `payload_snapshot`, `explanation_snapshot` |
+| `exam_version_questions` | PK ghép `(exam_version_id, sort_order)`; unique `(exam_version_id, source_question_id)`; FK `exam_version_id → exam_versions.id`, `source_question_id → questions.id` | `points`, `source_revision`, `type`, `difficulty`, `stem_snapshot`, `payload_snapshot`, `explanation_snapshot` |
 | `ai_generation_jobs` | PK `id`; FK `requested_by → users.id` | `params`, `status`, `attempt`, `max_attempts`, `lease_expires_at`, `error_code`, `error_message`, `model_id`, `prompt_version`, `input_tokens`, `output_tokens`, `created_at`, `started_at`, `finished_at` |
 | `ai_usage_daily` | PK ghép `(user_id, date)`; FK `user_id → users.id` | `jobs`, `tokens` |
 | `audit_logs` | PK `id`; FK `actor_id → users.id` | `entity_type`, `entity_id`, `action`, `from_status`, `to_status`, `note`, `created_at` |
 
-Các mục ghi “đề xuất” cần được hai dev chốt trong PR trước khi viết migration A2.
+Chi tiết schema A2 nằm tại mục 8.1 trong `docs/context.md`. Snapshot được phép NULL khi Draft; tầng Application kiểm tra và chụp đủ nội dung khi Submit. Các bảng `exams`, `exam_versions` có thêm `created_at`, `updated_at` theo API contract.

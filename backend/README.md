@@ -43,3 +43,29 @@ dotnet ef migrations script --idempotent --project src/ExamMaker.Infrastructure
 ```
 
 Generating migrations and scripts does not need a running database.
+
+The A2 migrations create all 13 tables from section 8 and seed four departments,
+four subjects and 82 topics. The reviewed catalog input is in
+`docs/catalog-seed-draft.md` at the repository root. Keep applied migrations in
+order and add a new migration for subsequent schema changes.
+
+From `backend/`, with `ConnectionStrings__ExamMaker` set in the current terminal
+to the intended development database, run:
+
+```powershell
+dotnet test ExamMaker.slnx
+dotnet ef database update --project src/ExamMaker.Infrastructure
+```
+
+Verify a fresh database with:
+
+```sql
+SELECT 'departments' AS table_name, COUNT(*) FROM departments
+UNION ALL SELECT 'subjects', COUNT(*) FROM subjects
+UNION ALL SELECT 'topics', COUNT(*) FROM topics;
+```
+
+Expected counts are 4, 4 and 82. `exam_versions` has a unique filtered index
+for one `Published` version per exam. All foreign keys use `RESTRICT`, and
+points use `numeric`. Snapshot creation, state transitions and atomic quota
+updates are implemented by the application tasks that follow A2.

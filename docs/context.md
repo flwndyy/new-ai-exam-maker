@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.4** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.5** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -330,6 +330,15 @@ Cấu trúc repo (monorepo):
 - **ai_usage_daily** (quota): user_id, date, jobs, tokens
 - **audit_logs**: id, actor_id, entity_type (`Question/ExamVersion/User/AiJob/...`), entity_id, action, from_status, to_status, note, created_at
 
+#### Chi tiết triển khai A2
+
+- `question_sets` dùng `name`, `created_by`; `question_set_items` dùng khóa chính ghép `(question_set_id, question_id)`.
+- `exam_version_questions` dùng khóa chính ghép `(exam_version_id, sort_order)` và unique `(exam_version_id, source_question_id)` để tránh lặp câu trong một phiên bản. Snapshot được phép NULL khi đang soạn; khi Submit, tầng Application phải điền đủ snapshot, kiểm tra câu Approved và tổng điểm theo mục 4.3, 8.3.
+- `points` và `total_points` dùng PostgreSQL `numeric` không giới hạn precision/scale ở schema, ánh xạ C# `decimal`. Thời gian dùng `timestamp with time zone` và giá trị UTC. `exams`, `exam_versions` có `created_at`, `updated_at` theo API contract.
+- `ai_usage_daily` dùng khóa chính `(user_id, date)`, `date` là ngày UTC; bộ đếm token dùng `bigint`. `audit_logs.entity_id` là UUID và không có FK đa hình; `actor_id` tham chiếu `users` bằng RESTRICT.
+- Toàn bộ FK dùng RESTRICT. Việc chuyển trạng thái, đồng bộ snapshot, phân quyền và cập nhật quota đồng thời thuộc các task nghiệp vụ sau A2.
+- `users.department_id` bắt buộc với teacher/head. Câu AI bắt buộc có `ai_job_id` và `ai_ordinal >= 1`; câu Manual không gắn job có thể để trống cả hai trường.
+
 ### 8.2 Cấu trúc `payload` theo dạng câu hỏi
 
 | `type` | `payload` | Quy tắc |
@@ -497,6 +506,10 @@ Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là 
 ---
 
 ## Lịch sử thay đổi
+
+**0.5 — 19/11/2026**
+- Hoàn thiện schema A2 cho 13 bảng, khóa ghép, điểm numeric, snapshot nullable khi Draft, quota UTC và audit UUID. Bổ sung CHECK tổ của người dùng và định danh câu AI; giữ các quy tắc chuyển trạng thái ở tầng Application.
+- Danh mục seed gồm 4 tổ riêng, 4 môn Toán/Vật lí/Hóa học/Sinh học và 82 chương khối 10–12 theo Chân Trời Sáng Tạo, từ `docs/catalog-seed-draft.md`.
 
 **0.4**
 - Tick 5/7 mục checklist (mục 13); **còn mở**: CloudFront → EC2 (chờ domain, HTTP-01/DNS-01 — mục 14) và ngân sách (chờ điền bảng chi phí mục 6, gồm Bedrock). Chốt mức dự phòng ngân sách ≥ 20%, gỡ tag **[GIẢ ĐỊNH]** ở mục 6 (chốt 18/11/2026).
