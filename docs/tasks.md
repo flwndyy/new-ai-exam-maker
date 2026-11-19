@@ -91,7 +91,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 ## DEV-B — AI + soạn đề + xuất đề (@flwndyy)
 
 **Chặng 1 (20–24/11) — Làm song song, không phụ thuộc DEV-A**
-- [ ] B1. Next.js static export: `trailingSlash`, Tailwind, TanStack Query, React Hook Form + Zod, KaTeX; client gọi API sinh từ OpenAPI; layout + chuỗi tiếng Việt tách file; route động bằng query string (mục 9.2).
+- [x] B1. Next.js static export: `trailingSlash`, Tailwind, TanStack Query, React Hook Form + Zod, KaTeX; client gọi API sinh từ OpenAPI; layout + chuỗi tiếng Việt tách file; route động bằng query string (mục 9.2).
 - [ ] B2. Luồng đăng nhập Cognito Authorization Code + PKCE: callback, refresh token, hết hạn, đăng xuất, auth guard (UX); CSP chặt. *Cần Cognito + domain từ OPS.*
 - [ ] B3. **Lõi AI (thuần logic, test được ngay)**: prompt template có `prompt_version`; JSON schema + validator theo từng dạng (mục 8.2); phân loại lỗi retryable/non-retryable; interface Bedrock + **fake** cho test.
 - [ ] B4. Kiểm chứng đáp án (tùy chọn, mục 4.1.2) và loại trùng bằng so khớp chuỗi.
