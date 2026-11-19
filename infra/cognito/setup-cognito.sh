@@ -314,7 +314,21 @@ fi
 
 if [ -n "$EXISTING_DOMAIN" ]; then
   DOMAIN_PREFIX="$EXISTING_DOMAIN"
-  echo "==> Reusing existing Cognito domain prefix '${DOMAIN_PREFIX}'."
+  EXISTING_DOMAIN_VER="$(aws cognito-idp describe-user-pool-domain \
+    --region "$AWS_REGION" \
+    --domain "$DOMAIN_PREFIX" \
+    --query "DomainDescription.ManagedLoginVersion" \
+    --output text)"
+  if [ "$EXISTING_DOMAIN_VER" != "2" ]; then
+    echo "==> Upgrading existing Cognito domain '${DOMAIN_PREFIX}' from version '${EXISTING_DOMAIN_VER}' to Managed Login v2..."
+    aws cognito-idp update-user-pool-domain \
+      --region "$AWS_REGION" \
+      --user-pool-id "$USER_POOL_ID" \
+      --domain "$DOMAIN_PREFIX" \
+      --managed-login-version 2 >/dev/null
+  else
+    echo "==> Reusing existing Cognito domain prefix '${DOMAIN_PREFIX}' (Managed Login v2)."
+  fi
 else
   if [ -z "$COGNITO_DOMAIN_PREFIX" ]; then
     echo "ERROR: COGNITO_DOMAIN_PREFIX is required on first setup (globally unique in ${AWS_REGION}, lowercase letters/numbers/hyphens)." >&2
@@ -419,7 +433,8 @@ else
       PreventUserExistenceErrors: "ENABLED",
       EnableTokenRevocation: true
     }
-    | if (.DefaultRedirectURI != null and ((.CallbackURLs | index(.DefaultRedirectURI)) == null))
+    | .DefaultRedirectURI as $default_uri
+    | if ($default_uri != null and ((.CallbackURLs | index($default_uri)) == null))
       then del(.DefaultRedirectURI)
       else .
       end

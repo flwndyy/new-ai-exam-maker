@@ -157,6 +157,7 @@ COGNITO_SUB="$(aws cognito-idp admin-create-user \
   --region ap-southeast-1 \
   --user-pool-id "$USER_POOL_ID" \
   --username "$ADMIN_EMAIL" \
+  --desired-delivery-mediums EMAIL \
   --user-attributes Name=email,Value="$ADMIN_EMAIL" Name=email_verified,Value=true Name=name,Value="$ADMIN_NAME" \
   --query "User.Attributes[?Name=='sub'].Value | [0]" \
   --output text)"
@@ -235,6 +236,7 @@ Script gọi tối thiểu số lệnh AWS API (đọc SSM 1 lần, `describe-us
      --region ap-southeast-1 \
      --user-pool-id "$USER_POOL_ID" \
      --username "<test-email>" \
+     --desired-delivery-mediums EMAIL \
      --user-attributes Name=email,Value="<test-email>" Name=email_verified,Value=true Name=name,Value="Test Teacher"
    aws cognito-idp admin-add-user-to-group \
      --region ap-southeast-1 \
