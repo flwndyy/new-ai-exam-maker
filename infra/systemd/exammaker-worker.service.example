@@ -1,0 +1,22 @@
+[Unit]
+Description=AI Exam Maker Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=exammaker
+Group=exammaker
+WorkingDirectory=/opt/exammaker/current
+EnvironmentFile=/etc/exammaker/worker.env
+ExecStart=/opt/exammaker/current/ExamMaker.Worker
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/exammaker
+
+[Install]
+WantedBy=multi-user.target

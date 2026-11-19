@@ -1,0 +1,22 @@
+[Unit]
+Description=AI Exam Maker API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=exammaker
+Group=exammaker
+WorkingDirectory=/opt/exammaker/current
+EnvironmentFile=/etc/exammaker/api.env
+ExecStart=/opt/exammaker/current/ExamMaker.Api --urls http://127.0.0.1:5000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/exammaker
+
+[Install]
+WantedBy=multi-user.target

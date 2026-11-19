@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# O1 template for an Amazon Linux 2023 ARM64 EC2 instance (t4g.small).
+# Run only after O2/O3 create the instance and attach the least-privilege role.
+# Do not put passwords, tokens, private keys, IDs, or ARNs in this file.
+
+APP_USER="exammaker"
+APP_ROOT="/opt/exammaker"
+
+dnf update -y
+dnf install -y nginx jq
+
+id "${APP_USER}" >/dev/null 2>&1 || useradd --system --home-dir "${APP_ROOT}" --shell /sbin/nologin "${APP_USER}"
+install -d -o "${APP_USER}" -g "${APP_USER}" -m 0750 \
+  "${APP_ROOT}/releases" "${APP_ROOT}/shared" "${APP_ROOT}/current"
+install -d -o root -g root -m 0750 /etc/exammaker
+
+# Copy the reviewed files from this repository during O3/O15 deployment:
+#   infra/nginx/exammaker.conf.example
+#   infra/systemd/exammaker-api.service.example
+#   infra/systemd/exammaker-worker.service.example
+#
+# Supply runtime configuration through /etc/exammaker/api.env and worker.env.
+# Secrets must come from Parameter Store or another approved deployment step.
+
+systemctl enable nginx
+systemctl start nginx
+
+echo "Bootstrap prerequisites installed. Continue with the AWS runbook before starting the application."
