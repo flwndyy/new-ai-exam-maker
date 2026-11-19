@@ -74,10 +74,13 @@ chạy Single-AZ.
 1. Vào **VPC → Managed Prefix Lists**.
 2. Lọc **Owner ID = AWS** và tìm `com.amazonaws.global.cloudfront.origin-facing`.
 3. Ghi nhận đúng prefix list IPv4. Không tự tạo hoặc sửa AWS-managed prefix list.
-4. Vào **Service Quotas → Amazon VPC → Security groups per VPC** và kiểm tra quota rule.
-   Prefix list CloudFront có weight 55, nên một rule tham chiếu nó chiếm 55 rule slots.
-5. Nếu quota không đủ cho rule 443 và rule 80, dừng để xin quota tăng; không thay bằng danh
-   sách IP CloudFront tự copy thủ công.
+4. Vào **Service Quotas → Amazon VPC → Inbound or outbound rules per security group** để
+   kiểm tra quota rule, không chọn **Security groups per VPC** (đó là quota số lượng SG).
+   Prefix list CloudFront có weight 55, nên rule 443 chiếm 55 inbound IPv4 rule slots; rule
+   HTTP 80 chiếm thêm 1 slot. Tổng cộng hai rule này dùng 56 inbound IPv4 slots.
+5. Với quota mặc định 60 và Security Group chỉ có hai rule trên, quota là đủ. Nếu tài khoản
+   có thêm rule khác làm vượt quota, dừng để xin tăng quota; không thay bằng danh sách IP
+   CloudFront tự copy thủ công.
 
 ## 6. Tạo Security Group cho EC2
 
