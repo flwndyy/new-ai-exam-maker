@@ -20,9 +20,11 @@ try {
   const normalize = (file) => readFileSync(file, "utf8").replace(/\r\n/g, "\n");
   if (normalize(generated) !== normalize(committed)) {
     console.error("src/lib/api/schema.d.ts is out of date. Run `npm run api:generate` and commit the result.");
-    process.exit(1);
+    // Set exitCode instead of calling process.exit() so the `finally` cleanup still runs.
+    process.exitCode = 1;
+  } else {
+    console.log("API types are in sync with docs/api/openapi.yaml.");
   }
-  console.log("API types are in sync with docs/api/openapi.yaml.");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
