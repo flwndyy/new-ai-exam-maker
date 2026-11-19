@@ -594,7 +594,7 @@ paths:
       tags: [AI]
       operationId: listAiJobs
       summary: Danh sách job AI của tôi
-      description: Teacher/Head: job do mình yêu cầu. Admin: tất cả. Sắp xếp `createdAt` giảm dần.
+      description: "Teacher/Head: job do mình yêu cầu. Admin: tất cả. Sắp xếp `createdAt` giảm dần."
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -999,7 +999,7 @@ paths:
       tags: [Audit]
       operationId: listAuditLogs
       summary: Nhật ký audit
-      description: Head: giới hạn trong tổ của mình. Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
+      description: "Head: giới hạn trong tổ của mình. Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần."
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
