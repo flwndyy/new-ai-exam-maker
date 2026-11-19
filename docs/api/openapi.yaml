@@ -1578,7 +1578,7 @@ components:
       enum: [Queued, Running, Succeeded, Failed]
     AuditEntityType:
       type: string
-      enum: [Question, ExamVersion, User, AiJob, Department, Subject, Topic]
+      enum: [Question, Exam, ExamVersion, QuestionSet, User, AiJob, Department, Subject, Topic]
 
     UserRef:
       type: object
@@ -2230,7 +2230,11 @@ components:
       required: [id, actor, entityType, entityId, action, createdAt]
       properties:
         id: { type: string, format: uuid }
-        actor: { $ref: '#/components/schemas/UserRef' }
+        actor:
+          description: Người thao tác; null cho tác vụ hệ thống, note nêu rõ tác vụ.
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
         entityType: { $ref: '#/components/schemas/AuditEntityType' }
         entityId: { type: string, format: uuid }
         action:

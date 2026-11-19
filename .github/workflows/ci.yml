@@ -44,6 +44,20 @@ jobs:
     name: Backend (.NET)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2_test
+          POSTGRES_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2_test -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      A2_TEST_PG_ADMIN: Host=127.0.0.1;Port=5432;Database=postgres;Username=a2_test;Password=${{ github.run_id }}-${{ github.run_attempt }}
     defaults:
       run:
         working-directory: backend
@@ -58,8 +72,7 @@ jobs:
         run: dotnet format ExamMaker.slnx --verify-no-changes --no-restore
       - name: Build
         run: dotnet build ExamMaker.slnx -c Release --no-restore
-      # Integration tests are expected to use Testcontainers (Docker is pre-installed on ubuntu-latest).
-      # Add a `services: postgres` container here if tests later require ConnectionStrings__*.
+      # Schema integration tests create and drop an isolated database on this service.
       - name: Test
         run: dotnet test ExamMaker.slnx -c Release --no-build
 
