@@ -48,12 +48,15 @@ CLIENT_ID="$(get_ssm "ClientId")"
 AUTHORITY="$(get_ssm "Authority")"
 HOSTED_UI_DOMAIN="$(get_ssm "HostedUiDomain")"
 
-# 1. All 5 SSM parameters exist and Region matches target AWS_REGION
-if [ -n "$SSM_REGION" ] && [ -n "$USER_POOL_ID" ] && [ -n "$CLIENT_ID" ] && [ -n "$AUTHORITY" ] && [ -n "$HOSTED_UI_DOMAIN" ] && [ "$SSM_REGION" = "$AWS_REGION" ]; then
-  pass "All 5 required SSM parameters exist under ${SSM_PREFIX}/Cognito/ (Region=${SSM_REGION})"
-else
-  echo "ERROR: Missing or mismatched SSM parameters under ${SSM_PREFIX}/Cognito/ (expected Region=${AWS_REGION}, UserPoolId, ClientId, Authority, HostedUiDomain)." >&2
+# 1. All 5 SSM parameters exist, Region matches AWS_REGION, and Authority matches Region + UserPoolId
+EXPECTED_AUTHORITY="https://cognito-idp.${AWS_REGION}.amazonaws.com/${USER_POOL_ID}"
+if [ -n "$SSM_REGION" ] && [ -n "$USER_POOL_ID" ] && [ -n "$CLIENT_ID" ] && [ -n "$AUTHORITY" ] && [ -n "$HOSTED_UI_DOMAIN" ] && [ "$SSM_REGION" = "$AWS_REGION" ] && [ "$AUTHORITY" = "$EXPECTED_AUTHORITY" ]; then
+  pass "All 5 SSM parameters exist under ${SSM_PREFIX}/Cognito/ (Region & Authority match pool)"
+elif [ -z "$SSM_REGION" ] || [ -z "$USER_POOL_ID" ] || [ -z "$CLIENT_ID" ] || [ -z "$AUTHORITY" ] || [ -z "$HOSTED_UI_DOMAIN" ]; then
+  echo "ERROR: Missing SSM parameters under ${SSM_PREFIX}/Cognito/ (expected Region, UserPoolId, ClientId, Authority, HostedUiDomain)." >&2
   exit 1
+else
+  fail "SSM Region/Authority mismatch (Region='${SSM_REGION}' expected '${AWS_REGION}'; Authority='${AUTHORITY}' expected '${EXPECTED_AUTHORITY}')"
 fi
 
 # Fetch User Pool and App Client once to minimize AWS API calls
@@ -92,7 +95,7 @@ else
   fail "Account recovery expected 'verified_email', got '${RECOVERY_MECHANISMS}'"
 fi
 
-# 5. Managed Login domain exists and uses ManagedLoginVersion=2
+# 5. Managed Login domain exists, uses ManagedLoginVersion=2, and matches SSM HostedUiDomain
 DOMAIN_PREFIX="$(jq -r '.UserPool.Domain // empty' <<<"$POOL_JSON")"
 if [ -n "$DOMAIN_PREFIX" ]; then
   DOMAIN_JSON="$(aws cognito-idp describe-user-pool-domain \
@@ -101,10 +104,11 @@ if [ -n "$DOMAIN_PREFIX" ]; then
     --output json)"
   MANAGED_LOGIN_VER="$(jq -r '.DomainDescription.ManagedLoginVersion // empty' <<<"$DOMAIN_JSON")"
   DOMAIN_STATUS="$(jq -r '.DomainDescription.Status // empty' <<<"$DOMAIN_JSON")"
-  if [ "$MANAGED_LOGIN_VER" = "2" ] && [ "$DOMAIN_STATUS" = "ACTIVE" ]; then
-    pass "Managed Login domain is ACTIVE with ManagedLoginVersion=2"
+  EXPECTED_HOSTED_UI_DOMAIN="https://${DOMAIN_PREFIX}.auth.${AWS_REGION}.amazoncognito.com"
+  if [ "$MANAGED_LOGIN_VER" = "2" ] && [ "$DOMAIN_STATUS" = "ACTIVE" ] && [ "$HOSTED_UI_DOMAIN" = "$EXPECTED_HOSTED_UI_DOMAIN" ]; then
+    pass "Managed Login domain is ACTIVE (v2) and matches SSM HostedUiDomain"
   else
-    fail "Managed Login domain expected ACTIVE + version 2, got status='${DOMAIN_STATUS}' version='${MANAGED_LOGIN_VER}'"
+    fail "Managed Login domain/SSM mismatch (status='${DOMAIN_STATUS}' version='${MANAGED_LOGIN_VER}' HostedUiDomain='${HOSTED_UI_DOMAIN}' expected '${EXPECTED_HOSTED_UI_DOMAIN}')"
   fi
 else
   fail "Cognito User Pool has no Managed Login domain configured"

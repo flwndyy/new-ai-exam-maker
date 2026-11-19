@@ -189,7 +189,7 @@ ON CONFLICT (cognito_sub) DO NOTHING;
 
 1. Mở ứng dụng web → chuyển sang Managed Login → đăng nhập bằng `$ADMIN_EMAIL` và mật khẩu tạm nhận qua email.
 2. Hoàn tất bước bắt buộc **đổi mật khẩu lần đầu** (`NEW_PASSWORD_REQUIRED`).
-3. Xác nhận `GET /api/me` trả về HTTP 200 với `role: "admin"`, `isActive: true`.
+3. Xác nhận `GET /api/v1/me` trả về HTTP 200 với `role: "admin"`, `isActive: true`.
 
 ---
 
@@ -206,11 +206,11 @@ ENV_NAME=prod ./infra/cognito/verify-cognito.sh
 ```
 
 Script gọi tối thiểu số lệnh AWS API (đọc SSM 1 lần, `describe-user-pool` 1 lần, `describe-user-pool-client` 1 lần) và xác minh đủ **22 tiêu chí**:
-1. Đủ cả 5 tham số SSM dưới `/exammaker/<env>/Cognito/` và `Region` khớp `AWS_REGION`.
+1. Đủ cả 5 tham số SSM dưới `/exammaker/<env>/Cognito/`, `Region` khớp `AWS_REGION` và `Authority` khớp đúng `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>`.
 2. `UserPoolTier = ESSENTIALS` (chống bật nhầm gói `PLUS` gây phát sinh phí).
 3. `AllowAdminCreateUserOnly = true` (tắt self sign-up).
 4. `AccountRecoverySetting` chỉ dùng `verified_email`.
-5. Managed Login domain ở trạng thái `ACTIVE` với `ManagedLoginVersion = 2`.
+5. Managed Login domain ở trạng thái `ACTIVE` với `ManagedLoginVersion = 2` và khớp đúng tham số SSM `HostedUiDomain`.
 6. Managed Login branding đã tồn tại cho App Client.
 7–9. Đủ 3 Cognito group: `admin`, `head`, `teacher`.
 10. App Client **không có** `ClientSecret`.

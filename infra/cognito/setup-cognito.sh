@@ -384,6 +384,11 @@ else
     exit 1
   fi
 
+  if jq -e '.UserPoolClient.RefreshTokenRotation.Feature == "ENABLED"' <<<"$CURRENT_CLIENT_JSON" >/dev/null; then
+    echo "ERROR: Existing App Client '${APP_CLIENT_NAME}' (${CLIENT_ID}) has RefreshTokenRotation ENABLED, which AWS Cognito does not allow together with ALLOW_REFRESH_TOKEN_AUTH. Disable RefreshTokenRotation on the client or adopt rotation consistently across setup and verify." >&2
+    exit 1
+  fi
+
   UPDATE_CLIENT_PAYLOAD="$(jq -c \
     --arg pool_id "$USER_POOL_ID" \
     --arg client_id "$CLIENT_ID" \
