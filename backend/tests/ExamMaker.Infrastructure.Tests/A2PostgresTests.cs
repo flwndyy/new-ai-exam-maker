@@ -176,6 +176,65 @@ public sealed class A2PostgresTests(PostgresFixture fixture) : IClassFixture<Pos
     }
 
     [PostgresFact]
+    public async Task Rejected_version_can_be_archived_with_missing_snapshots_and_hash()
+    {
+        await using var s = await OpenAsync();
+        await SnapshotAsync(s);
+        await s.ExecuteAsync("UPDATE questions SET status = 'Approved'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Rejected', review_note = 'Abandon this version' WHERE id = '{VersionId}'");
+        // A rejected version may have incomplete snapshots when its author abandons it.
+        await s.ExecuteAsync("UPDATE exam_version_questions SET type = NULL, difficulty = NULL, stem_snapshot = NULL, payload_snapshot = NULL");
+        await s.ExecuteAsync($"UPDATE exam_versions SET content_hash = NULL, total_points = 1 WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Archived' WHERE id = '{VersionId}'");
+        Assert.Equal("Archived", await s.ScalarAsync<string>($"SELECT status FROM exam_versions WHERE id = '{VersionId}'"));
+        Assert.Equal(1L, await s.ScalarAsync<long>($"SELECT count(*) FROM exam_versions WHERE id = '{VersionId}' AND content_hash IS NULL AND total_points = 1"));
+        await s.ExecuteAsync($"UPDATE exam_versions SET updated_at = now() WHERE id = '{VersionId}'");
+        await s.RejectAsync($"UPDATE exam_versions SET total_points = 2 WHERE id = '{VersionId}'", "23514", "ck_exam_version_frozen_metadata");
+        await s.RejectAsync($"""
+            INSERT INTO exam_version_questions (exam_version_id, sort_order, points, source_question_id, source_revision)
+            VALUES ('{VersionId}', 1, 1, '{QuestionId}', 1)
+            """, "23514", "ck_exam_version_items_editable");
+    }
+
+    [PostgresFact]
+    public async Task Rejected_version_can_be_archived_after_source_revision_and_status_change()
+    {
+        await using var s = await OpenAsync();
+        await SnapshotAsync(s);
+        await s.ExecuteAsync("UPDATE questions SET status = 'Approved'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Rejected', review_note = 'Do not use' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync("UPDATE questions SET revision = 2, stem = 'Changed source', status = 'Archived'");
+        await s.RejectAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'", "23514", "ck_exam_version_snapshot_source");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Archived' WHERE id = '{VersionId}'");
+        Assert.Equal("Synthetic data", await s.ScalarAsync<string>("SELECT stem_snapshot FROM exam_version_questions"));
+        await s.RejectAsync("UPDATE exam_version_questions SET stem_snapshot = NULL", "23514", "ck_exam_version_items_editable");
+        await s.RejectAsync("DELETE FROM exam_version_questions", "23514", "ck_exam_version_items_editable");
+    }
+
+    [PostgresFact]
+    public async Task Withdraw_and_reject_preserve_frozen_metadata_until_the_version_is_editable()
+    {
+        await using var s = await OpenAsync();
+        await SnapshotAsync(s);
+        await s.ExecuteAsync("UPDATE questions SET status = 'Approved'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'");
+        await s.RejectAsync($"UPDATE exam_versions SET status = 'Draft', content_hash = NULL WHERE id = '{VersionId}'", "23514", "ck_exam_version_frozen_metadata");
+        await s.RejectAsync($"UPDATE exam_versions SET status = 'Rejected', review_note = 'Revise', total_points = 0 WHERE id = '{VersionId}'", "23514", "ck_exam_version_frozen_metadata");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Draft' WHERE id = '{VersionId}'");
+        Assert.Equal("synthetic-hash", await s.ScalarAsync<string>($"SELECT content_hash FROM exam_versions WHERE id = '{VersionId}'"));
+        Assert.Equal(0.125m, await s.ScalarAsync<decimal>($"SELECT total_points FROM exam_versions WHERE id = '{VersionId}'"));
+        await s.ExecuteAsync($"UPDATE exam_versions SET content_hash = NULL WHERE id = '{VersionId}'");
+        await s.RejectAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'", "23514", "ck_exam_version_snapshot_complete");
+        await SnapshotAsync(s);
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Rejected', review_note = 'Revise' WHERE id = '{VersionId}'");
+        Assert.Equal("synthetic-hash", await s.ScalarAsync<string>($"SELECT content_hash FROM exam_versions WHERE id = '{VersionId}'"));
+        await s.ExecuteAsync($"UPDATE exam_versions SET content_hash = NULL, total_points = 1 WHERE id = '{VersionId}'");
+    }
+
+    [PostgresFact]
     public async Task Publication_metadata_and_partial_unique_index_are_enforced()
     {
         await using var s = await OpenAsync();

@@ -88,10 +88,11 @@ dotnet test ExamMaker.slnx -m:1
 The fixture creates a random `exammaker_a2_test_*` database and drops only
 that database afterwards. It does not modify the development database.
 Without the variable, local database tests are explicitly skipped; CI fails
-if it is missing. The nine integration tests cover migrations and seed,
+if it is missing. The twelve integration tests cover migrations and seed,
 idempotent SQL, rollback/reapply, unique/partial indexes, JSONB, CHECK/FK,
 system audit, catalog consistency, snapshot freezing, concurrent Submit/item
-writes, and transactional reordering. Normal model and API tests also run.
+writes, transactional reordering, Rejected archival with incomplete/stale snapshots,
+and metadata preservation on withdraw/reject. Normal model and API tests also run.
 
 Upgrade with `dotnet ef database update --project src/ExamMaker.Infrastructure`
 using the intended database connection. Existing invalid data causes the
