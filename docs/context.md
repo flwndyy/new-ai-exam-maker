@@ -224,8 +224,8 @@ flowchart LR
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | CloudFront + S3 + ACM                                     | Host frontend (Next.js **static export**); HTTPS cho domain; cổng vào cho `/api/*` → EC2           |
 | Cognito                                                   | User Pool, 3 group; phát JWT; self sign-up **tắt**                                                 |
-| EC2 (t3.small hoặc t4g.small) + EBS 20–30 GB + Elastic IP | Nginx + .NET 10 API + Worker (BackgroundService đọc SQS) cùng máy                                  |
-| RDS PostgreSQL (micro/small, Single-AZ)                   | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập                                         |
+| EC2 (`t4g.small`, ARM64) + EBS 30 GB + Elastic IP         | Nginx + .NET 10 API + Worker (BackgroundService đọc SQS) cùng máy                                  |
+| RDS PostgreSQL (`db.t4g.micro`, Single-AZ)                | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập                                         |
 | SQS (+ DLQ)                                               | Hàng đợi job AI                                                                                    |
 | S3                                                        | Bucket frontend (qua OAC); bucket tài liệu/file xuất (sau MVP), private + presigned URL            |
 | IAM                                                       | Instance profile EC2, least privilege (SQS, Bedrock, SSM, Cognito Admin\*, S3 nếu dùng)            |
@@ -234,7 +234,7 @@ flowchart LR
 | CloudWatch (retention 7 ngày)                             | Log, alarm, metric (mục 10)                                                                        |
 | **Amazon Bedrock**                                        | LLM sinh câu hỏi — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6                             |
 
-### 5.3 CloudFront → EC2 (đã chốt hướng, **cần team xác nhận chi tiết**)
+### 5.3 CloudFront → EC2 (đã chốt, 19/11/2026)
 
 Không dùng ALB, nên kết nối này phải tự bảo mật:
 
@@ -255,10 +255,11 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 ### 5.4 Các quyết định kiến trúc khác
 
 1. **Next.js static export** (`output: 'export'`): không SSR, Server Actions, middleware, ISR; toàn bộ dữ liệu qua REST API phía client. Chi tiết routing ở mục 9.
-2. **API + Worker chung máy**, tách project trong code (`ExamMaker.Worker`) để sau tách deploy dễ. Giới hạn bộ nhớ từng process (t3.small chỉ 2 GB RAM).
-3. **EC2 ở public subnet, RDS ở private subnet, không NAT Gateway** (NAT tốn phí đáng kể so với $200). Nếu chọn `t4g` (ARM) thì build `linux-arm64`.
+2. **API + Worker chung máy**, tách project trong code (`ExamMaker.Worker`) để sau tách deploy dễ. Giới hạn bộ nhớ từng process (`t4g.small` chỉ 2 GB RAM).
+3. **EC2 ở public subnet, RDS ở private subnet, không NAT Gateway** (NAT tốn phí đáng kể so với $200). Đã chọn `t4g` (ARM) nên build `linux-arm64`.
 4. **Secrets/config chỉ qua Parameter Store**, EC2 dùng instance profile, không dùng access key.
 5. **Auth**: Authorization Code + PKCE với Cognito; API validate JWT (issuer, audience/client id, hết hạn) rồi tải user từ DB (mục 3.3).
+6. **Hạ tầng dựng qua Console + script trong `/infra`** (Nginx, systemd, CloudFront Function, bootstrap) kèm runbook trong `docs/`; không chứa ID/ARN thật. IaC hoàn chỉnh để sau MVP.
 
 ---
 
@@ -434,7 +435,7 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 ## 11. CI/CD, migration, rollback
 
 - **Frontend**: GitHub Actions → build → `aws s3 sync` → CloudFront invalidation. Rollback: deploy lại commit trước (giữ artifact build gần nhất).
-- **Backend**: build/publish (`linux-x64` hoặc `linux-arm64`) → đẩy artifact lên S3/SSM → trên EC2 giải nén vào thư mục theo phiên bản (`/opt/exammaker/releases/<id>`), đổi symlink `current`, restart service systemd (API + Worker). **Giữ N bản gần nhất** để rollback bằng cách đổi lại symlink. Kiểm tra health endpoint sau deploy.
+- **Backend**: build/publish (`linux-arm64`) → đẩy artifact lên S3/SSM → trên EC2 giải nén vào thư mục theo phiên bản (`/opt/exammaker/releases/<id>`), đổi symlink `current`, restart service systemd (API + Worker). **Giữ N bản gần nhất** để rollback bằng cách đổi lại symlink. Kiểm tra health endpoint sau deploy.
 - **Migration**: dùng EF Core migration bundle chạy **trước** khi chuyển phiên bản mới; thay đổi schema theo kiểu **tương thích ngược** (thêm cột/bảng trước, xóa sau), để rollback code không vỡ DB. **Chụp snapshot RDS thủ công** trước migration lớn.
 - Môi trường: tối thiểu `local` + `demo/prod` (không dựng môi trường staging đầy đủ vì ngân sách); nêu rõ nếu dùng chung.
 
@@ -469,7 +470,7 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 ## 13. Checklist trước khi giao AI agent viết code
 
 - [x] Chốt quy trình duyệt câu hỏi và đề thi (mục 3–4) — **bắt buộc**
-- [ ] Chốt cấu hình CloudFront → EC2 + HTTPS + domain (mục 5.3) — **bắt buộc**
+- [x] Chốt cấu hình CloudFront → EC2 + HTTPS + domain (mục 5.3) — **bắt buộc**
 - [x] Phiên bản/snapshot đề thi (mục 4.3, 8) — **bắt buộc**
 - [x] Idempotency + retry cho SQS Worker (mục 4.1.1) — **bắt buộc**
 - [x] Tính ngân sách AWS + Bedrock (mục 6) — **bắt buộc**
@@ -480,14 +481,9 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 
 ## 14. Điểm cần chốt trong team
 
-Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là các điểm cần giá trị cụ thể từ nhóm AWS:
+Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dưới). Hiện không còn điểm mở.
 
-1. Domain dùng cho `app.` và `origin.`; Let's Encrypt HTTP-01 hay DNS-01.
-2. Model Bedrock + region; mức quota AI/user/ngày; có bật bước kiểm chứng đáp án không.
-3. `t3.small` (x86) hay `t4g.small` (ARM).
-4. Công cụ IaC (CDK/Terraform/CloudFormation) hay dựng tay qua Console.
-
-> Khi một điểm được chốt: chuyển sang mục "Quyết định đã chốt" bên dưới, gỡ tag **[GIẢ ĐỊNH]** ở chỗ tương ứng và ghi vào "Lịch sử thay đổi".
+> Khi phát sinh điểm mới cần chốt: ghi vào đây, sau khi chốt thì chuyển sang mục "Quyết định đã chốt" bên dưới, gỡ tag **[GIẢ ĐỊNH]** ở chỗ tương ứng và ghi vào "Lịch sử thay đổi".
 
 ### Quyết định đã chốt
 
@@ -502,6 +498,10 @@ Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là 
 - **Xuất PDF bằng trình duyệt trong MVP**, DOCX để sau (mục 4.4). _Chốt 17/11/2026._
 - **Quy mô dự kiến** (mục 12). _Chốt 17/11/2026._
 - **Mức dự phòng ngân sách ≥ 20% (≈ $40)** (mục 6). _Chốt 18/11/2026._
+- **Domain & chứng chỉ origin**: `app.<domain>` (CloudFront) và `origin.<domain>` (A record → Elastic IP); Let's Encrypt cấp bằng **HTTP-01** — port 80 chỉ phục vụ `/.well-known/acme-challenge/`, port 443 chỉ nhận từ CloudFront (mục 5.3). Không cấp quyền sửa Route 53 cho EC2. _Chốt 19/11/2026._
+- **Bedrock & quota AI**: region `ap-southeast-1`; Claude 3.5 Haiku cho dev/test, Claude 3.5 Sonnet v2 cho demo (ModelId đọc từ Parameter Store); quota **10 job/user/ngày**, **10 câu/job**, **100.000 token/user/ngày**, trần hệ thống **500.000 token/ngày**; bước kiểm chứng đáp án bật/tắt bằng cấu hình — **tắt khi dev, bật khi demo** (mục 4.1.2, 6). _Chốt 19/11/2026._
+- **Kiến trúc CPU**: **`t4g.small`** (ARM64) cho EC2 và **`db.t4g.micro`** cho RDS; backend publish `linux-arm64` (mục 5.2, 11). _Chốt 19/11/2026._
+- **Công cụ hạ tầng**: dựng qua **AWS Console + script/file cấu hình mẫu trong `/infra`** (Nginx, systemd, CloudFront Function, bootstrap) và **ghi runbook trong `docs/`**; IaC hoàn chỉnh để sau MVP (mục 5.4). _Chốt 19/11/2026._
 
 ---
 
@@ -524,6 +524,10 @@ Các điểm nghiệp vụ đã chốt hết (xem bên dưới). Còn lại là 
 ---
 
 ## Lịch sử thay đổi
+
+**0.5**
+
+- Chốt 4 điểm AWS ở mục 14 (domain + Let's Encrypt HTTP-01; Bedrock/region/quota/kiểm chứng; `t4g.small` + `db.t4g.micro`; dựng qua Console + script `/infra` + runbook). Mục 14 không còn điểm mở; tick 7/7 checklist mục 13. Cập nhật mục 5.2, 5.3, 5.4, 11 tương ứng (chốt 19/11/2026).
 
 **0.4**
 
