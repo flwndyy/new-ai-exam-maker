@@ -15,6 +15,7 @@ internal sealed class TopicConfiguration : IEntityTypeConfiguration<Topic>
         builder.Property(x => x.Grade).HasColumnName("grade");
         builder.Property(x => x.Name).HasColumnName("name").HasMaxLength(300).IsRequired();
         builder.Property(x => x.SortOrder).HasColumnName("sort_order");
+        builder.HasAlternateKey(x => new { x.Id, x.SubjectId, x.Grade }).HasName("ak_topics_id_subject_grade");
 
         builder.HasOne(x => x.Subject)
             .WithMany(x => x.Topics)

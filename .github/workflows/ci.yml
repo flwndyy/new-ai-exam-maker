@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  # Keep push only on `main` to avoid running CI twice when a PR merges into `dev`.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      # Single source of truth: read gitleaks version from .pre-commit-config.yaml
+      # and verify the tarball against the official release checksums file.
+      - name: Install gitleaks
+        run: |
+          TAG=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{print $2; exit}' .pre-commit-config.yaml)
+          test -n "$TAG"
+          VER="${TAG#v}"
+          BASE="https://github.com/gitleaks/gitleaks/releases/download/${TAG}"
+          TAR="gitleaks_${VER}_linux_x64.tar.gz"
+          CHECKSUMS="gitleaks_${VER}_checksums.txt"
+          curl -sSfL -o "$TAR" "${BASE}/${TAR}"
+          curl -sSfL -o "$CHECKSUMS" "${BASE}/${CHECKSUMS}"
+          grep " ${TAR}\$" "$CHECKSUMS" | sha256sum -c -
+          tar -xzf "$TAR" gitleaks
+      - name: Run gitleaks
+        run: ./gitleaks detect --source . --redact --verbose
+
+  backend:
+    name: Backend (.NET)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2_test
+          POSTGRES_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2_test -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      A2_TEST_PG_ADMIN: Host=127.0.0.1;Port=5432;Database=postgres;Username=a2_test;Password=${{ github.run_id }}-${{ github.run_attempt }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: backend/global.json
+      - name: Restore
+        run: dotnet restore ExamMaker.slnx
+      - name: Format check
+        run: dotnet format ExamMaker.slnx --verify-no-changes --no-restore
+      - name: Build
+        run: dotnet build ExamMaker.slnx -c Release --no-restore
+      # Schema integration tests create and drop an isolated database on this service.
+      - name: Test
+        run: dotnet test ExamMaker.slnx -c Release --no-build
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: API schema sync check
+        run: npm run api:check
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      # Keep --if-present only for `test` until frontend/package.json defines a test script.
+      - name: Test
+        run: npm test --if-present
+      - name: Build
+        run: npm run build
+
+  # Single required status check for `main`: it stays stable while jobs above change.
+  ci:
+    name: CI
+    if: always()
+    needs: [gitleaks, backend, frontend]
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+      BACKEND_RESULT: ${{ needs.backend.result }}
+      FRONTEND_RESULT: ${{ needs.frontend.result }}
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          echo "Results — gitleaks: ${GITLEAKS_RESULT}, backend: ${BACKEND_RESULT}, frontend: ${FRONTEND_RESULT}"
+          FAILED=0
+          for pair in "gitleaks:${GITLEAKS_RESULT}" "backend:${BACKEND_RESULT}" "frontend:${FRONTEND_RESULT}"; do
+            job="${pair%%:*}"
+            res="${pair#*:}"
+            if [ "$res" != "success" ]; then
+              echo "::error::Job '${job}' did not succeed (result: ${res})."
+              FAILED=1
+            fi
+          done
+          exit "$FAILED"

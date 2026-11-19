@@ -1095,7 +1095,7 @@ export interface components {
         /** @enum {string} */
         AiJobStatus: "Queued" | "Running" | "Succeeded" | "Failed";
         /** @enum {string} */
-        AuditEntityType: "Question" | "ExamVersion" | "User" | "AiJob" | "Department" | "Subject" | "Topic";
+        AuditEntityType: "Question" | "Exam" | "ExamVersion" | "QuestionSet" | "User" | "AiJob" | "Department" | "Subject" | "Topic";
         UserRef: {
             /** Format: uuid */
             id: string;
@@ -1529,7 +1529,8 @@ export interface components {
         AuditLog: {
             /** Format: uuid */
             id: string;
-            actor: components["schemas"]["UserRef"];
+            /** @description Người thao tác; null cho tác vụ hệ thống, note nêu rõ tác vụ. */
+            actor: components["schemas"]["UserRef"] | null;
             entityType: components["schemas"]["AuditEntityType"];
             /** Format: uuid */
             entityId: string;
