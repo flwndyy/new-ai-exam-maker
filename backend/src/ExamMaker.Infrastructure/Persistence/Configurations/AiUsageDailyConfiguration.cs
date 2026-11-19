@@ -10,7 +10,6 @@ internal sealed class AiUsageDailyConfiguration : IEntityTypeConfiguration<AiUsa
     {
         builder.ToTable("ai_usage_daily", table =>
             table.HasCheckConstraint("ck_ai_usage_daily_counters", "jobs >= 0 AND tokens >= 0"));
-        // Một dòng quota cho mỗi người dùng trong một ngày UTC.
         builder.HasKey(x => new { x.UserId, x.Date }).HasName("pk_ai_usage_daily");
         builder.Property(x => x.UserId).HasColumnName("user_id");
         builder.Property(x => x.Date).HasColumnName("date").HasColumnType("date");

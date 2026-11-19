@@ -15,6 +15,11 @@ internal sealed class ExamVersionConfiguration : IEntityTypeConfiguration<ExamVe
             table.HasCheckConstraint("ck_exam_versions_version_no", "version_no >= 1");
             table.HasCheckConstraint("ck_exam_versions_duration", "duration_minutes BETWEEN 1 AND 600");
             table.HasCheckConstraint("ck_exam_versions_total_points", "total_points >= 0");
+            table.HasCheckConstraint("ck_exam_versions_published",
+                "status <> 'Published' OR (published_by IS NOT NULL AND published_at IS NOT NULL " +
+                "AND content_hash IS NOT NULL AND length(btrim(content_hash)) > 0)");
+            table.HasCheckConstraint("ck_exam_versions_rejected",
+                "status <> 'Rejected' OR (review_note IS NOT NULL AND length(btrim(review_note)) > 0)");
         });
         builder.HasKey(x => x.Id).HasName("pk_exam_versions");
         builder.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
@@ -22,7 +27,6 @@ internal sealed class ExamVersionConfiguration : IEntityTypeConfiguration<ExamVe
         builder.Property(x => x.VersionNo).HasColumnName("version_no");
         builder.Property(x => x.Status).HasColumnName("status").IsRequired();
         builder.Property(x => x.DurationMinutes).HasColumnName("duration_minutes");
-        // numeric giữ điểm chính xác, tránh sai số của float/double.
         builder.Property(x => x.TotalPoints).HasColumnName("total_points").HasColumnType("numeric");
         builder.Property(x => x.ContentHash).HasColumnName("content_hash");
         builder.Property(x => x.SubmittedAt).HasColumnName("submitted_at").HasColumnType("timestamp with time zone");
@@ -41,7 +45,7 @@ internal sealed class ExamVersionConfiguration : IEntityTypeConfiguration<ExamVe
             .HasConstraintName("fk_exam_versions_publisher").OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(x => new { x.ExamId, x.VersionNo }).IsUnique()
             .HasDatabaseName("ux_exam_versions_exam_version_no");
-        // PostgreSQL chặn hai lần publish đồng thời cho cùng một đề.
+        // PostgreSQL arbitrates concurrent publication of versions of the same exam.
         builder.HasIndex(x => x.ExamId).IsUnique().HasFilter("status = 'Published'")
             .HasDatabaseName("ux_exam_versions_one_published");
     }

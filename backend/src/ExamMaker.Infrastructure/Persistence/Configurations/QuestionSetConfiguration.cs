@@ -1,4 +1,4 @@
-﻿using ExamMaker.Domain.QuestionSets;
+using ExamMaker.Domain.QuestionSets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -11,7 +11,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
         {
             builder.ToTable("question_sets");
 
-            // Khóa chính được ứng dụng tự gán.
             builder.HasKey(x => x.Id)
                 .HasName("pk_question_sets");
 
@@ -26,7 +25,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.CreatedBy)
                 .HasColumnName("created_by");
 
-            // Người sở hữu bộ câu hỏi.
             builder.HasOne(x => x.Creator)
                 .WithMany()
                 .HasForeignKey(x => x.CreatedBy)

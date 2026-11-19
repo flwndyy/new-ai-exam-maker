@@ -11,7 +11,9 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.ToTable("audit_logs", table =>
         {
             table.HasCheckConstraint("ck_audit_logs_entity_type",
-                "entity_type IN ('Question', 'ExamVersion', 'User', 'AiJob', 'Department', 'Subject', 'Topic')");
+                "entity_type IN ('Question', 'Exam', 'ExamVersion', 'QuestionSet', 'User', 'AiJob', 'Department', 'Subject', 'Topic')");
+            table.HasCheckConstraint("ck_audit_logs_system_note",
+                "actor_id IS NOT NULL OR (note IS NOT NULL AND length(btrim(note)) > 0)");
             table.HasCheckConstraint("ck_audit_logs_action", "length(btrim(action)) > 0");
         });
         builder.HasKey(x => x.Id).HasName("pk_audit_logs");
@@ -26,7 +28,6 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamp with time zone");
         builder.HasOne(x => x.Actor).WithMany().HasForeignKey(x => x.ActorId)
             .HasConstraintName("fk_audit_logs_users").OnDelete(DeleteBehavior.Restrict);
-        // Hỗ trợ tra lịch sử theo đối tượng và thời điểm.
         builder.HasIndex(x => new { x.EntityType, x.EntityId, x.CreatedAt })
             .HasDatabaseName("ix_audit_logs_entity_created");
         builder.HasIndex(x => new { x.ActorId, x.CreatedAt })

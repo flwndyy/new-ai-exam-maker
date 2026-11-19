@@ -2,7 +2,7 @@ using ExamMaker.Domain.Questions;
 
 namespace ExamMaker.Domain.Exams;
 
-// Liên kết câu nguồn và lưu bản sao nội dung khi gửi duyệt đề.
+// Draft links become immutable content snapshots when submitted.
 public class ExamVersionQuestion
 {
     public Guid ExamVersionId { get; set; }
@@ -13,7 +13,8 @@ public class ExamVersionQuestion
     public Question? SourceQuestion { get; set; }
     public int SourceRevision { get; set; }
 
-    // Được để trống khi Draft; Application điền snapshot lúc Submit.
+    // Nullable while editable; the Submit trigger requires the snapshot fields.
+    // Explanation remains optional, matching the source question.
     public string? Type { get; set; }
     public string? Difficulty { get; set; }
     public string? StemSnapshot { get; set; }

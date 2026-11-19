@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using ExamMaker.Domain.Catalog;
 
 namespace ExamMaker.Domain.Users
 {
+    // Local authorization profile linked to the immutable Cognito subject identifier.
     public class User
     {
         public Guid Id { get; set; }
@@ -15,6 +16,7 @@ namespace ExamMaker.Domain.Users
 
         public string Role { get; set; } = string.Empty;
 
+        // Optional for admins; the database requires a department for teachers and heads.
         public Guid? DepartmentId { get; set; }
 
         public Department? Department { get; set; }

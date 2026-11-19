@@ -11,7 +11,7 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Danh mục tên môn/chương từ docs/catalog-seed-draft.md; ID cố định giữa các môi trường.
+            // Fixed identifiers keep the reviewed catalog reproducible across environments.
             migrationBuilder.InsertData(
                 table: "departments",
                 columns: new[] { "id", "name" },
@@ -647,7 +647,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Chỉ xóa các ID do migration này tạo, theo thứ tự chương, môn rồi tổ.
             migrationBuilder.DeleteData(
                 table: "topics",
                 keyColumn: "id",

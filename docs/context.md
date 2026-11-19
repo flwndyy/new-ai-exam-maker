@@ -352,12 +352,14 @@ Cấu trúc repo (monorepo):
 
 #### Chi tiết triển khai A2
 
-- `question_sets` dùng `name`, `created_by`; `question_set_items` dùng khóa chính ghép `(question_set_id, question_id)`.
-- `exam_version_questions` dùng khóa chính ghép `(exam_version_id, sort_order)` và unique `(exam_version_id, source_question_id)` để tránh lặp câu trong một phiên bản. Snapshot được phép NULL khi đang soạn; khi Submit, tầng Application phải điền đủ snapshot, kiểm tra câu Approved và tổng điểm theo mục 4.3, 8.3.
-- `points` và `total_points` dùng PostgreSQL `numeric` không giới hạn precision/scale ở schema, ánh xạ C# `decimal`. Thời gian dùng `timestamp with time zone` và giá trị UTC. `exams`, `exam_versions` có `created_at`, `updated_at` theo API contract.
-- `ai_usage_daily` dùng khóa chính `(user_id, date)`, `date` là ngày UTC; bộ đếm token dùng `bigint`. `audit_logs.entity_id` là UUID và không có FK đa hình; `actor_id` tham chiếu `users` bằng RESTRICT.
-- Toàn bộ FK dùng RESTRICT. Việc chuyển trạng thái, đồng bộ snapshot, phân quyền và cập nhật quota đồng thời thuộc các task nghiệp vụ sau A2.
-- `users.department_id` bắt buộc với teacher/head. Câu AI bắt buộc có `ai_job_id` và `ai_ordinal >= 1`; câu Manual không gắn job có thể để trống cả hai trường.
+- `question_sets` dùng `name`, `created_by`; `question_set_items` dùng PK `(question_set_id, question_id)` và index `question_id`. Giữ FK RESTRICT theo yêu cầu A2: xóa các liên kết trong cùng transaction trước khi xóa bộ hoặc câu Draft/Rejected đủ điều kiện. Không tự xóa câu khi xóa bộ.
+- `exam_version_questions` giữ PK `(exam_version_id, sort_order)` và unique `(exam_version_id, source_question_id)`. Khi đổi thứ tự, Application khóa version bằng `SELECT ... FOR UPDATE`, xóa các item rồi chèn lại thứ tự mới trong cùng transaction; không cập nhật trực tiếp khóa đang được EF theo dõi. Trigger chỉ cho phép thay đổi item khi version ở Draft/Rejected, khóa hàng version cha để tuần tự hóa với Submit.
+- Snapshot được phép NULL ở Draft/Rejected. Khi đóng băng (Submitted/Approved/Published/Archived), trigger bắt buộc có ít nhất một câu, đủ type/difficulty/stem/payload và content_hash; explanation có thể NULL vì câu nguồn không bắt buộc lời giải. Trigger kiểm tra tổng points bằng total_points. Khi Submit từ Draft/Rejected, câu nguồn phải Approved, revision và nội dung snapshot phải khớp nguồn. Application chụp snapshot và tính hash trước khi đổi trạng thái trong cùng transaction. DB khóa nội dung item và duration/total_points/hash của version đã đóng băng; rút về Draft hoặc bị từ chối mở khóa theo mục 4.3. Hash được tính/kiểm tra theo thuật toán thống nhất ở Application.
+- `points` và `total_points` dùng PostgreSQL `numeric`, ánh xạ C# `decimal`. Thời gian dùng `timestamp with time zone` và UTC; `exams`, `exam_versions` có `created_at`, `updated_at` theo API contract.
+- `ai_usage_daily` dùng PK `(user_id, date)`, ngày UTC; token là `bigint`. `audit_logs.entity_id` là UUID không có FK đa hình. `actor_id` nullable: NULL biểu thị hệ thống và bắt buộc note nêu tác vụ (worker/reconcile); actor người dùng giữ FK RESTRICT. Entity type gồm Question, Exam, ExamVersion, QuestionSet, User, AiJob, Department, Subject, Topic; API trả actor=null cho hệ thống.
+- Toàn bộ FK dùng RESTRICT. Composite FK `(subject_id, department_id)` đảm bảo câu/đề thuộc đúng tổ của môn; `(topic_id, subject_id, grade)` đảm bảo câu thuộc đúng chương/môn/khối. Chuyển tổ/môn/khối của catalog đang được tham chiếu sẽ bị chặn; Application phải xử lý di chuyển dữ liệu một cách có chủ đích.
+- `users.department_id` bắt buộc với teacher/head. Câu AI bắt buộc có job và ordinal >= 1; câu Manual phải để cả hai NULL. Published bắt buộc người/thời điểm publish và hash; Rejected bắt buộc lý do. Running bắt buộc lease; job kết thúc bắt buộc finished_at; Failed có error_code không rỗng, Succeeded không có error_code.
+- Phân quyền, toàn bộ state machine, ghi audit tự động và cập nhật quota đồng thời thuộc các task nghiệp vụ sau A2. Integration test trong repo dùng PostgreSQL thật, database tạm độc lập, chạy bắt buộc trong CI qua PostgreSQL service.
 
 ### 8.2 Cấu trúc `payload` theo dạng câu hỏi
 
@@ -535,6 +537,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ## Lịch sử thay đổi
 
 **0.5 — 19/11/2026**
+- Sửa theo review PR #55: audit hệ thống, composite FK catalog, CHECK theo trạng thái, trigger đóng băng snapshot và integration test PostgreSQL chạy trong CI.
 - Hoàn thiện schema A2 cho 13 bảng, khóa ghép, điểm numeric, snapshot nullable khi Draft, quota UTC và audit UUID. Bổ sung CHECK tổ của người dùng và định danh câu AI; giữ các quy tắc chuyển trạng thái ở tầng Application.
 - Danh mục seed gồm 4 tổ riêng, 4 môn Toán/Vật lí/Hóa học/Sinh học và 82 chương khối 10–12 theo Chân Trời Sáng Tạo, từ `docs/catalog-seed-draft.md`.
 - Chốt 4 điểm AWS ở mục 14 (domain + Let's Encrypt HTTP-01; Bedrock/region/quota/kiểm chứng; `t4g.small` + `db.t4g.micro`; dựng qua Console + script `/infra` + runbook). Mục 14 không còn điểm mở; tick 7/7 checklist mục 13. Cập nhật mục 5.2, 5.3, 5.4, 11 tương ứng (chốt 19/11/2026).

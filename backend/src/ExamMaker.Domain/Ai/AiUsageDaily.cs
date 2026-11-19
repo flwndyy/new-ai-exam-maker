@@ -2,7 +2,7 @@ using ExamMaker.Domain.Users;
 
 namespace ExamMaker.Domain.Ai;
 
-// Tổng hợp quota theo người dùng và ngày UTC, không chứa thông tin đăng nhập.
+// One quota counter per user and UTC date.
 public class AiUsageDaily
 {
     public Guid UserId { get; set; }

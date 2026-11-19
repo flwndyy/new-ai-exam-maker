@@ -23,8 +23,8 @@ internal sealed class ExamConfiguration : IEntityTypeConfiguration<Exam>
         builder.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamp with time zone");
         builder.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone");
 
-        // Giữ các bản ghi được đề tham chiếu, kể cả khi xóa người dùng.
-        builder.HasOne(x => x.Subject).WithMany().HasForeignKey(x => x.SubjectId)
+        builder.HasOne(x => x.Subject).WithMany().HasForeignKey(x => new { x.SubjectId, x.DepartmentId })
+            .HasPrincipalKey(x => new { x.Id, x.DepartmentId })
             .HasConstraintName("fk_exams_subjects").OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentId)
             .HasConstraintName("fk_exams_departments").OnDelete(DeleteBehavior.Restrict);

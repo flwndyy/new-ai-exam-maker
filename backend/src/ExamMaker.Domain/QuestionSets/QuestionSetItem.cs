@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using ExamMaker.Domain.Questions;
 
 namespace ExamMaker.Domain.QuestionSets
 {
-    // Liên kết một bộ câu hỏi với một câu hỏi.
+    // Membership is unique for each collection/question pair.
     public class QuestionSetItem
     {
         public Guid QuestionSetId { get; set; }

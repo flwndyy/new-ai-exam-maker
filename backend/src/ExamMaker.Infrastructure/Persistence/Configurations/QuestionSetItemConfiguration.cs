@@ -1,4 +1,4 @@
-﻿using ExamMaker.Domain.QuestionSets;
+using ExamMaker.Domain.QuestionSets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -10,8 +10,8 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
         public void Configure(EntityTypeBuilder<QuestionSetItem> builder)
         {
             builder.ToTable("question_set_items");
+            builder.HasIndex(x => x.QuestionId).HasDatabaseName("IX_question_set_items_question_id");
 
-            // Mỗi câu hỏi xuất hiện tối đa một lần trong cùng bộ.
             builder.HasKey(x => new { x.QuestionSetId, x.QuestionId })
                 .HasName("pk_question_set_items");
 
@@ -21,14 +21,12 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.QuestionId)
                 .HasColumnName("question_id");
 
-            // Liên kết đến bộ câu hỏi.
             builder.HasOne(x => x.QuestionSet)
                 .WithMany(x => x.Items)
                 .HasForeignKey(x => x.QuestionSetId)
                 .HasConstraintName("fk_question_set_items_question_sets")
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Chặn xóa câu hỏi đang được bộ câu hỏi tham chiếu.
             builder.HasOne(x => x.Question)
                 .WithMany()
                 .HasForeignKey(x => x.QuestionId)

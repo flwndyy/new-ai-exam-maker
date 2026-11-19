@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -11,7 +11,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Bổ sung phần còn lại của mục 8; giữ nguyên các migration đã chạy trước đó.
             migrationBuilder.CreateTable(
                 name: "ai_usage_daily",
                 columns: table => new
@@ -255,7 +254,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Xóa bảng con trước bảng cha để tuân thủ các khóa ngoại RESTRICT.
             migrationBuilder.DropTable(
                 name: "ai_usage_daily");
 

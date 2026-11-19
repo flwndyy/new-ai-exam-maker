@@ -1,4 +1,4 @@
-﻿using ExamMaker.Domain.Questions;
+using ExamMaker.Domain.Questions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,7 +9,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
     {
         public void Configure(EntityTypeBuilder<Question> builder)
         {
-            // Giới hạn các giá trị hợp lệ theo API contract.
             builder.ToTable("questions", table =>
             {
                 table.HasCheckConstraint(
@@ -39,14 +38,13 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 table.HasCheckConstraint(
                     "ck_questions_revision",
                     "revision >= 1");
-                // Câu AI cần đủ job và thứ tự để unique index chống trùng có hiệu lực.
+                // Manual questions must not claim AI provenance.
                 table.HasCheckConstraint(
                     "ck_questions_ai_identity",
                     "(ai_job_id IS NULL AND ai_ordinal IS NULL AND source = 'Manual') OR " +
-                    "(ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL AND ai_ordinal >= 1)");
+                    "(source = 'AI' AND ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL AND ai_ordinal >= 1)");
             });
 
-            // Khóa chính được ứng dụng tự gán.
             builder.HasKey(x => x.Id)
                 .HasName("pk_questions");
 
@@ -54,7 +52,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("id")
                 .ValueGeneratedNever();
 
-            // Môn, chương và tổ quản lý câu hỏi.
             builder.Property(x => x.SubjectId)
                 .HasColumnName("subject_id");
 
@@ -75,7 +72,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("difficulty")
                 .IsRequired();
 
-            // Nội dung câu hỏi và đáp án.
             builder.Property(x => x.Stem)
                 .HasColumnName("stem")
                 .IsRequired();
@@ -99,7 +95,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("source")
                 .IsRequired();
 
-            // Liên kết job AI và kết quả kiểm chứng.
             builder.Property(x => x.AiJobId)
                 .HasColumnName("ai_job_id");
 
@@ -116,7 +111,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.AiReviewedByAuthor)
                 .HasColumnName("ai_reviewed_by_author");
 
-            // Người tạo và thông tin duyệt.
             builder.Property(x => x.CreatedBy)
                 .HasColumnName("created_by");
 
@@ -126,7 +120,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.ReviewNote)
                 .HasColumnName("review_note");
 
-            // Các thời điểm được lưu theo UTC.
             builder.Property(x => x.SubmittedAt)
                 .HasColumnName("submitted_at")
                 .HasColumnType("timestamp with time zone");
@@ -143,16 +136,17 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("updated_at")
                 .HasColumnType("timestamp with time zone");
 
-            // Chặn xóa các bản ghi đang được câu hỏi tham chiếu.
             builder.HasOne(x => x.Subject)
                 .WithMany()
-                .HasForeignKey(x => x.SubjectId)
+                .HasForeignKey(x => new { x.SubjectId, x.DepartmentId })
+                .HasPrincipalKey(x => new { x.Id, x.DepartmentId })
                 .HasConstraintName("fk_questions_subjects")
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(x => x.Topic)
                 .WithMany()
-                .HasForeignKey(x => x.TopicId)
+                .HasForeignKey(x => new { x.TopicId, x.SubjectId, x.Grade })
+                .HasPrincipalKey(x => new { x.Id, x.SubjectId, x.Grade })
                 .HasConstraintName("fk_questions_topics")
                 .OnDelete(DeleteBehavior.Restrict);
 
@@ -180,7 +174,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasConstraintName("fk_questions_reviewer")
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Chống lưu trùng câu hỏi khi worker xử lý lại job AI.
             builder.HasIndex(x => new { x.AiJobId, x.AiOrdinal })
                 .IsUnique()
                 .HasFilter("ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL")

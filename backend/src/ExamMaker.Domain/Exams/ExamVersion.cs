@@ -2,7 +2,7 @@ using ExamMaker.Domain.Users;
 
 namespace ExamMaker.Domain.Exams;
 
-// Một lần biên soạn của đề, có vòng đời duyệt và xuất bản riêng.
+// An independently reviewed and published edition of an exam.
 public class ExamVersion
 {
     public Guid Id { get; set; }
@@ -13,7 +13,6 @@ public class ExamVersion
     public int DurationMinutes { get; set; }
     public decimal TotalPoints { get; set; }
 
-    // Chỉ có hash sau khi Application chụp snapshot lúc Submit.
     public string? ContentHash { get; set; }
     public DateTime? SubmittedAt { get; set; }
     public Guid? ReviewedBy { get; set; }

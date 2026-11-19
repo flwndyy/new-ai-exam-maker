@@ -8,7 +8,6 @@ using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace ExamMaker.Infrastructure.Tests;
 
-// Kiểm tra các ràng buộc dễ bị mất khi sửa model hoặc sinh migration mới.
 public class A2SchemaTests
 {
     private static ExamMakerDbContext CreateContext() =>

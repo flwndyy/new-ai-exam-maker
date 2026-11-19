@@ -67,5 +67,34 @@ UNION ALL SELECT 'topics', COUNT(*) FROM topics;
 
 Expected counts are 4, 4 and 82. `exam_versions` has a unique filtered index
 for one `Published` version per exam. All foreign keys use `RESTRICT`, and
-points use `numeric`. Snapshot creation, state transitions and atomic quota
-updates are implemented by the application tasks that follow A2.
+points use `numeric`. Composite foreign keys enforce catalog consistency.
+The `HardenA2Constraints` migration adds system audit actors, state metadata
+checks, and PostgreSQL triggers that validate and freeze submitted snapshots.
+Application still creates snapshots/hashes, authorizes workflow transitions,
+writes audit events and updates quota atomically.
+
+### PostgreSQL integration tests
+
+CI starts PostgreSQL 16 and runs the database tests on every PR. Locally,
+provide `A2_TEST_PG_ADMIN` with a connection string to a disposable PostgreSQL
+server whose account has CREATEDB permission. To reuse your configured local
+server credentials (the configured account must have CREATEDB), run:
+
+```powershell
+$env:A2_TEST_PG_ADMIN = $env:ConnectionStrings__ExamMaker
+dotnet test ExamMaker.slnx -m:1
+```
+
+The fixture creates a random `exammaker_a2_test_*` database and drops only
+that database afterwards. It does not modify the development database.
+Without the variable, local database tests are explicitly skipped; CI fails
+if it is missing. The nine integration tests cover migrations and seed,
+idempotent SQL, rollback/reapply, unique/partial indexes, JSONB, CHECK/FK,
+system audit, catalog consistency, snapshot freezing, concurrent Submit/item
+writes, and transactional reordering. Normal model and API tests also run.
+
+Upgrade with `dotnet ef database update --project src/ExamMaker.Infrastructure`
+using the intended database connection. Existing invalid data causes the
+migration to fail atomically; correct the data before retrying. Downgrade to
+the old audit schema is refused if system audit rows or Exam/QuestionSet audit
+rows exist, so audit history is never silently discarded or assigned a fake user.

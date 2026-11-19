@@ -3,7 +3,7 @@ using ExamMaker.Domain.Users;
 
 namespace ExamMaker.Domain.Exams;
 
-// Danh tính của đề; nội dung và trạng thái nằm ở từng phiên bản.
+// Exam identity; content and workflow belong to its versions.
 public class Exam
 {
     public Guid Id { get; set; }

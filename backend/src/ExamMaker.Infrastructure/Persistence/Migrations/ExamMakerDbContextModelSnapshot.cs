@@ -103,6 +103,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_ai_generation_jobs_attempts", "attempt >= 0 AND max_attempts >= 1 AND attempt <= max_attempts");
 
+                            t.HasCheckConstraint("ck_ai_generation_jobs_error", "(status <> 'Failed' OR (error_code IS NOT NULL AND length(btrim(error_code)) > 0)) AND (status <> 'Succeeded' OR error_code IS NULL)");
+
+                            t.HasCheckConstraint("ck_ai_generation_jobs_finished", "status NOT IN ('Succeeded', 'Failed') OR finished_at IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_ai_generation_jobs_running_lease", "status <> 'Running' OR lease_expires_at IS NOT NULL");
+
                             t.HasCheckConstraint("ck_ai_generation_jobs_status", "status IN ('Queued', 'Running', 'Succeeded', 'Failed')");
 
                             t.HasCheckConstraint("ck_ai_generation_jobs_tokens", "input_tokens >= 0 AND output_tokens >= 0");
@@ -147,7 +153,7 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("action");
 
-                    b.Property<Guid>("ActorId")
+                    b.Property<Guid?>("ActorId")
                         .HasColumnType("uuid")
                         .HasColumnName("actor_id");
 
@@ -189,7 +195,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_audit_logs_action", "length(btrim(action)) > 0");
 
-                            t.HasCheckConstraint("ck_audit_logs_entity_type", "entity_type IN ('Question', 'ExamVersion', 'User', 'AiJob', 'Department', 'Subject', 'Topic')");
+                            t.HasCheckConstraint("ck_audit_logs_entity_type", "entity_type IN ('Question', 'Exam', 'ExamVersion', 'QuestionSet', 'User', 'AiJob', 'Department', 'Subject', 'Topic')");
+
+                            t.HasCheckConstraint("ck_audit_logs_system_note", "actor_id IS NOT NULL OR (note IS NOT NULL AND length(btrim(note)) > 0)");
                         });
                 });
 
@@ -234,6 +242,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_subjects");
 
+                    b.HasAlternateKey("Id", "DepartmentId")
+                        .HasName("ak_subjects_id_department");
+
                     b.HasIndex("DepartmentId", "Name")
                         .IsUnique()
                         .HasDatabaseName("ux_subjects_department_name");
@@ -267,6 +278,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_topics");
+
+                    b.HasAlternateKey("Id", "SubjectId", "Grade")
+                        .HasName("ak_topics_id_subject_grade");
 
                     b.HasIndex("SubjectId", "Grade", "Name")
                         .IsUnique()
@@ -324,7 +338,7 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("DepartmentId");
 
-                    b.HasIndex("SubjectId");
+                    b.HasIndex("SubjectId", "DepartmentId");
 
                     b.ToTable("exams", null, t =>
                         {
@@ -416,6 +430,10 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                     b.ToTable("exam_versions", null, t =>
                         {
                             t.HasCheckConstraint("ck_exam_versions_duration", "duration_minutes BETWEEN 1 AND 600");
+
+                            t.HasCheckConstraint("ck_exam_versions_published", "status <> 'Published' OR (published_by IS NOT NULL AND published_at IS NOT NULL AND content_hash IS NOT NULL AND length(btrim(content_hash)) > 0)");
+
+                            t.HasCheckConstraint("ck_exam_versions_rejected", "status <> 'Rejected' OR (review_note IS NOT NULL AND length(btrim(review_note)) > 0)");
 
                             t.HasCheckConstraint("ck_exam_versions_status", "status IN ('Draft', 'Submitted', 'Approved', 'Rejected', 'Published', 'Archived')");
 
@@ -526,7 +544,8 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                     b.HasKey("QuestionSetId", "QuestionId")
                         .HasName("pk_question_set_items");
 
-                    b.HasIndex("QuestionId");
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("IX_question_set_items_question_id");
 
                     b.ToTable("question_set_items", (string)null);
                 });
@@ -649,18 +668,18 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ReviewedBy");
 
-                    b.HasIndex("SubjectId");
-
-                    b.HasIndex("TopicId");
-
                     b.HasIndex("AiJobId", "AiOrdinal")
                         .IsUnique()
                         .HasDatabaseName("ux_questions_ai_job_ordinal")
                         .HasFilter("ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL");
 
+                    b.HasIndex("SubjectId", "DepartmentId");
+
+                    b.HasIndex("TopicId", "SubjectId", "Grade");
+
                     b.ToTable("questions", null, t =>
                         {
-                            t.HasCheckConstraint("ck_questions_ai_identity", "(ai_job_id IS NULL AND ai_ordinal IS NULL AND source = 'Manual') OR (ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL AND ai_ordinal >= 1)");
+                            t.HasCheckConstraint("ck_questions_ai_identity", "(ai_job_id IS NULL AND ai_ordinal IS NULL AND source = 'Manual') OR (source = 'AI' AND ai_job_id IS NOT NULL AND ai_ordinal IS NOT NULL AND ai_ordinal >= 1)");
 
                             t.HasCheckConstraint("ck_questions_ai_verification", "ai_verification IN ('NotChecked', 'Agree', 'Disagree')");
 
@@ -759,7 +778,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("ActorId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
                         .HasConstraintName("fk_audit_logs_users");
 
                     b.Navigation("Actor");
@@ -807,7 +825,8 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasOne("ExamMaker.Domain.Catalog.Subject", "Subject")
                         .WithMany()
-                        .HasForeignKey("SubjectId")
+                        .HasForeignKey("SubjectId", "DepartmentId")
+                        .HasPrincipalKey("Id", "DepartmentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_exams_subjects");
@@ -931,14 +950,16 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasOne("ExamMaker.Domain.Catalog.Subject", "Subject")
                         .WithMany()
-                        .HasForeignKey("SubjectId")
+                        .HasForeignKey("SubjectId", "DepartmentId")
+                        .HasPrincipalKey("Id", "DepartmentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_questions_subjects");
 
                     b.HasOne("ExamMaker.Domain.Catalog.Topic", "Topic")
                         .WithMany()
-                        .HasForeignKey("TopicId")
+                        .HasForeignKey("TopicId", "SubjectId", "Grade")
+                        .HasPrincipalKey("Id", "SubjectId", "Grade")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_questions_topics");

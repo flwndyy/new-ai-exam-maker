@@ -13,6 +13,7 @@ internal sealed class SubjectConfiguration : IEntityTypeConfiguration<Subject>
         builder.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
         builder.Property(x => x.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
         builder.Property(x => x.DepartmentId).HasColumnName("department_id");
+        builder.HasAlternateKey(x => new { x.Id, x.DepartmentId }).HasName("ak_subjects_id_department");
 
         builder.HasOne(x => x.Department)
             .WithMany(x => x.Subjects)

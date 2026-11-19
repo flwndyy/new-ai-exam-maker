@@ -58,10 +58,10 @@ theo từng người dùng và ngày.
 
 ```mermaid
 erDiagram
-    users ||--o{ audit_logs : "thực hiện"
+    users o|--o{ audit_logs : "thực hiện"
 ```
 
-`audit_logs.actor_id` xác định người thao tác.
+`audit_logs.actor_id` xác định người thao tác; NULL là hệ thống và note bắt buộc nêu tác vụ.
 `entity_type` và `entity_id` xác định đối tượng bị tác động.
 Mỗi lần đổi trạng thái lưu hành động, trạng thái trước,
 trạng thái sau, ghi chú và thời điểm.
@@ -99,4 +99,4 @@ trạng thái sau, ghi chú và thời điểm.
 | `ai_usage_daily` | PK ghép `(user_id, date)`; FK `user_id → users.id` | `jobs`, `tokens` |
 | `audit_logs` | PK `id`; FK `actor_id → users.id` | `entity_type`, `entity_id`, `action`, `from_status`, `to_status`, `note`, `created_at` |
 
-Chi tiết schema A2 nằm tại mục 8.1 trong `docs/context.md`. Snapshot được phép NULL khi Draft; tầng Application kiểm tra và chụp đủ nội dung khi Submit. Các bảng `exams`, `exam_versions` có thêm `created_at`, `updated_at` theo API contract.
+Chi tiết schema A2 nằm tại mục 8.1 trong `docs/context.md`. Snapshot được phép NULL khi Draft/Rejected; Application chụp nội dung khi Submit, trigger kiểm tra đầy đủ snapshot, nguồn Approved, tổng điểm và khóa nội dung đã đóng băng. Composite FK bảo đảm chương/môn/khối/tổ nhất quán. Đổi thứ tự câu bằng xóa/chèn lại dưới khóa version trong transaction; xóa bộ/câu phải gỡ question_set_items trước (FK RESTRICT). Các bảng `exams`, `exam_versions` có thêm `created_at`, `updated_at` theo API contract.

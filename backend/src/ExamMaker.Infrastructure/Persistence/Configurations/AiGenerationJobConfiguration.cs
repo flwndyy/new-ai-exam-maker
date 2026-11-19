@@ -1,4 +1,4 @@
-﻿using ExamMaker.Domain.Ai;
+using ExamMaker.Domain.Ai;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,7 +9,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
     {
         public void Configure(EntityTypeBuilder<AiGenerationJob> builder)
         {
-            // Đặt tên bảng và giới hạn các giá trị hợp lệ.
             builder.ToTable("ai_generation_jobs", table =>
             {
                 table.HasCheckConstraint(
@@ -20,12 +19,18 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                     "ck_ai_generation_jobs_attempts",
                     "attempt >= 0 AND max_attempts >= 1 AND attempt <= max_attempts");
 
+                table.HasCheckConstraint("ck_ai_generation_jobs_running_lease",
+                    "status <> 'Running' OR lease_expires_at IS NOT NULL");
+                table.HasCheckConstraint("ck_ai_generation_jobs_finished",
+                    "status NOT IN ('Succeeded', 'Failed') OR finished_at IS NOT NULL");
+                table.HasCheckConstraint("ck_ai_generation_jobs_error",
+                    "(status <> 'Failed' OR (error_code IS NOT NULL AND length(btrim(error_code)) > 0)) " +
+                    "AND (status <> 'Succeeded' OR error_code IS NULL)");
                 table.HasCheckConstraint(
                     "ck_ai_generation_jobs_tokens",
                     "input_tokens >= 0 AND output_tokens >= 0");
             });
 
-            // Khóa chính do ứng dụng tự gán.
             builder.HasKey(x => x.Id)
                 .HasName("pk_ai_generation_jobs");
 
@@ -33,7 +38,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("id")
                 .ValueGeneratedNever();
 
-            // Người gửi yêu cầu, bắt buộc tồn tại trong bảng users.
             builder.Property(x => x.RequestedBy)
                 .HasColumnName("requested_by");
 
@@ -43,7 +47,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasConstraintName("fk_ai_generation_jobs_users")
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Lưu chuỗi JSON đầu vào bằng kiểu jsonb của PostgreSQL.
             builder.Property(x => x.Params)
                 .HasColumnName("params")
                 .HasColumnType("jsonb")
@@ -59,7 +62,6 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.MaxAttempts)
                 .HasColumnName("max_attempts");
 
-            // Thời hạn worker giữ quyền xử lý job.
             builder.Property(x => x.LeaseExpiresAt)
                 .HasColumnName("lease_expires_at")
                 .HasColumnType("timestamp with time zone");
@@ -76,14 +78,12 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.PromptVersion)
                 .HasColumnName("prompt_version");
 
-            // Bộ đếm token kiểu long được ánh xạ sang bigint.
             builder.Property(x => x.InputTokens)
                 .HasColumnName("input_tokens");
 
             builder.Property(x => x.OutputTokens)
                 .HasColumnName("output_tokens");
 
-            // Các giá trị DateTime ghi vào database phải dùng UTC.
             builder.Property(x => x.CreatedAt)
                 .HasColumnName("created_at")
                 .HasColumnType("timestamp with time zone");
@@ -96,11 +96,9 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("finished_at")
                 .HasColumnType("timestamp with time zone");
 
-            // Hỗ trợ tìm danh sách job của từng người dùng.
             builder.HasIndex(x => new { x.RequestedBy, x.CreatedAt })
                 .HasDatabaseName("ix_ai_generation_jobs_requested_created");
 
-            // Hỗ trợ tìm job Running đã hết thời hạn xử lý.
             builder.HasIndex(x => new { x.Status, x.LeaseExpiresAt })
                 .HasDatabaseName("ix_ai_generation_jobs_status_lease");
         }

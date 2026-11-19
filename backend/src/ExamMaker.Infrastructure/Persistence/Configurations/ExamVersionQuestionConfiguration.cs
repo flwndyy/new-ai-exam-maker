@@ -18,7 +18,7 @@ internal sealed class ExamVersionQuestionConfiguration : IEntityTypeConfiguratio
             table.HasCheckConstraint("ck_exam_version_questions_difficulty",
                 "difficulty IS NULL OR difficulty IN ('Recognition', 'Understanding', 'Application', 'HighApplication')");
         });
-        // Thứ tự chỉ duy nhất trong từng phiên bản.
+        // Reordering replaces Draft/Rejected items under a parent row lock in one transaction.
         builder.HasKey(x => new { x.ExamVersionId, x.SortOrder }).HasName("pk_exam_version_questions");
         builder.Property(x => x.ExamVersionId).HasColumnName("exam_version_id");
         builder.Property(x => x.SortOrder).HasColumnName("sort_order").ValueGeneratedNever();
@@ -32,7 +32,6 @@ internal sealed class ExamVersionQuestionConfiguration : IEntityTypeConfiguratio
         builder.Property(x => x.ExplanationSnapshot).HasColumnName("explanation_snapshot");
         builder.HasOne(x => x.ExamVersion).WithMany(x => x.Questions).HasForeignKey(x => x.ExamVersionId)
             .HasConstraintName("fk_exam_version_questions_versions").OnDelete(DeleteBehavior.Restrict);
-        // Cấm xóa câu nguồn đang có trong đề, kể cả đề Draft.
         builder.HasOne(x => x.SourceQuestion).WithMany().HasForeignKey(x => x.SourceQuestionId)
             .HasConstraintName("fk_exam_version_questions_source").OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(x => new { x.ExamVersionId, x.SourceQuestionId }).IsUnique()
