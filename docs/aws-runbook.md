@@ -23,6 +23,8 @@ Parameter Store cho cấu hình runtime và secret.
 
 ### O2 — VPC, subnet và Security Group
 
+Hướng dẫn thao tác Console và checklist chi tiết: [aws-o2-vpc-security-groups.md](aws-o2-vpc-security-groups.md).
+
 1. Mở VPC Console ở `ap-southeast-1`, tạo VPC `aem-demo-vpc` với CIDR `10.20.0.0/16`.
 2. Tạo Internet Gateway và attach vào VPC.
 3. Tạo subnet ở ít nhất hai Availability Zone:
@@ -49,7 +51,9 @@ Parameter Store cho cấu hình runtime và secret.
    - Không tạo inbound khác.
 8. Trước khi lưu rule 443, vào VPC → **Managed Prefix Lists** và kiểm tra AWS-managed prefix
    list có tên `com.amazonaws.global.cloudfront.origin-facing`. Prefix list CloudFront có
-   weight 55, nên phải kiểm tra Security Group quota trước khi thêm rule.
+   weight 55, nên phải kiểm tra quota **Inbound or outbound rules per security group** trước
+   khi thêm rule. Hai rule của EC2 dùng 56 inbound IPv4 slots: 55 cho CloudFront và 1 cho
+   HTTP 80; quota mặc định 60 là đủ nếu Security Group không có rule khác.
 9. Không cần chỉnh NACL cho O2; giữ NACL mặc định và kiểm tra không có rule deny bất thường.
 
 ### O3 — EC2, EBS, Elastic IP, SSM và IAM
