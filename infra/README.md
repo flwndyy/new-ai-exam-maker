@@ -1,21 +1,21 @@
-# AWS infrastructure scaffold
+# Khung hạ tầng AWS
 
-This directory contains the Console-first deployment artifacts for the AI Exam Maker demo.
-It is intentionally a configuration scaffold, not a complete IaC implementation. Follow
-[`../docs/aws-runbook.md`](../docs/aws-runbook.md) for the deployment order.
+Thư mục này chứa các file mẫu triển khai theo AWS Console cho demo AI Exam Maker. Đây là
+khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`](../docs/aws-runbook.md)
+để biết thứ tự triển khai.
 
-## Scope
+## Phạm vi
 
-- `bootstrap/`: ARM64 EC2 user-data template for installing the host prerequisites.
-- `nginx/`: origin reverse-proxy template for `origin.<domain>`.
-- `systemd/`: API and Worker service templates.
-- `cloudfront-function/`: viewer-request function for static-export route fallback.
+- `bootstrap/`: mẫu user-data cho EC2 ARM64.
+- `nginx/`: mẫu reverse proxy cho `origin.<domain>`, gồm HTTP-01 và TLS.
+- `systemd/`: mẫu service cho API và Worker.
+- `cloudfront-function/`: function viewer-request cho route static export.
 
-## Placeholder policy
+## Quy tắc placeholder
 
-Files ending in `.example` contain placeholders only. Replace them during deployment or
-load values from AWS Systems Manager Parameter Store. Never commit real secrets, account
-IDs, resource IDs, ARNs, private keys, or production domains to this directory.
+Các file có đuôi `.example` chỉ chứa placeholder. Thay thế trong lúc triển khai hoặc lấy giá
+trị từ AWS Systems Manager Parameter Store. Không commit secret, account ID, resource ID,
+ARN, private key hoặc domain production thật vào thư mục này.
 
-The actual VPC, subnets, Security Groups, EC2, RDS, S3, CloudFront, and DNS resources are
-created in the AWS Console by O2–O5. O1 does not provision AWS resources.
+VPC, subnet, Security Group, EC2, RDS, S3, CloudFront và DNS thật được tạo trên AWS Console
+ở O2–O5. O1 không tự provision tài nguyên AWS.

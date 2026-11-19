@@ -10,6 +10,10 @@ Group=exammaker
 WorkingDirectory=/opt/exammaker/current
 EnvironmentFile=/etc/exammaker/api.env
 ExecStart=/opt/exammaker/current/ExamMaker.Api --urls http://127.0.0.1:5000
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_GCHeapHardLimit=402653184
+MemoryHigh=384M
+MemoryMax=512M
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

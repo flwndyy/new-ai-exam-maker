@@ -10,6 +10,9 @@ Group=exammaker
 WorkingDirectory=/opt/exammaker/current
 EnvironmentFile=/etc/exammaker/worker.env
 ExecStart=/opt/exammaker/current/ExamMaker.Worker
+Environment=DOTNET_GCHeapHardLimit=805306368
+MemoryHigh=768M
+MemoryMax=1024M
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

@@ -1,12 +1,9 @@
 # Nginx origin template for origin.<domain>.
-# Replace only example.invalid and the placeholder origin secret during deployment.
+# The secret map is intentionally stored in a separate root-owned include.
 # The Security Group remains the primary network restriction: 443 from CloudFront only,
 # 80 for Let's Encrypt HTTP-01, and no SSH ingress.
 
-map $http_x_origin_verify $origin_header_valid {
-    default 0;
-    "REPLACE_WITH_PARAMETER_STORE_ORIGIN_SECRET" 1;
-}
+include /etc/exammaker/origin-secret.conf;
 
 upstream exammaker_api {
     server 127.0.0.1:5000;
@@ -45,6 +42,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Origin-Verify $http_x_origin_verify;
+        # Do not forward the shared origin secret to Kestrel or application logs.
+        proxy_set_header X-Origin-Verify "";
     }
 }

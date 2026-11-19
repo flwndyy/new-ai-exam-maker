@@ -1,112 +1,160 @@
-# AWS deployment runbook (Console-first)
+# Runbook triển khai AWS (Console-first)
 
-This runbook is the O1 deliverable for the AI Exam Maker demo. It describes the order and
-checks for O2–O5. O1 itself does not create AWS resources. Use the AWS Console for resource
-creation and the templates in `/infra` for host configuration.
+Đây là tài liệu O1 cho việc dựng demo AI Exam Maker. Tài liệu mô tả thứ tự và cách kiểm tra
+cho O2–O5. O1 không tự tạo tài nguyên AWS; dùng AWS Console để tạo tài nguyên và dùng các
+file mẫu trong `/infra` để cấu hình máy.
 
-## 1. Decisions and safety rules
-
-The current project decisions are:
+## 1. Quyết định và nguyên tắc an toàn
 
 - Region: `ap-southeast-1`.
-- EC2: `t4g.small`, ARM64, API and Worker on the same host.
+- EC2: `t4g.small`, ARM64; API và Worker chạy chung máy.
 - RDS: `db.t4g.micro`, Single-AZ, private subnet.
-- EC2 is in a public subnet; RDS is in a private subnet.
-- No NAT Gateway, ALB, Multi-AZ, or SSH ingress.
-- Frontend: `app.<domain>` through CloudFront; origin: `origin.<domain>` to the EC2 Elastic IP.
-- Origin TLS: Let's Encrypt HTTP-01. Port 80 is only for the ACME challenge; port 443 is
-  restricted to the CloudFront managed origin-facing prefix list.
-- CloudFront ACM certificate must be requested in `us-east-1`.
+- EC2 ở public subnet; RDS ở private subnet.
+- Không dùng NAT Gateway, ALB, Multi-AZ hoặc SSH ingress.
+- Frontend: `app.<domain>` qua CloudFront; origin: `origin.<domain>` trỏ tới Elastic IP của EC2.
+- TLS ở origin: Let's Encrypt HTTP-01. Port 80 chỉ phục vụ ACME challenge; port 443 chỉ nhận
+  từ CloudFront managed prefix list.
+- Chứng chỉ ACM của CloudFront phải được cấp ở `us-east-1`.
 
-Before creating anything, record the chosen domain and AWS region in the team workspace.
-Do not paste secrets, access keys, private keys, account IDs, resource IDs, or ARNs into GitHub.
-Use Parameter Store for runtime secrets and configuration.
+Không ghi secret, access key, private key, account ID, resource ID hoặc ARN vào GitHub. Dùng
+Parameter Store cho cấu hình runtime và secret.
 
-## 2. Deployment order
+## 2. Thứ tự triển khai
 
-### O2 — VPC and Security Groups
+### O2 — VPC, subnet và Security Group
 
-1. In `ap-southeast-1`, create one VPC and at least two Availability Zone subnets:
-   - public subnet for EC2;
-   - private subnet for RDS.
-2. Attach an Internet Gateway to the VPC. Do not create a NAT Gateway.
-3. Create the EC2 Security Group:
-   - TCP 443: source `com.amazonaws.global.cloudfront.origin-facing` managed prefix list;
-   - TCP 80: `0.0.0.0/0` only because Let's Encrypt HTTP-01 needs it;
-   - no TCP 22 rule.
-4. Create the RDS Security Group:
-   - PostgreSQL 5432: source must be the EC2 Security Group only.
-5. Check the Security Group rule quota before adding the CloudFront prefix list rule.
+1. Mở VPC Console ở `ap-southeast-1`, tạo VPC `aem-demo-vpc` với CIDR `10.20.0.0/16`.
+2. Tạo Internet Gateway và attach vào VPC.
+3. Tạo subnet ở ít nhất hai Availability Zone:
+   - `aem-public-a` — `10.20.1.0/24` — public, dành cho EC2;
+   - `aem-private-a` — `10.20.11.0/24` — private, dành cho RDS subnet group;
+   - `aem-private-b` — `10.20.12.0/24` — private, ở AZ thứ hai, dành cho RDS subnet group.
+4. Tạo route table `aem-public-rt`, associate với `aem-public-a`, thêm route:
+   - `10.20.0.0/16` → `local`;
+   - `0.0.0.0/0` → Internet Gateway.
+5. Tạo route table `aem-private-rt`, associate với cả hai private subnet. Chỉ giữ route
+   `10.20.0.0/16` → `local`; **không thêm NAT Gateway và không thêm Internet Gateway**.
+6. Tạo Security Group `aem-ec2-sg` trong VPC:
 
-Record resource names locally for the next steps, but do not commit their IDs/ARNs.
+   | Direction | Protocol/port | Source | Mục đích |
+   |---|---|---|---|
+   | Inbound | TCP 443 | `com.amazonaws.global.cloudfront.origin-facing` | CloudFront → Nginx |
+   | Inbound | TCP 80 | `0.0.0.0/0` | Let's Encrypt HTTP-01 |
+   | Inbound | TCP 22 | Không tạo rule | Không dùng SSH |
+   | Outbound | All | `0.0.0.0/0` | Giữ mặc định để EC2 gọi AWS/API |
 
-### O3 — EC2, EBS, Elastic IP, SSM, and IAM
+7. Tạo Security Group `aem-rds-sg` trong VPC:
+   - Inbound TCP 5432: Source là **Security Group `aem-ec2-sg`**, không dùng CIDR và không
+     dùng `0.0.0.0/0`.
+   - Không tạo inbound khác.
+8. Trước khi lưu rule 443, vào VPC → **Managed Prefix Lists** và kiểm tra AWS-managed prefix
+   list có tên `com.amazonaws.global.cloudfront.origin-facing`. Prefix list CloudFront có
+   weight 55, nên phải kiểm tra Security Group quota trước khi thêm rule.
+9. Không cần chỉnh NACL cho O2; giữ NACL mặc định và kiểm tra không có rule deny bất thường.
 
-1. Launch an ARM64 Amazon Linux 2023 `t4g.small` instance in the public subnet with a
-   20–30 GB `gp3` EBS root volume and the EC2 Security Group.
-2. Attach an Elastic IP and record it in the private team notes only.
-3. Attach an instance profile with least privilege for the services the application needs:
-   SQS, Bedrock, SSM, Cognito Admin, S3 if required, and CloudWatch logging as separately
-   justified. Do not put an access key on the instance.
-4. Confirm the SSM Agent is online and open a Session Manager shell. Do not open SSH.
-5. Apply `infra/bootstrap/user-data.sh.example` or run its reviewed commands through SSM.
-6. Copy the systemd templates to `/etc/systemd/system/` after replacing placeholders and
-   install the published ARM64 API/Worker binaries under `/opt/exammaker/current`.
+### O3 — EC2, EBS, Elastic IP, SSM và IAM
 
-### O4 — Domain, DNS, Nginx, and TLS
+1. Launch Amazon Linux 2023 ARM64 `t4g.small` trong `aem-public-a`, gắn `aem-ec2-sg`,
+   root EBS `gp3` **30 GB**.
+2. Gắn Elastic IP và ghi lại trong ghi chú riêng của team, không commit vào Git.
+3. Gắn instance profile least-privilege cho SQS, Bedrock, SSM, Cognito Admin, S3 nếu thật
+   sự cần, và CloudWatch logging nếu được phê duyệt. Không đặt access key trên EC2.
+4. Chờ SSM Agent online rồi mở Session Manager. Không mở SSH.
+5. Chạy `infra/bootstrap/user-data.sh.example` hoặc các lệnh tương đương qua SSM.
+   Bootstrap cài Certbot trong `/opt/certbot` nhưng **không bật Nginx**.
+6. API/Worker phải được publish self-contained cho ARM64, ví dụ:
 
-1. Create DNS records:
-   - `app.<domain>` → CloudFront distribution alias (after O5 creates it);
-   - `origin.<domain>` → EC2 Elastic IP.
-2. Request the CloudFront ACM certificate in `us-east-1` for `app.<domain>` and validate it
-   through DNS.
-3. On EC2, create `/var/www/letsencrypt`, install Certbot using the approved Amazon Linux
-   package instructions, and issue the origin certificate for `origin.<domain>` with
-   HTTP-01.
-4. Copy `infra/nginx/exammaker.conf.example` to the Nginx configuration directory. Replace
-   only the domain and the origin secret. Load the secret from the approved Parameter Store
-   deployment step; do not commit the value.
-5. Enable the Nginx configuration, run `nginx -t`, reload Nginx, and confirm the Certbot
-   renewal timer is active.
-6. Confirm direct requests without the `X-Origin-Verify` header receive `403`. Confirm the
-   API receives `X-Forwarded-For` and `X-Forwarded-Proto` from Nginx.
+   ```text
+   dotnet publish -c Release -r linux-arm64 --self-contained true
+   ```
 
-### O5 — S3 and CloudFront
+7. Mỗi bản build đặt tại `/opt/exammaker/releases/<release-id>`, sau đó tạo symlink:
 
-1. Create a private S3 bucket in the selected region for the static frontend. Block public
-   access and configure CloudFront Origin Access Control (OAC).
-2. Upload the Next.js static export. Do not use an S3 website endpoint.
-3. Create a CloudFront distribution with:
-   - default `/*` behavior to S3, normal caching;
-   - `/api/*` behavior to `origin.<domain>` over HTTPS only;
-   - `/api/*` cache policy `CachingDisabled`;
-   - `/api/*` origin request policy `AllViewerExceptHostHeader`;
-   - all API methods required by the OpenAPI contract;
-   - custom `X-Origin-Verify` header with the same secret configured at Nginx;
-   - the ACM certificate from `us-east-1`;
-   - no custom error response rewriting to `index.html`.
-4. Associate `infra/cloudfront-function/index-html-rewrite.js` with the viewer-request
-   event on the default `/*` behavior only. It must not be attached to `/api/*`.
-5. Add the `app.<domain>` alternate domain name and point its DNS record to CloudFront.
-6. Wait for deployment, then test the frontend route, API route, direct origin rejection,
-   and a refresh on a static-export route.
+   ```text
+   ln -sfn /opt/exammaker/releases/<release-id> /opt/exammaker/current
+   ```
 
-## 3. Verification checklist
+   Không tạo `/opt/exammaker/current` thành thư mục thật.
+8. Chép systemd templates vào `/etc/systemd/system/`, tạo `api.env` và `worker.env` từ
+   Parameter Store, rồi chạy `systemctl daemon-reload`. Chỉ enable/start service sau khi
+   bản build và symlink đã tồn tại.
 
-- [ ] `git diff --check` returns no whitespace errors.
-- [ ] `rg` finds no access keys, private keys, real account/resource IDs, ARNs, or secrets.
-- [ ] EC2 is ARM64 and the API/Worker binaries are `linux-arm64`.
-- [ ] SSM Session Manager works and no Security Group rule allows SSH.
-- [ ] EC2 443 is reachable through CloudFront only; port 80 serves only ACME challenge files.
-- [ ] Nginx rejects a request without the correct origin verification header.
-- [ ] CloudFront `/api/*` does not cache and forwards the required authorization/header data.
-- [ ] CloudFront `/*` serves S3 content and the function rewrites route paths to `index.html`.
-- [ ] S3 blocks public access and is reachable only through CloudFront OAC.
-- [ ] `nginx -t`, systemd status checks, and CloudFront test requests are recorded in the PR.
-- [ ] AWS Budget alarms are configured by O14; stop unused EC2/RDS resources after testing.
+### O4 — Domain, DNS, Nginx và TLS
 
-## 4. Cleanup after the demo
+1. Tạo DNS record:
+   - `origin.<domain>` → Elastic IP của EC2;
+   - `app.<domain>` → CloudFront alias sau khi O5 tạo distribution.
+2. Cài config HTTP-only trước khi xin chứng chỉ:
+   - Xóa hoặc đổi tên `/etc/nginx/conf.d/default.conf` mặc định nếu nó tạo server block
+     trùng port 80.
+   - Chép `infra/nginx/acme-http.conf.example` vào `/etc/nginx/conf.d/` và thay domain.
+   - Chạy `nginx -t`, sau đó `systemctl enable --now nginx`.
+3. Tạo chứng chỉ origin bằng webroot:
 
-Follow the project cleanup task O16: snapshot what is needed, stop RDS/EC2 when not in use,
-remove unattached EBS volumes, release unused Elastic IPs, and verify that no NAT Gateway,
-load balancer, idle public IP, or test CloudFront distribution remains.
+   ```text
+   certbot certonly --webroot -w /var/www/letsencrypt \
+     -d origin.<domain> --email <team-email> --agree-tos --no-eff-email
+   ```
+
+   Chỉ chạy lệnh sau khi DNS `origin.<domain>` đã trỏ đúng Elastic IP và config HTTP-only
+   đang hoạt động.
+4. Tạo `/etc/exammaker/origin-secret.conf` từ Parameter Store, không lấy secret từ Git:
+   - nội dung theo `infra/nginx/origin-secret.conf.example`;
+   - owner `root:nginx`;
+   - mode `0640`;
+   - kiểm tra file không đọc được bởi user thường.
+5. Sau khi chứng chỉ tồn tại, gỡ config HTTP-only và chép
+   `infra/nginx/exammaker.conf.example` vào `/etc/nginx/conf.d/`. Thay domain, nhưng không
+   đưa secret literal vào file này.
+6. Chạy `nginx -t && systemctl reload nginx`. Xác nhận Certbot timer hoạt động.
+7. Kiểm tra request trực tiếp thiếu `X-Origin-Verify` nhận `403`. CloudFront sẽ gửi header
+   secret ở O5; Nginx xóa header này trước khi proxy sang Kestrel để secret không lọt vào
+   application log/exception dump.
+
+### O5 — S3 và CloudFront
+
+1. Tạo S3 bucket private trong region đã chọn. Bật Block Public Access và dùng CloudFront
+   Origin Access Control (OAC), không dùng S3 website endpoint.
+2. Upload static export của Next.js.
+3. Tạo CloudFront distribution:
+   - behavior mặc định `/*` → S3, cache bình thường;
+   - behavior `/api/*` → `origin.<domain>` qua HTTPS only;
+   - `/api/*` dùng `CachingDisabled`;
+   - `/api/*` dùng `AllViewerExceptHostHeader`;
+   - cho phép các HTTP method cần trong OpenAPI;
+   - thêm custom origin header `X-Origin-Verify` cùng giá trị được lưu ở Parameter Store;
+   - dùng ACM certificate ở `us-east-1`;
+   - không dùng custom error 403/404 để rewrite thành `index.html`.
+4. Gắn `infra/cloudfront-function/index-html-rewrite.js` vào viewer-request của behavior
+   mặc định `/*` chỉ; không gắn vào `/api/*`.
+5. Thêm alternate domain `app.<domain>` và trỏ DNS tới CloudFront.
+6. Chờ distribution deployed, rồi kiểm tra frontend route, API route, request trực tiếp tới
+   origin và refresh ở route static export.
+
+## 3. Checklist kiểm tra
+
+- [ ] `git diff --check` không có lỗi whitespace.
+- [ ] Không có access key, private key, ID/ARN thật hoặc secret trong diff.
+- [ ] Có 1 public subnet cho EC2 và 2 private subnet ở 2 AZ cho RDS subnet group.
+- [ ] Không có NAT Gateway, ALB hoặc route private → Internet Gateway.
+- [ ] EC2 là ARM64, EBS root là gp3 30 GB, binary là `linux-arm64` self-contained.
+- [ ] SSM Session Manager hoạt động và không có inbound SSH.
+- [ ] EC2 443 chỉ nhận CloudFront prefix list; port 80 chỉ phục vụ ACME challenge.
+- [ ] Nginx reject request thiếu origin secret và không proxy secret sang Kestrel.
+- [ ] File origin secret có owner `root:nginx`, mode `0640`.
+- [ ] Hai service có `MemoryHigh`/`MemoryMax` và status systemd hoạt động.
+- [ ] CloudFront `/api/*` không cache và forward đủ header cần thiết.
+- [ ] S3 chặn public access và chỉ nhận truy cập qua CloudFront OAC.
+- [ ] AWS Budget được cấu hình bởi O14; dừng tài nguyên không dùng sau khi kiểm tra.
+
+## 4. Dọn tài nguyên sau demo
+
+Theo O16: tạo snapshot cần thiết, dừng RDS/EC2 khi không dùng, xóa EBS không còn gắn,
+release Elastic IP không dùng, đồng thời kiểm tra không còn NAT Gateway, load balancer,
+public IP idle hoặc CloudFront distribution thử nghiệm.
+
+## 5. Tài liệu AWS tham khảo
+
+- VPC public/private subnet và Internet Gateway: <https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html>
+- AWS-managed prefix lists: <https://docs.aws.amazon.com/vpc/latest/userguide/working-with-aws-managed-prefix-lists.html>
+- Security Group rules và quota: <https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html>
