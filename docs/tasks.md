@@ -79,6 +79,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [ ] A2. EF Core + Npgsql, migration đầu (toàn bộ bảng mục 8), unique/partial index, CHECK, FK `RESTRICT`; **seed** `departments/subjects/topics` (mục 8.4).
   - Kiểm tra local 19/11/2026: đủ 13 bảng; seed 4 tổ, 4 môn, 82 chương; 30 test pass (13 integration test PostgreSQL trong repo, không skip); migration từ DB mới, nâng cấp DB hiện có, rollback/reapply và SQL idempotent đều pass. Chờ PR vào dev và CI xanh trước khi tick hoàn tất.
 - [ ] A3. Auth: validate JWT (issuer/audience/hạn) → tải user từ DB theo `sub` (cache 1–5 phút) → policy theo role + tổ + ownership; `GET /me`. Từ chối `sub` chưa có trong `users`.
+  - Kiểm tra local 19/11/2026: code JWT Cognito, lookup DB + cache hiển thị 1 phút, policy role/tổ/ownership và GET /me; 74 test Release pass, không skip (15 test PostgreSQL). Có comment giải thích hàm tiếng Việt theo yêu cầu. Chưa smoke test Cognito thật; xem docs/a3-auth.md. Chờ cấu hình AWS, PR merge và CI xanh trước khi tick hoàn tất.
 - [ ] A4. Quản lý user + đồng bộ Cognito (`AdminCreateUser`/`AddUserToGroup`/`Disable`/`GlobalSignOut`, đền bù khi lỗi); `POST /admin/users/reconcile`; **script tạo admin đầu tiên** (mục 3.3). *Cần Cognito của OPS-2.*
 - [ ] A5. Danh mục: `GET /departments|subjects|topics` + CRUD `/admin/*`.
 

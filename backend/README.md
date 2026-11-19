@@ -88,7 +88,7 @@ dotnet test ExamMaker.slnx -m:1
 The fixture creates a random `exammaker_a2_test_*` database and drops only
 that database afterwards. It does not modify the development database.
 Without the variable, local database tests are explicitly skipped; CI fails
-if it is missing. The thirteen integration tests cover migrations and seed,
+if it is missing. The thirteen A2 database integration tests cover migrations and seed,
 idempotent SQL, rollback/reapply, unique/partial indexes, JSONB, CHECK/FK,
 system audit, catalog consistency, snapshot freezing, concurrent Submit/item
 writes, transactional reordering, Rejected archival with incomplete/stale snapshots,
@@ -99,3 +99,12 @@ using the intended database connection. Existing invalid data causes the
 migration to fail atomically; correct the data before retrying. Downgrade to
 the old audit schema is refused if system audit rows or Exam/QuestionSet audit
 rows exist, so audit history is never silently discarded or assigned a fake user.
+
+## Authentication (A3)
+
+See `docs/a3-auth.md` at the repository root for Cognito environment variables,
+JWT validation, database-backed permissions, `/api/v1/me`, and local testing.
+A3 adds two PostgreSQL user-directory tests plus signed-token HTTP and policy
+tests. Only display fields are cached; authorization fields are read on every
+request. A real Cognito smoke test still requires deployment configuration and
+a matching internal account.

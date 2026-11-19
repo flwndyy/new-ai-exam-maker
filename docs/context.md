@@ -107,6 +107,16 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 - **Admin đầu tiên (bootstrap)**: vì self sign-up tắt, admin đầu tiên được tạo bằng script/lệnh chạy một lần bởi người triển khai (tạo user Cognito + group `admin` + dòng `users`), không qua API công khai. Ghi quy trình vào `docs/`.
 - **Đăng nhập lần đầu / mật khẩu**: admin tạo user với mật khẩu tạm → user phải đổi mật khẩu ở lần đăng nhập đầu (dùng giao diện đăng nhập của Cognito, Managed Login); có luồng quên mật khẩu. Đổi email phải cập nhật cả Cognito và `users.email`.
 
+#### Chi tiết triển khai A3
+
+- API chỉ nhận Cognito **access token**: kiểm chữ ký RS256/JWKS, issuer, exp/nbf, `token_use=access`, `client_id` đúng App Client và `sub` không rỗng. Access token Cognito dùng `client_id` để kiểm client; không nhầm với `aud` của ID token. ID token không dùng gọi API.
+- Sau khi xác thực token, tải `users` bằng unique `cognito_sub`; user không tồn tại, bị khóa hoặc hồ sơ role/tổ không hợp lệ trả 401. Không tự tạo user. Principal ứng dụng được tạo lại từ DB, loại bỏ role/group tùy ý trong token.
+- Cache 1 phút chỉ dành cho email/họ tên/tên tổ hiển thị. `id`, role, department_id, is_active luôn đọc DB trong mỗi request để đổi quyền/khóa tài khoản có hiệu lực ở request kế tiếp. Không cache kết quả user không tồn tại. Principal/current user chỉ sống trong request.
+- Policy dùng chung: Admin (quản trị), ContentAuthor (teacher/head), SameDepartment (cùng tổ hoặc admin), Owner (teacher/head sở hữu), Reviewer (head cùng tổ hoặc admin, luôn cấm tự duyệt). Resource policy yêu cầu đối tượng có creator/department từ DB; không nhận dữ liệu quyền từ body client. Các use case sau A3 phải kiểm tra trạng thái/quyền cụ thể theo ma trận 3.2.
+- Mặc định endpoint yêu cầu user nội bộ hợp lệ; `/health` công khai. `GET /api/v1/me` trả đúng schema Me trong OpenAPI. 401/403 trả ProblemDetails với code/traceId; 401 có WWW-Authenticate: Bearer.
+- Cấu hình Cognito lấy từ môi trường/Parameter Store. Nếu chưa cấu hình thì health vẫn chạy, mọi Bearer token bị từ chối; cấu hình một phần hoặc sai định dạng làm startup thất bại. Triển khai thật phải cung cấp đủ Region/UserPoolId/ClientId. Test dùng khóa RSA tạm và discovery giả trong test host, không có chế độ giả xác thực ở production.
+- Theo yêu cầu người dùng cho A3, comment giải thích tác dụng hàm viết bằng tiếng Việt; tên lớp/hàm/biến vẫn bằng tiếng Anh.
+
 ---
 
 ## 4. Luồng nghiệp vụ
