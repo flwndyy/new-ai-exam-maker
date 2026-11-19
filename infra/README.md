@@ -8,7 +8,8 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 
 - `bootstrap/`: mẫu user-data cho EC2 ARM64.
 - `nginx/`: mẫu reverse proxy cho `origin.<domain>`, gồm HTTP-01 và TLS.
-- `systemd/`: mẫu service cho API và Worker.
+- `systemd/`: mẫu service cho API, Worker và timer gia hạn Certbot.
+- `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
 
 ## Quy tắc placeholder

@@ -106,8 +106,16 @@ Parameter Store cho cấu hình runtime và secret.
 5. Sau khi chứng chỉ tồn tại, gỡ config HTTP-only và chép
    `infra/nginx/exammaker.conf.example` vào `/etc/nginx/conf.d/`. Thay domain, nhưng không
    đưa secret literal vào file này.
-6. Chạy `nginx -t && systemctl reload nginx`. Xác nhận Certbot timer hoạt động.
-7. Kiểm tra request trực tiếp thiếu `X-Origin-Verify` nhận `403`. CloudFront sẽ gửi header
+6. Cài deploy hook và timer gia hạn:
+   - chép `infra/certbot/renewal-hooks/deploy/10-reload-nginx.sh.example` thành
+     `/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx.sh`, owner `root:root`, mode `0750`;
+   - chép `infra/systemd/certbot-renew.service.example` và
+     `infra/systemd/certbot-renew.timer.example` vào `/etc/systemd/system/`;
+   - chạy `systemctl daemon-reload && systemctl enable --now certbot-renew.timer`;
+   - kiểm tra bằng `systemctl list-timers certbot-renew.timer` và
+     `systemctl start certbot-renew.service`;
+   - deploy hook chỉ chạy sau khi Certbot gia hạn thành công, chạy `nginx -t` rồi reload Nginx.
+7. Chạy `nginx -t && systemctl reload nginx`. Kiểm tra request trực tiếp thiếu `X-Origin-Verify` nhận `403`. CloudFront sẽ gửi header
    secret ở O5; Nginx xóa header này trước khi proxy sang Kestrel để secret không lọt vào
    application log/exception dump.
 
@@ -143,6 +151,7 @@ Parameter Store cho cấu hình runtime và secret.
 - [ ] Nginx reject request thiếu origin secret và không proxy secret sang Kestrel.
 - [ ] File origin secret có owner `root:nginx`, mode `0640`.
 - [ ] Hai service có `MemoryHigh`/`MemoryMax` và status systemd hoạt động.
+- [ ] `certbot-renew.timer` được enable; deploy hook chạy `nginx -t` trước khi reload.
 - [ ] CloudFront `/api/*` không cache và forward đủ header cần thiết.
 - [ ] S3 chặn public access và chỉ nhận truy cập qua CloudFront OAC.
 - [ ] AWS Budget được cấu hình bởi O14; dừng tài nguyên không dùng sau khi kiểm tra.

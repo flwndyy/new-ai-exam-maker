@@ -25,4 +25,5 @@
 - Dùng symlink `/opt/exammaker/current` trỏ tới một release trong `/opt/exammaker/releases/`.
 - Giữ origin secret trong file include riêng, owner `root:nginx`, mode `0640`.
 - Giới hạn bộ nhớ API/Worker phù hợp với EC2 2 GB RAM.
+- Cài timer Certbot và deploy hook chỉ reload Nginx sau khi gia hạn thành công.
 - Viết runbook tiếng Việt có thứ tự O2–O5 và checklist xác minh.

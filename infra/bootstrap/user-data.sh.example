@@ -36,6 +36,9 @@ ln -sfn "${CERTBOT_VENV}/bin/certbot" /usr/local/bin/certbot
 #   infra/nginx/origin-secret.conf.example
 #   infra/systemd/exammaker-api.service.example
 #   infra/systemd/exammaker-worker.service.example
+#   infra/systemd/certbot-renew.service.example
+#   infra/systemd/certbot-renew.timer.example
+#   infra/certbot/renewal-hooks/deploy/10-reload-nginx.sh.example
 #
 # Supply runtime configuration through /etc/exammaker/api.env and worker.env.
 # Secrets must come from Parameter Store or another approved deployment step.
