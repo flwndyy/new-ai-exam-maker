@@ -449,6 +449,7 @@ secrets.json
 .terraform/
 cdk.out/
 .aws-sam/
+.worktrees/
 
 # ---- Khác ----
 .DS_Store
