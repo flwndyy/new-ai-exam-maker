@@ -23,6 +23,8 @@ Parameter Store cho cấu hình runtime và secret.
 
 ### O2 — VPC, subnet và Security Group
 
+Hướng dẫn thao tác Console và checklist chi tiết: [aws-o2-vpc-security-groups.md](aws-o2-vpc-security-groups.md).
+
 1. Mở VPC Console ở `ap-southeast-1`, tạo VPC `aem-demo-vpc` với CIDR `10.20.0.0/16`.
 2. Tạo Internet Gateway và attach vào VPC.
 3. Tạo subnet ở ít nhất hai Availability Zone:
