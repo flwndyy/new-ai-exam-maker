@@ -214,6 +214,26 @@ public sealed class A2PostgresTests(PostgresFixture fixture) : IClassFixture<Pos
     }
 
     [PostgresFact]
+    public async Task Archived_versions_cannot_return_to_any_active_state()
+    {
+        await using var s = await OpenAsync();
+        await SnapshotAsync(s);
+        await s.ExecuteAsync("UPDATE questions SET status = 'Approved'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Submitted' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Approved' WHERE id = '{VersionId}'");
+        await s.ExecuteAsync($"UPDATE exam_versions SET status = 'Archived' WHERE id = '{VersionId}'");
+        foreach (var status in new[] { "Draft", "Rejected", "Submitted", "Approved", "Published" })
+        {
+            // A complete snapshot would otherwise allow direct restoration to Approved/Published.
+            await s.RejectAsync($"UPDATE exam_versions SET status = '{status}', review_note = 'Synthetic note', " +
+                $"published_by = '{UserId}', published_at = now() WHERE id = '{VersionId}'",
+                "23514", "ck_exam_version_archived_terminal");
+        }
+        await s.ExecuteAsync($"UPDATE exam_versions SET updated_at = now() WHERE id = '{VersionId}'");
+        Assert.Equal("Archived", await s.ScalarAsync<string>($"SELECT status FROM exam_versions WHERE id = '{VersionId}'"));
+    }
+
+    [PostgresFact]
     public async Task Withdraw_and_reject_preserve_frozen_metadata_until_the_version_is_editable()
     {
         await using var s = await OpenAsync();
