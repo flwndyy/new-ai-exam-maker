@@ -3,6 +3,7 @@ using Amazon.SQS;
 using ExamMaker.Application.Ai;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace ExamMaker.Infrastructure.Ai;
 
@@ -34,6 +35,12 @@ public static class AiServiceCollectionExtensions
             var queueUrl = configuration[QueueUrlKey];
             if (string.IsNullOrWhiteSpace(queueUrl))
             {
+                // Only local development may run without a queue; elsewhere a missing URL is a deployment error.
+                if (provider.GetService<IHostEnvironment>()?.IsDevelopment() == true)
+                {
+                    return ActivatorUtilities.CreateInstance<LoggingAiJobQueue>(provider);
+                }
+
                 throw new InvalidOperationException($"Configuration value '{QueueUrlKey}' is not set.");
             }
 

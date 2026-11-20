@@ -4,16 +4,23 @@ using ExamMaker.Infrastructure.Ai;
 using ExamMaker.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 
 namespace ExamMaker.Infrastructure.Tests.Ai;
 
 public sealed class AiRegistrationTests
 {
-    private static ServiceProvider BuildProvider(Dictionary<string, string?> settings)
+    private static ServiceProvider BuildProvider(Dictionary<string, string?> settings, string? environment = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var services = new ServiceCollection();
         services.AddLogging();
+        if (environment is not null)
+        {
+            services.AddSingleton<IHostEnvironment>(new TestEnvironment(environment));
+        }
+
         // Mirrors Program.cs: the DbContext comes from the persistence registration.
         services.AddExamMakerPersistence(configuration);
         services.AddExamMakerAi(configuration);
@@ -95,5 +102,52 @@ public sealed class AiRegistrationTests
             () => provider.GetRequiredService<IAiJobQueue>());
 
         Assert.Contains("Sqs:AiJobsQueueUrl", error.Message);
+    }
+
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Staging")]
+    public void Missing_queue_url_still_fails_outside_development(string environment)
+    {
+        var settings = BaseSettings();
+        settings.Remove("Sqs:AiJobsQueueUrl");
+        using var provider = BuildProvider(settings, environment);
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => provider.GetRequiredService<IAiJobQueue>());
+
+        Assert.Contains("Sqs:AiJobsQueueUrl", error.Message);
+    }
+
+    [Fact]
+    public async Task Missing_queue_url_in_development_uses_a_logging_queue_that_accepts_jobs()
+    {
+        var settings = BaseSettings();
+        settings.Remove("Sqs:AiJobsQueueUrl");
+        using var provider = BuildProvider(settings, Environments.Development);
+
+        var queue = provider.GetRequiredService<IAiJobQueue>();
+
+        Assert.IsType<LoggingAiJobQueue>(queue);
+        await queue.EnqueueAsync(Guid.NewGuid(), CancellationToken.None);
+    }
+
+    [Fact]
+    public void Configured_queue_url_uses_sqs_even_in_development()
+    {
+        using var provider = BuildProvider(BaseSettings(), Environments.Development);
+
+        Assert.IsType<SqsAiJobQueue>(provider.GetRequiredService<IAiJobQueue>());
+    }
+
+    private sealed class TestEnvironment(string name) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = name;
+
+        public string ApplicationName { get; set; } = "ExamMaker.Tests";
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }
