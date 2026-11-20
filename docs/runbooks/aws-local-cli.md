@@ -18,8 +18,8 @@ tiếp từ máy cá nhân (Windows, macOS, Linux) bằng AWS CLI, thay cho AWS 
 
 | Vai trò | Có cần AWS CLI? | Quyền IAM gợi ý |
 |---|---|---|
-| OPS (dựng hạ tầng, chạy script `infra/`) | **Có** | Policy giới hạn theo dịch vụ dự án và region `ap-southeast-1` (giai đoạn dựng có thể dùng `AdministratorAccess`, **thu hẹp trước khi tạo access key lâu dài** và xoay key định kỳ 90 ngày) |
-| DEV backend/frontend (chỉ đọc cấu hình) | Không bắt buộc | Policy tối thiểu chỉ đọc SSM Cognito: `/exammaker/*/Cognito/*` (tuyệt đối **không** dùng `AmazonSSMReadOnlyAccess` hay wildcard `/exammaker/*` để tránh lộ connection string/secret) |
+| OPS (dựng hạ tầng, chạy script `infra/`) | **Có** | Policy giới hạn theo dịch vụ dự án tại region `ap-southeast-1` (EC2, RDS, S3, CloudFront, Cognito, SSM, Route53, ACM, Bedrock). Không cấp `AdministratorAccess` cho access key dài hạn trên laptop; xoay key định kỳ ≤ 90 ngày |
+| DEV backend/frontend (chỉ đọc cấu hình) | Không bắt buộc | Policy tối thiểu chỉ đọc SSM Cognito dev: `/exammaker/dev/Cognito/*` (tuyệt đối **không** dùng `AmazonSSMReadOnlyAccess` hay wildcard `/exammaker/*` để tránh lộ connection string/secret) |
 
 DEV không có AWS CLI vẫn làm được: OPS đọc tham số và gửi riêng các giá trị **không bí mật**
 (Region, UserPoolId, ClientId, HostedUiDomain) để DEV đặt biến môi trường local.
@@ -52,15 +52,16 @@ Access Key cho tài khoản root).
            "ssm:GetParametersByPath"
          ],
          "Resource": [
-            "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/*/Cognito",
-            "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/*/Cognito/*"
-          ]
+           "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/dev/Cognito",
+           "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/dev/Cognito/*"
+         ]
        }
      ]
    }
    ```
 3. Thay `<ACCOUNT_ID>` bằng account ID thật của nhóm (hỏi OPS, **không** commit vào repo).
-4. Đặt tên policy: `ExamMakerDevCognitoReadOnly` → **Create policy**. Policy này chỉ cho phép đọc các tham số public của Cognito, hoàn toàn không cho đọc connection string hay giải mã secrets.
+   *(Lưu ý: Policy giới hạn chính xác môi trường `dev`. Không dùng wildcard `*` cho tên môi trường để tránh cấp nhầm quyền đọc sang `prod` hoặc các subpath khác).*
+4. Đặt tên policy: `ExamMakerDevCognitoReadOnly` → **Create policy**. Policy này chỉ cho phép đọc các tham số public của Cognito trên môi trường `dev`, hoàn toàn không cho đọc connection string hay giải mã secrets.
 
 ### 2.2 Tạo IAM User và cấp Access Key
 
@@ -69,7 +70,7 @@ Access Key cho tài khoản root).
    người đó chỉ dùng CLI.
 3. **Permissions** → **Attach policies directly**:
    - Nếu là DEV: chọn policy `ExamMakerDevCognitoReadOnly` vừa tạo ở mục 2.1.
-   - Nếu là OPS: chọn quyền quản trị hạ tầng dự án.
+   - Nếu là OPS: chọn Project Infrastructure Policy (giới hạn theo dịch vụ dự án và region `ap-southeast-1`). **Không cấp `AdministratorAccess` cho access key dài hạn lưu trên máy cá nhân** (tuân thủ `docs/context.md` §10, §15). Nếu cần thao tác quản trị đặc biệt một lần, thực hiện trực tiếp trên AWS Console bằng tài khoản có bật MFA.
    → **Create user**.
 4. Mở user vừa tạo → tab **Security credentials** → mục **Access keys** → **Create access key**.
 5. Use case: **Command Line Interface (CLI)** → tick xác nhận → **Next** → **Create access key**.
@@ -94,9 +95,14 @@ IAM. Xoá commit là không đủ.
   curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"
   sudo installer -pkg AWSCLIV2.pkg -target /
   ```
-- **Linux (x86_64):**
+- **Linux (x86_64 / aarch64):**
   ```bash
+  # Với kiến trúc x86_64 (Intel / AMD 64-bit):
   curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
+  # Hoặc với kiến trúc ARM64 / aarch64 (Apple Silicon VM, AWS Graviton, Raspberry Pi...):
+  # curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+
   unzip awscliv2.zip && sudo ./aws/install
   ```
 
@@ -152,7 +158,7 @@ Nếu đặt `path=/exammaker/dev/Cognito`, phần `Cognito` bị cắt mất �
 
 **Vì vậy path đúng là `/exammaker/<env>` (khớp với `docs/runbooks/cognito.md` §4).**
 
-> ⚠️ **Lưu ý về quyền IAM:** DEV có policy `ExamMakerDevCognitoReadOnly` chỉ cho phép đọc `/exammaker/*/Cognito/*`, trong khi `AddSystemsManager("/exammaker/dev")` gọi `GetParametersByPath` trên toàn bộ `/exammaker/dev` (sẽ nhận `AccessDeniedException` cho các path ngoài Cognito). **Khuyến nghị DEV dùng Cách 2** (biến môi trường thủ công) để tránh lỗi quyền. Cách 1 phù hợp cho OPS hoặc EC2 Instance Profile có quyền đọc rộng hơn.
+> ⚠️ **Lưu ý về quyền IAM:** DEV có policy `ExamMakerDevCognitoReadOnly` chỉ cho phép đọc `/exammaker/dev/Cognito/*`, trong khi `AddSystemsManager("/exammaker/dev")` gọi `GetParametersByPath` trên toàn bộ `/exammaker/dev` (sẽ nhận `AccessDeniedException` cho các path ngoài Cognito). Do đó, **DEV chạy local bắt buộc dùng Cách 2** (đặt biến môi trường trực tiếp, để trống `ParameterStore__Path`). Cách 1 chỉ áp dụng cho OPS hoặc EC2 Instance Profile (`O3`) có quyền đọc toàn bộ prefix dự án.
 
 ```powershell
 # PowerShell (dành cho OPS hoặc tài khoản có quyền đọc /exammaker/dev/*)

@@ -17,12 +17,13 @@ be registered when the AI pipeline is implemented.
 
 ## Configuration
 
-Both hosts read application settings and environment variables. Local runs
-can leave `ParameterStore__Path` unset and start without AWS access. To
-enable AWS Systems Manager Parameter Store, set `ParameterStore__Path`
-to the deployment's agreed prefix and configure the AWS region and
-credentials for the runtime identity. Environment variables override
-values loaded from Parameter Store.
+Both hosts read application settings and environment variables. Local development
+should leave `ParameterStore__Path` unset and provide configuration via local
+environment variables instead (see `docs/a3-auth.md` and `docs/runbooks/aws-local-cli.md`).
+`ParameterStore__Path` is designed for EC2 (`O3`) or administrative identities with
+permissions across the entire `/exammaker/<env>` hierarchy; scoped DEV identities
+with least-privilege policies will receive an `AccessDeniedException` if attempting
+to query the root prefix. Environment variables override values loaded from Parameter Store.
 
 ## Project layout
 

@@ -101,6 +101,8 @@ Nếu dựng trực tiếp trên AWS Management Console tại region **`ap-south
 
 Cấu trúc key SSM dưới `/exammaker/<env>/Cognito/*` tương thích trực tiếp với `backend/src/ExamMaker.Infrastructure/ParameterStoreConfiguration.cs` (khi `ParameterStore__Path=/exammaker/<env>`).
 
+> ⚠️ **Lưu ý quan trọng cho DEV chạy local:** Nếu DEV dùng IAM user với policy tối thiểu (`ExamMakerDevCognitoReadOnly` chỉ có quyền trên `/exammaker/dev/Cognito/*`), việc đặt `ParameterStore__Path=/exammaker/dev` sẽ bị AWS từ chối (`AccessDeniedException`). Do đó, **DEV chạy local để trống `ParameterStore__Path` và nạp cấu hình qua biến môi trường local** (xem Cách 2 trong `docs/runbooks/aws-local-cli.md`). `ParameterStore__Path` chỉ dành cho EC2 Instance Profile (`O3`) hoặc tài khoản có quyền đọc toàn bộ prefix dự án.
+
 ### Đọc cấu hình từ Parameter Store (dành cho thành viên có quyền IAM đọc SSM)
 
 ```bash
@@ -115,7 +117,7 @@ MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path \
 
 - **Backend (.NET 10 — `A3`, `A4`):**
   - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): đọc qua section `Cognito` (`Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`). *(Lưu ý: tham số `Cognito:Authority` trong SSM dùng làm giá trị tham chiếu OIDC; theo `docs/a3-auth.md`, API tự tính issuer từ Region và UserPoolId nên không cần đọc trực tiếp `Cognito:Authority`).*
-  - Chạy local không cần SSM: đặt 3 biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo; API tự tính issuer từ Region + UserPoolId).
+  - Chạy local không cần SSM: để trống `ParameterStore__Path`, đặt 3 biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo; API tự tính issuer từ Region + UserPoolId). Chi tiết xem tại `docs/runbooks/aws-local-cli.md` (Mục 4 Cách 2) và `docs/a3-auth.md`.
   - **Quyền IAM tối thiểu cho EC2 Instance Profile (tác vụ `O3`):** giới hạn `Resource` chỉ tới ARN của User Pool này, bao gồm đúng các action ứng dụng thực sự gọi theo `docs/context.md` §3.3 và `docs/api/openapi.yaml`:
     - `cognito-idp:AdminCreateUser` — tạo user mới (`POST /admin/users`), gửi mật khẩu tạm qua email.
     - `cognito-idp:AdminDeleteUser` — **bắt buộc cho cơ chế rollback/đền bù** khi `AdminAddUserToGroup` hoặc ghi bảng `users` lỗi, tránh để lại user mồ côi trên Cognito.
