@@ -1,0 +1,88 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SqsJobQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:ReceiveMessage",
+        "sqs:SendMessage"
+      ],
+      "Resource": "${SQS_QUEUE_ARN}"
+    },
+    {
+      "Sid": "BedrockModelInvocation",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel"
+      ],
+      "Resource": [
+        "${BEDROCK_HAIKU_MODEL_ARN}",
+        "${BEDROCK_SONNET_MODEL_ARN}",
+        "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
+        "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}",
+        "arn:aws:bedrock:*::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
+        "arn:aws:bedrock:*::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}"
+      ]
+    },
+    {
+      "Sid": "CognitoAdminForConfiguredPool",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminListGroupsForUser",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminUpdateUserAttributes",
+        "cognito-idp:AdminUserGlobalSignOut",
+        "cognito-idp:ListGroups",
+        "cognito-idp:ListUsers"
+      ],
+      "Resource": "${COGNITO_USER_POOL_ARN}"
+    },
+    {
+      "Sid": "ReadConfiguredParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": [
+        "${PARAMETER_ARN_PREFIX}",
+        "${PARAMETER_ARN_PREFIX}/*"
+      ]
+    },
+    {
+      "Sid": "WriteApplicationLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "${CLOUDWATCH_LOG_GROUP_ARN}",
+        "${CLOUDWATCH_LOG_GROUP_ARN}:*"
+      ]
+    },
+    {
+      "Sid": "PublishApplicationMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "cloudwatch:namespace": "${CLOUDWATCH_METRIC_NAMESPACE}"
+        }
+      }
+    }
+  ]
+}

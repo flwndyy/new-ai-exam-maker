@@ -101,6 +101,8 @@ Nếu dựng trực tiếp trên AWS Management Console tại region **`ap-south
 
 Cấu trúc key SSM dưới `/exammaker/<env>/Cognito/*` tương thích trực tiếp với `backend/src/ExamMaker.Infrastructure/ParameterStoreConfiguration.cs` (khi `ParameterStore__Path=/exammaker/<env>`).
 
+> ⚠️ **Lưu ý quan trọng cho DEV chạy local:** Nếu DEV dùng IAM user với policy tối thiểu (`ExamMakerDevCognitoReadOnly` chỉ có quyền trên `/exammaker/dev/Cognito/*`), việc đặt `ParameterStore__Path=/exammaker/dev` sẽ bị AWS từ chối (`AccessDeniedException`). Do đó, **DEV chạy local để trống `ParameterStore__Path` và nạp cấu hình qua biến môi trường local** (xem Cách 2 trong `docs/runbooks/aws-local-cli.md`). `ParameterStore__Path` chỉ dành cho EC2 Instance Profile (`O3`) hoặc tài khoản có quyền đọc toàn bộ prefix dự án.
+
 ### Đọc cấu hình từ Parameter Store (dành cho thành viên có quyền IAM đọc SSM)
 
 ```bash
@@ -115,7 +117,7 @@ MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path \
 
 - **Backend (.NET 10 — `A3`, `A4`):**
   - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): A3 đọc ba giá trị trong section `Cognito`: `Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`.
-  - Chạy local không cần SSM: đặt biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo).
+  - Chạy local không cần SSM: để trống `ParameterStore__Path`, đặt ba biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo). Chi tiết xem `docs/runbooks/aws-local-cli.md` (Mục 4 Cách 2) và `docs/a3-auth.md`.
   - A3 tự tính issuer `https://cognito-idp.<Region>.amazonaws.com/<UserPoolId>` và gán vào `JwtBearerOptions.Authority`. Key SSM `Cognito/Authority` vẫn thuộc bộ tham số bàn giao để đối chiếu, nhưng A3 không đọc trực tiếp key này; đặt `Cognito__Authority` không thay đổi issuer của API. `HostedUiDomain` là domain đăng nhập, không phải issuer. Xem `docs/a3-auth.md`.
   - **Quyền IAM tối thiểu cho EC2 Instance Profile (tác vụ `O3`):** giới hạn `Resource` chỉ tới ARN của User Pool này, bao gồm đúng các action ứng dụng thực sự gọi theo `docs/context.md` §3.3 và `docs/api/openapi.yaml`:
     - `cognito-idp:AdminCreateUser` — tạo user mới (`POST /admin/users`), gửi mật khẩu tạm qua email.
