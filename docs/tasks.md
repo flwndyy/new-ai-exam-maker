@@ -76,9 +76,13 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 **Chặng 1 (20–24/11) — Nền (chặn DEV-B)**
 - [ ] A1. Solution .NET 10 theo mục 7: `Api / Application / Domain / Infrastructure / Worker` + `tests`; Serilog; `ProblemDetails`; health endpoint; cấu hình đọc từ Parameter Store.
-- [ ] A2. EF Core + Npgsql, migration đầu (toàn bộ bảng mục 8), unique/partial index, CHECK, FK `RESTRICT`; **seed** `departments/subjects/topics` (mục 8.4).
-  - Kiểm tra local 19/11/2026: đủ 13 bảng; seed 4 tổ, 4 môn, 82 chương; 30 test pass (13 integration test PostgreSQL trong repo, không skip); migration từ DB mới, nâng cấp DB hiện có, rollback/reapply và SQL idempotent đều pass. Chờ PR vào dev và CI xanh trước khi tick hoàn tất.
+- [x] A2. EF Core + Npgsql, migration đầu (toàn bộ bảng mục 8), unique/partial index, CHECK, FK `RESTRICT`; **seed** `departments/subjects/topics` (mục 8.4).
+  - Kiểm tra local 19/11/2026: đủ 13 bảng; seed 4 tổ, 4 môn, 82 chương; 30 test pass (13 integration test PostgreSQL trong repo, không skip); migration từ DB mới, nâng cấp DB hiện có, rollback/reapply và SQL idempotent đều pass. PR #55 đã merge vào dev, CI commit cuối f6c1e23 xanh; issue #8 đã đóng (Completed).
 - [ ] A3. Auth: validate JWT (issuer/audience/hạn) → tải user từ DB theo `sub` (cache 1–5 phút) → policy theo role + tổ + ownership; `GET /me`. Từ chối `sub` chưa có trong `users`.
+  - Kiểm tra local 19/11/2026: code JWT Cognito, lookup DB + cache hiển thị 1 phút, policy role/tổ/ownership và GET /me; 74 test Release pass, không skip (15 test PostgreSQL). Comment kỹ thuật bằng tiếng Anh; tài liệu giải thích tiếng Việt. Smoke test Cognito thật đã đạt ngày 20/11/2026; xem docs/a3-auth.md. Chờ PR merge vào dev và CI xanh trước khi tick hoàn tất.
+  - Kiểm tra sửa review 20/11/2026: 61 test API Release pass (gồm SelfReview qua HTTP và quy tắc Application), 16 test model pass; 15 test PostgreSQL skip ở lượt local do Docker chưa chạy. Sau đó CI trên commit ea56350 đã xanh: 92/92 test pass, không skip (61 API, 31 Infrastructure, gồm 15 PostgreSQL). Lượt skip chỉ là kết quả local trước đó.
+  - Smoke test Cognito thật 20/11/2026 do DEV-A thực hiện: Authorization Code + PKCE thành công; GET /api/v1/me trả 200 và hồ sơ teacher đúng tổ. Khóa user trong PostgreSQL local: cùng access token nhận 401; mở khóa: cùng token nhận lại 200. Không lưu token, thông tin đăng nhập hoặc định danh tài nguyên thật trong repo.
+
 - [ ] A4. Quản lý user + đồng bộ Cognito (`AdminCreateUser`/`AddUserToGroup`/`Disable`/`GlobalSignOut`, đền bù khi lỗi); `POST /admin/users/reconcile`; **script tạo admin đầu tiên** (mục 3.3). *Cần Cognito của OPS-2.*
 - [ ] A5. Danh mục: `GET /departments|subjects|topics` + CRUD `/admin/*`.
 
@@ -119,7 +123,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 ## OPS-2 — Dữ liệu, danh tính, giám sát, chi phí (@TranGiaBao2005)
 
-- [ ] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
+- [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
 - [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
 - [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
