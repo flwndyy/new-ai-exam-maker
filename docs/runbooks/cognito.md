@@ -178,8 +178,8 @@ echo "Created Cognito admin user. cognito_sub=${COGNITO_SUB}"
 Sau khi RDS (`O10`) và migration (`A2`) đã sẵn sàng, kết nối DB qua SSM Session Manager trên EC2 (hoặc chạy script bootstrap của DEV-A ở task `A4`) và chèn đúng `cognito_sub` lấy ở Bước 1 (`department_id` để `NULL` cho `admin`, `role = 'admin'`, `is_active = true` theo `docs/erd.md`):
 
 ```sql
-INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active, created_at, updated_at)
-VALUES (gen_random_uuid(), '<COGNITO_SUB>', '<admin-email>', '<Ho va ten Admin>', 'admin', NULL, true, now(), now())
+INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active)
+VALUES (gen_random_uuid(), '<COGNITO_SUB>', '<admin-email>', '<Ho va ten Admin>', 'admin', NULL, true)
 ON CONFLICT (cognito_sub) DO NOTHING;
 ```
 
