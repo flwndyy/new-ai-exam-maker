@@ -109,22 +109,58 @@ aws ssm get-parameters-by-path --region ap-southeast-1 \
   --query "Parameters[].{Name:Name,Value:Value}" --output table
 ```
 
-Chạy backend local và để backend tự nạp từ Parameter Store
-(`ParameterStoreConfiguration.cs`):
+### Cách 1: Nạp tự động từ Parameter Store (Khi máy đã cài AWS CLI)
 
 ```powershell
 # PowerShell
 $env:ParameterStore__Path = "/exammaker/dev"
+dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
 ```bash
 # Bash
 export ParameterStore__Path="/exammaker/dev"
+dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
-Không có AWS CLI thì đặt trực tiếp biến môi trường local `Cognito__Region`,
-`Cognito__UserPoolId`, `Cognito__ClientId`, `Cognito__Authority` theo giá trị OPS gửi riêng
-(xem `docs/runbooks/cognito.md`).
+### Cách 2: Chạy local HOÀN TOÀN KHÔNG CẦN AWS CLI (Dành cho DEV không cài CLI)
+
+Thành viên không cài AWS CLI vẫn làm việc và test bình thường. OPS sẽ lấy các giá trị từ Parameter Store và gửi riêng qua tin nhắn (đây là các thông số public/non-secret):
+
+#### A. Dành cho Backend (.NET 10 — Task A3, A4)
+
+Đặt trực tiếp biến môi trường trong terminal trước khi chạy (hoặc thêm vào mục `environmentVariables` trong `launchSettings.json` local):
+
+```powershell
+# PowerShell (Windows)
+$env:Cognito__Region = "ap-southeast-1"
+$env:Cognito__UserPoolId = "<UserPoolId-do-OPS-cung-cap>"
+$env:Cognito__ClientId = "<ClientId-do-OPS-cung-cap>"
+$env:Cognito__Authority = "https://cognito-idp.ap-southeast-1.amazonaws.com/<UserPoolId-do-OPS-cung-cap>"
+dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
+```
+
+```bash
+# Bash (macOS / Linux / Git Bash)
+export Cognito__Region="ap-southeast-1"
+export Cognito__UserPoolId="<UserPoolId-do-OPS-cung-cap>"
+export Cognito__ClientId="<ClientId-do-OPS-cung-cap>"
+export Cognito__Authority="https://cognito-idp.ap-southeast-1.amazonaws.com/<UserPoolId-do-OPS-cung-cap>"
+dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
+```
+
+*(Thư viện JWT Bearer của ASP.NET Core sẽ tự động gọi endpoint OIDC công khai của AWS để tải public key và xác thực chữ ký token, **không cần tài khoản AWS hay credentials**).*
+
+#### B. Dành cho Frontend (Next.js — Task B2)
+
+Tạo file `frontend/.env.local` (file này đã có trong `.gitignore`, không commit lên repo):
+
+```env
+NEXT_PUBLIC_COGNITO_DOMAIN=<HostedUiDomain-do-OPS-cung-cap>
+NEXT_PUBLIC_COGNITO_CLIENT_ID=<ClientId-do-OPS-cung-cap>
+NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000/auth/callback/
+NEXT_PUBLIC_COGNITO_LOGOUT_URI=http://localhost:3000/
+```
 
 ---
 
