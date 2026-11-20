@@ -5,6 +5,14 @@
 
 include /etc/exammaker/origin-secret.conf;
 
+# CloudFront sends the viewer address as "IP:port". The EC2 security group
+# only permits 443 from the AWS-managed CloudFront prefix list, so this header
+# is accepted at the origin and normalized to one client IP before Kestrel.
+map $http_cloudfront_viewer_address $exammaker_client_ip {
+    ~^\[?(?<viewer_ip>[0-9A-Fa-f:.]+)\]?:[0-9]+$ $viewer_ip;
+    default $remote_addr;
+}
+
 upstream exammaker_api {
     server 127.0.0.1:5000;
 }
@@ -40,7 +48,7 @@ server {
         proxy_pass http://exammaker_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $exammaker_client_ip;
         proxy_set_header X-Forwarded-Proto $scheme;
         # Do not forward the shared origin secret to Kestrel or application logs.
         proxy_set_header X-Origin-Verify "";
