@@ -240,6 +240,7 @@ paths:
         Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
         - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
         - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
+          Nếu còn đề Draft/Rejected tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
         - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
         Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
         Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
@@ -286,6 +287,7 @@ paths:
         - $ref: '#/components/parameters/Id'
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -323,6 +325,7 @@ paths:
             schema: { $ref: '#/components/schemas/QuestionApproveRequest' }
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }

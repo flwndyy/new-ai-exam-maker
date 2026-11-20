@@ -45,11 +45,7 @@ public static class QuestionRules
         RequireOwner(actor, question);
         RequireEditable(question);
         input = Validate(input);
-        var changed = question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade
-            || question.Type != input.Type || question.Difficulty != input.Difficulty || question.Stem.Trim() != input.Stem
-            || NormalizeExplanation(question.Explanation) != input.Explanation
-            || !JsonNode.DeepEquals(JsonNode.Parse(question.Payload), JsonNode.Parse(input.Payload.GetRawText()));
-        if (!changed) return false;
+        if (!HasContentChanges(question, input)) return false;
         if (question.Status == "Approved")
         {
             if (question.Revision == int.MaxValue) throw new QuestionException(409, "Conflict", "Không thể tăng phiên bản câu hỏi.");
@@ -75,6 +71,13 @@ public static class QuestionRules
         question.UpdatedAt = now;
         return true;
     }
+
+    /// <summary>Compare validated, normalized input before acquiring reference guards or modifying the tracked question.</summary>
+    public static bool HasContentChanges(Question question, QuestionInput input) =>
+        question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade
+        || question.Type != input.Type || question.Difficulty != input.Difficulty || question.Stem.Trim() != input.Stem
+        || NormalizeExplanation(question.Explanation) != input.Explanation
+        || !JsonNode.DeepEquals(JsonNode.Parse(question.Payload), JsonNode.Parse(input.Payload.GetRawText()));
 
     /// <summary>Authorize and apply one transition, returning false for an already-completed author review so retries leave no audit or timestamp changes.</summary>
     public static bool Transition(AuthenticatedUser actor, Question question, QuestionAction action, string? note, DateTime now)

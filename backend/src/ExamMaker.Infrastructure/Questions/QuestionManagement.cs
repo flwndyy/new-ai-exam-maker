@@ -86,8 +86,9 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             QuestionRules.RequireEditable(question);
             input = QuestionRules.Validate(input);
             if (await CatalogAsync(input, cancellationToken) != question.DepartmentId) throw QuestionRules.Invalid("subjectId");
-            if (question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade)
-                await EnsureClassificationChangeAllowedAsync(id, cancellationToken);
+            var classificationChanged = question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade;
+            if (classificationChanged || question.Status == "Approved" && QuestionRules.HasContentChanges(question, input))
+                await EnsureSourceChangeAllowedAsync(id, classificationChanged, cancellationToken);
             var before = question.Status;
             var revision = question.Revision;
             if (QuestionRules.Edit(actor, question, input, DateTime.UtcNow))
@@ -142,7 +143,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         }, true, cancellationToken);
     }
 
-    /// <summary>Re-read authorization inside the management/catalog locks and commit question changes and audits atomically.</summary>
+    /// <summary>Protect live actor permissions and catalog data while committing question changes and audits atomically.</summary>
     private async Task<QuestionView?> MutateAsync(Guid actorId, Func<AuthenticatedUser, Task<Question?>> operation,
         bool deleting, CancellationToken cancellationToken)
     {
@@ -150,8 +151,8 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await database.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '2s'", cancellationToken);
-            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683401)", cancellationToken);
-            var actor = await ActorAsync(actorId, cancellationToken);
+            // Lock only this actor; unrelated A4 provisioning must not stall every question writer.
+            var actor = await ActorAsync(actorId, cancellationToken, lockForMutation: true);
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683402)", cancellationToken);
             var question = await operation(actor);
             await database.SaveChangesAsync(cancellationToken);
@@ -181,8 +182,8 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         return question;
     }
 
-    /// <summary>Keep editable exam membership consistent and serialize classification changes with version status transitions.</summary>
-    private async Task EnsureClassificationChangeAllowedAsync(Guid id, CancellationToken cancellationToken)
+    /// <summary>Preserve approved sources in editable exams and classification in submitted exams until references are removed.</summary>
+    private async Task EnsureSourceChangeAllowedAsync(Guid id, bool classificationChanged, CancellationToken cancellationToken)
     {
         // Lock all referencing versions, including frozen ones that could be withdrawn into an editable state.
         // A competing submit locks the version before its source questions; a deadlock is safely retried as Conflict.
@@ -192,8 +193,8 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 WHERE i.exam_version_id = v.id AND i.source_question_id = {id})
             ORDER BY v.id FOR SHARE OF v
             """).ToListAsync(cancellationToken);
-        if (states.Any(x => x is "Draft" or "Rejected" or "Submitted"))
-            throw new QuestionException(409, "QuestionReferenced", "Không thể đổi môn, chương hoặc khối của câu trong đề đang soạn.");
+        if (states.Any(x => x is "Draft" or "Rejected" || classificationChanged && x == "Submitted"))
+            throw new QuestionException(409, "QuestionReferenced", "Không thể sửa câu đang được đề tham chiếu; hãy gỡ liên kết trước.");
     }
 
     /// <summary>Validate topic/subject/grade together and derive the immutable department from trusted catalog data.</summary>
@@ -202,9 +203,13 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             .Select(x => (Guid?)x.Subject!.DepartmentId).SingleOrDefaultAsync(cancellationToken) ?? throw QuestionRules.Invalid("topicId");
 
     /// <summary>Read live role, activation and department instead of trusting cached token claims.</summary>
-    private async Task<AuthenticatedUser> ActorAsync(Guid id, CancellationToken cancellationToken)
+    private async Task<AuthenticatedUser> ActorAsync(Guid id, CancellationToken cancellationToken, bool lockForMutation = false)
     {
-        var user = await database.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        // SHARE conflicts with role/activation updates, unlike KEY SHARE, and is held until the mutation commits.
+        var users = lockForMutation
+            ? database.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {id} FOR SHARE")
+            : database.Users;
+        var user = await users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (user is null || !user.IsActive)
             throw new QuestionException(401, "Unauthorized", "Chưa xác thực");
         if (user.Role is not (Roles.Teacher or Roles.Head or Roles.Admin)) throw QuestionRules.Forbidden();

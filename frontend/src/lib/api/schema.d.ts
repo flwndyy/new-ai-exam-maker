@@ -131,6 +131,7 @@ export interface paths {
          * @description Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
          *     - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
          *     - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
+         *       Nếu còn đề Draft/Rejected tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
          *     - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
          *     Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
          *     Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
@@ -2036,6 +2037,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["QuestionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -2076,6 +2078,7 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["QuestionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

@@ -318,21 +318,20 @@ public sealed class QuestionManagementTests : IAsyncLifetime
 
     [PostgresFact]
     // Observe a real lock waiter before committing a deactivation, so an authorization check moved before the lock fails this test.
-    public async Task Activation_is_rechecked_after_waiting_for_the_user_management_lock()
+    public async Task Activation_is_rechecked_after_waiting_for_the_actor_row_lock()
     {
         await SeedAsync(); var q = await CreateAsync();
         await using var holder = fixture.CreateContext();
         await using var transaction = await holder.Database.BeginTransactionAsync();
-        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)");
         await holder.Users.Where(x => x.Id == owner).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
         await using var attempt = fixture.CreateContext();
         await attempt.Database.OpenConnectionAsync();
         var pid = ((Npgsql.NpgsqlConnection)attempt.Database.GetDbConnection()).ProcessID;
+        var holderPid = ((Npgsql.NpgsqlConnection)holder.Database.GetDbConnection()).ProcessID;
         var pending = Service(attempt).UpdateAsync(owner, q.Id, Input("Should not be saved"), default);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1.8));
         while (!await holder.Database.SqlQuery<bool>($"""
-            SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = {pid}
-                AND classid = 0 AND objid = 48683401 AND NOT granted) AS "Value"
+            SELECT {holderPid} = ANY(pg_blocking_pids({pid})) AS "Value"
             """).SingleAsync(timeout.Token)) await Task.Delay(10, timeout.Token);
         await transaction.CommitAsync();
         var error = await Assert.ThrowsAsync<QuestionException>(() => pending);
@@ -343,13 +342,14 @@ public sealed class QuestionManagementTests : IAsyncLifetime
 
 
     [PostgresFact]
-    // Shared management locks allow independent question writes while keeping user-admin mutations excluded.
-    public async Task Independent_question_writes_do_not_wait_for_each_others_shared_management_lock()
+    // An unrelated A4 transaction may retain its global lock and another user row without stalling question writes.
+    public async Task Question_writes_do_not_wait_for_unrelated_user_management()
     {
         await SeedAsync();
         await using var holder = fixture.CreateContext();
         await using var transaction = await holder.Database.BeginTransactionAsync();
-        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683401)");
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)");
+        await holder.Users.Where(x => x.Id == otherHead).ExecuteUpdateAsync(x => x.SetProperty(u => u.FullName, "Uncommitted profile"));
         var question = await CreateAsync();
         Assert.Equal("Draft", question.Status);
         Assert.NotEqual(Guid.Empty, question.Id);
@@ -569,6 +569,64 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         await using var verify = fixture.CreateContext();
         Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id && x.Action == "MarkReviewedQuestion"));
     }
+    [PostgresFact]
+    // Reopening approved content must not silently remove a usable question from somebody else's editable exam.
+    public async Task Approved_content_edits_preserve_other_authors_editable_exam_sources()
+    {
+        await SeedAsync();
+        foreach (var state in new[] { "Draft", "Rejected" })
+        {
+            var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit);
+            q = await ActAsync(head, q.Id, QuestionAction.Approve);
+            var version = new ExamVersion
+            {
+                Id = Guid.NewGuid(),
+                Exam = new Exam
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Another author's exam",
+                    SubjectId = Subject,
+                    DepartmentId = Department,
+                    Grade = 10,
+                    CreatedBy = otherHead
+                },
+                VersionNo = 1,
+                DurationMinutes = 45,
+                TotalPoints = 10,
+                Status = state,
+                ReviewNote = state == "Rejected" ? "Reason" : null,
+                ReviewedBy = state == "Rejected" ? head : null,
+                ReviewedAt = state == "Rejected" ? DateTime.UtcNow : null
+            };
+            await using (var setup = fixture.CreateContext())
+            {
+                setup.ExamVersions.Add(version); await setup.SaveChangesAsync();
+                setup.ExamVersionQuestions.Add(new ExamVersionQuestion
+                { ExamVersionId = version.Id, SourceQuestionId = q.Id, SourceRevision = 1, SortOrder = 1, Points = 10 });
+                await setup.SaveChangesAsync();
+            }
+            await using (var noop = fixture.CreateContext())
+            {
+                var unchanged = await Service(noop).UpdateAsync(owner, q.Id, Input(" Synthetic question "), default);
+                Assert.Equal("Approved", unchanged.Status); Assert.Equal(q.UpdatedAt, unchanged.UpdatedAt);
+            }
+            foreach (var input in new[] { Input("Changed stem"), Input() with { Difficulty = "Application" },
+                Input() with { Explanation = "Changed explanation" },
+                Input() with { Payload = JsonSerializer.Deserialize<JsonElement>(Payload.Replace("One", "Changed option")) } })
+            {
+                await using var attempt = fixture.CreateContext();
+                var error = await Assert.ThrowsAsync<QuestionException>(() => Service(attempt).UpdateAsync(owner, q.Id, input, default));
+                Assert.Equal(409, error.StatusCode); Assert.Equal("QuestionReferenced", error.Code);
+            }
+            await using var verify = fixture.CreateContext();
+            var visible = await Service(verify).GetAsync(otherHead, q.Id, default);
+            Assert.Equal("Approved", visible.Status); Assert.Equal(1, visible.Revision); Assert.Equal(q.Stem, visible.Stem);
+            Assert.Equal(3, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id));
+            await verify.ExamVersionQuestions.Where(x => x.ExamVersionId == version.Id).ExecuteDeleteAsync();
+            Assert.Equal("Draft", (await Service(verify).UpdateAsync(owner, q.Id, Input("Now editable"), default)).Status);
+        }
+    }
+
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {
         public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
