@@ -107,6 +107,20 @@ Test dùng database tạm; không sửa DB phát triển. CI đã có PostgreSQL
 
 Smoke test với Cognito thật cần User Pool/App Client, access token hợp lệ và user nội bộ đã được bootstrap/A4 tạo. Đối chiếu `/me`, rồi khóa user trong DB và gọi lại cùng token để xác nhận 401. Không coi test ký token cục bộ là smoke test AWS.
 
+## Kết quả smoke test Cognito thật — 20/11/2026
+
+DEV-A đã thực hiện trên backend và PostgreSQL local, dùng Cognito thật qua Authorization Code + PKCE:
+
+| Kiểm tra | Kết quả |
+|---|---|
+| GET /health không có token | 200 Healthy |
+| GET /api/v1/me không có token | 401 Unauthorized, có Bearer challenge |
+| Đăng nhập Cognito, đổi code bằng PKCE và gọi /me bằng access token | 200, đúng hồ sơ teacher và tổ trong DB |
+| Đặt is_active=false trong DB local, gọi /me bằng cùng token | 401 Unauthorized |
+| Khôi phục is_active=true, gọi /me bằng cùng token | 200, isActive=true |
+
+Tài khoản test đã được mở khóa lại sau thử nghiệm. Đây là kiểm tra Cognito thật với API local; không xác nhận E2E triển khai qua CloudFront hoặc hoàn tất A4. Không lưu token, mật khẩu, callback chứa authorization code hay định danh AWS thật trong tài liệu.
+
 ## Tài liệu chính thức
 
 - [AWS — Verify Cognito JWT](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html)
