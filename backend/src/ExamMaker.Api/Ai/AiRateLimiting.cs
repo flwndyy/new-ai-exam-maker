@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -49,17 +48,19 @@ public static class AiRateLimiting
                 http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 http.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
 
-                var problem = new ProblemDetails
-                {
-                    Type = "https://exammaker.example/problems/rate-limited",
-                    Title = "Bạn thao tác quá nhanh, vui lòng thử lại sau.",
-                    Status = StatusCodes.Status429TooManyRequests,
-                    Instance = http.Request.Path,
-                };
-                problem.Extensions["code"] = "RateLimited";
-
-                await http.Response.WriteAsJsonAsync(
-                    problem, options: null, contentType: "application/problem+json", cancellationToken: ct);
+                // Results.Problem goes through IProblemDetailsService (shared customization) when it is
+                // registered; traceId is set explicitly so it is present even on the fallback writer.
+                await Results.Problem(
+                    statusCode: StatusCodes.Status429TooManyRequests,
+                    title: "Bạn thao tác quá nhanh, vui lòng thử lại sau.",
+                    type: "https://exammaker.example/problems/rate-limited",
+                    instance: http.Request.Path,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["code"] = "RateLimited",
+                        ["traceId"] = http.TraceIdentifier,
+                    })
+                    .ExecuteAsync(http);
             };
         });
 

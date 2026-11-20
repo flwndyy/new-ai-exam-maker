@@ -63,6 +63,36 @@ public sealed class AiRateLimitingTests
         using var body = JsonDocument.Parse(await limited.Content.ReadAsStringAsync());
         Assert.Equal("RateLimited", body.RootElement.GetProperty("code").GetString());
         Assert.Equal(429, body.RootElement.GetProperty("status").GetInt32());
+        Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("traceId").GetString()));
+    }
+
+    [Fact]
+    public async Task RejectedResponse_UsesSharedProblemDetailsPipeline_WithSingleTraceId()
+    {
+        var customized = false;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
+        {
+            customized = true;
+            context.ProblemDetails.Extensions.TryAdd("traceId", context.HttpContext.TraceIdentifier);
+        });
+        builder.Services.AddAiRateLimiting(new AiRateLimitOptions { PermitLimit = 1, Window = TimeSpan.FromMinutes(1) });
+
+        await using var app = builder.Build();
+        app.UseRateLimiter();
+        app.MapPost("/ai/generate", () => Results.Accepted()).RequireRateLimiting(AiRateLimiting.PolicyName);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+
+        await client.SendAsync(Post("alice"));
+        using var limited = await client.SendAsync(Post("alice"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.True(customized);
+        using var body = JsonDocument.Parse(await limited.Content.ReadAsStringAsync());
+        Assert.Equal("RateLimited", body.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("traceId").GetString()));
     }
 
     [Fact]
