@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.5** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.6** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -106,6 +106,16 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 - Job đối soát (admin chạy tay hoặc định kỳ): so group Cognito với `users.role`, báo lệch.
 - **Admin đầu tiên (bootstrap)**: vì self sign-up tắt, admin đầu tiên được tạo bằng script/lệnh chạy một lần bởi người triển khai (tạo user Cognito + group `admin` + dòng `users`), không qua API công khai. Ghi quy trình vào `docs/`.
 - **Đăng nhập lần đầu / mật khẩu**: admin tạo user với mật khẩu tạm → user phải đổi mật khẩu ở lần đăng nhập đầu (dùng giao diện đăng nhập của Cognito, Managed Login); có luồng quên mật khẩu. Đổi email phải cập nhật cả Cognito và `users.email`.
+
+#### Chi tiết triển khai A3
+
+- API chỉ nhận Cognito **access token**: kiểm chữ ký RS256/JWKS, issuer, exp/nbf, `token_use=access`, `client_id` đúng App Client và `sub` không rỗng. Access token Cognito dùng `client_id` để kiểm client; không nhầm với `aud` của ID token. ID token không dùng gọi API.
+- Sau khi xác thực token, tải `users` bằng unique `cognito_sub`; user không tồn tại, bị khóa hoặc hồ sơ role/tổ không hợp lệ trả 401. Không tự tạo user. Principal ứng dụng được tạo lại từ DB, loại bỏ role/group tùy ý trong token.
+- Cache 1 phút chỉ dành cho email/họ tên/tên tổ hiển thị. `id`, role, department_id, is_active luôn đọc DB trong mỗi request để đổi quyền/khóa tài khoản có hiệu lực ở request kế tiếp. Không cache kết quả user không tồn tại. Principal/current user chỉ sống trong request.
+- Policy dùng chung: Admin (quản trị), ContentAuthor (teacher/head), SameDepartment (cùng tổ hoặc admin), Owner (teacher/head sở hữu), Reviewer (head cùng tổ hoặc admin, luôn cấm tự duyệt). Resource policy yêu cầu đối tượng có creator/department từ DB; không nhận dữ liệu quyền từ body client. Các use case sau A3 phải kiểm tra trạng thái/quyền cụ thể theo ma trận 3.2.
+- Quy tắc quyền thuần nằm ở Application để use case và API dùng chung. Tự duyệt trả 403 `SelfReview`; các lỗi quyền khác trả `Forbidden`. Controller kiểm resource policy phải chuyển kết quả qua `ToForbiddenProblem(HttpContext)` để giữ mã lỗi.
+- Mặc định endpoint yêu cầu user nội bộ hợp lệ; `/health` công khai. `GET /api/v1/me` trả đúng schema Me trong OpenAPI. 401/403 trả ProblemDetails với code/traceId; 401 có WWW-Authenticate: Bearer.
+- Cấu hình Cognito lấy từ môi trường/Parameter Store. Nếu chưa cấu hình thì health vẫn chạy, mọi Bearer token bị từ chối; cấu hình một phần hoặc sai định dạng làm startup thất bại. Triển khai thật phải cung cấp đủ Region/UserPoolId/ClientId. Test dùng khóa RSA tạm và discovery giả trong test host, không có chế độ giả xác thực ở production.
 
 ---
 
@@ -535,6 +545,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.6 — 20/11/2026**
+- Hoàn thiện xác thực A3: access token Cognito, hồ sơ/quyền DB theo request và policy mặc định. Quy tắc quyền dùng chung ở Application; tự duyệt trả 403 `SelfReview`, các lỗi quyền khác trả `Forbidden`.
+- Thống nhất comment kỹ thuật tiếng Anh; tài liệu giải thích tiếng Việt. Bổ sung hướng dẫn B2 xử lý 401 và cấu hình Authority. Chưa xác nhận smoke test Cognito thật.
 
 **0.5 — 19/11/2026**
 - Sửa theo review PR #55: audit hệ thống, composite FK catalog, CHECK theo trạng thái, trigger đóng băng snapshot và integration test PostgreSQL chạy trong CI.
