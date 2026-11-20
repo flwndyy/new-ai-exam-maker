@@ -16,7 +16,10 @@ public sealed class AiJobQueriesTests
 
     private static readonly AuthenticatedUser Admin = Teacher with
     {
-        Id = Guid.NewGuid(), Role = Roles.Admin, DepartmentId = null, DepartmentName = null,
+        Id = Guid.NewGuid(),
+        Role = Roles.Admin,
+        DepartmentId = null,
+        DepartmentName = null,
     };
 
     private readonly FakeJobReader _reader = new();
