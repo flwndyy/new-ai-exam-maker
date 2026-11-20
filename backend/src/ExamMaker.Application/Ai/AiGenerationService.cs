@@ -5,6 +5,7 @@ namespace ExamMaker.Application.Ai;
 
 public sealed class AiGenerationService(
     AiQuotaOptions options,
+    IAiCatalogReader catalog,
     IAiUsageReader usage,
     IAiJobStore jobs,
     IAiJobQueue queue,
@@ -32,6 +33,14 @@ public sealed class AiGenerationService(
     public async Task<AiSubmitResult> SubmitAsync(Guid userId, AiGenerateRequest request, CancellationToken ct)
     {
         var errors = AiGenerateRequestValidator.Validate(request, options);
+        if (errors.Count > 0)
+        {
+            return new AiSubmitResult.ValidationFailed(errors);
+        }
+
+        // Questions must match (topic, subject, grade) by composite FK, so a mismatched request would
+        // only produce a failed job. Reject it before any quota is reserved.
+        errors = await ValidateCatalogAsync(request, ct);
         if (errors.Count > 0)
         {
             return new AiSubmitResult.ValidationFailed(errors);
@@ -71,6 +80,31 @@ public sealed class AiGenerationService(
         }
 
         return new AiSubmitResult.Accepted(jobId.Value);
+    }
+
+    private async Task<Dictionary<string, string[]>> ValidateCatalogAsync(AiGenerateRequest request, CancellationToken ct)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (!await catalog.SubjectExistsAsync(request.SubjectId, ct))
+        {
+            errors["subjectId"] = [AiMessages.SubjectNotFound];
+        }
+
+        var topic = await catalog.FindTopicAsync(request.TopicId, ct);
+        if (topic is null)
+        {
+            errors["topicId"] = [AiMessages.TopicNotFound];
+        }
+        else if (topic.SubjectId != request.SubjectId)
+        {
+            errors["topicId"] = [AiMessages.TopicNotInSubject];
+        }
+        else if (topic.Grade != request.Grade)
+        {
+            errors["grade"] = [AiMessages.GradeNotMatchingTopic];
+        }
+
+        return errors;
     }
 
     private static DateTimeOffset NextUtcMidnight(DateOnly date) =>

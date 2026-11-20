@@ -17,6 +17,14 @@ internal static class AiMessages
 
     public static string NoteTooLong(int max) => $"Ghi chú tối đa {max} ký tự.";
 
+    public const string SubjectNotFound = "Môn học không tồn tại.";
+
+    public const string TopicNotFound = "Chương không tồn tại.";
+
+    public const string TopicNotInSubject = "Chương không thuộc môn học đã chọn.";
+
+    public const string GradeNotMatchingTopic = "Khối không khớp với khối của chương.";
+
     public const string PageInvalid = "Trang phải lớn hơn hoặc bằng 1.";
 
     public static string PageSizeInvalid(int max) => $"Số phần tử mỗi trang phải từ 1 đến {max}.";

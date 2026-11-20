@@ -22,6 +22,8 @@ public sealed class AiEndpointsTests : IDisposable
         // Real JWT validation and authorization from A3; only the AI persistence/queue ports are faked.
         _host = _auth.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
+            services.RemoveAll<IAiCatalogReader>();
+            services.AddSingleton<IAiCatalogReader>(_ai);
             services.RemoveAll<IAiUsageReader>();
             services.RemoveAll<IAiJobStore>();
             services.RemoveAll<IAiJobReader>();
@@ -61,8 +63,8 @@ public sealed class AiEndpointsTests : IDisposable
 
     private static object Body(int count = 3, string? note = null) => new
     {
-        subjectId = Guid.NewGuid(),
-        topicId = Guid.NewGuid(),
+        subjectId = InMemoryAi.SubjectId,
+        topicId = InMemoryAi.TopicId,
         grade = 10,
         type = "MultipleChoice",
         difficulty = "Recognition",
@@ -148,8 +150,8 @@ public sealed class AiEndpointsTests : IDisposable
 
         using var response = await client.PostAsJsonAsync("/api/v1/ai/generate", new
         {
-            subjectId = Guid.NewGuid(),
-            topicId = Guid.NewGuid(),
+            subjectId = InMemoryAi.SubjectId,
+            topicId = InMemoryAi.TopicId,
             grade = 10,
             difficulty = "Recognition",
             count = 3,
@@ -268,8 +270,39 @@ public sealed class AiEndpointsTests : IDisposable
         Assert.Equal(AuthTestFactory.Teacher.Id, _ai.LastUsageUser);
     }
 
-    private sealed class InMemoryAi : IAiUsageReader, IAiJobStore, IAiJobReader, IAiJobQueue
+    [Fact]
+    public async Task Generate_with_a_topic_outside_the_catalog_returns_validation_problem()
     {
+        using var client = Client();
+
+        using var response = await client.PostAsJsonAsync("/api/v1/ai/generate", new
+        {
+            subjectId = InMemoryAi.SubjectId,
+            topicId = Guid.NewGuid(),
+            grade = 10,
+            type = "MultipleChoice",
+            difficulty = "Recognition",
+            count = 3,
+        });
+
+        var problem = await ProblemAsync(response, HttpStatusCode.BadRequest, "ValidationFailed");
+        Assert.True(problem.GetProperty("errors").TryGetProperty("topicId", out _));
+        Assert.Empty(_ai.Jobs);
+    }
+
+    private sealed class InMemoryAi : IAiCatalogReader, IAiUsageReader, IAiJobStore, IAiJobReader, IAiJobQueue
+    {
+        // The only catalog entry: a grade-10 topic of SubjectId.
+        public static readonly Guid SubjectId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+
+        public static readonly Guid TopicId = Guid.Parse("77777777-7777-7777-7777-777777777777");
+
+        public Task<bool> SubjectExistsAsync(Guid subjectId, CancellationToken ct) =>
+            Task.FromResult(subjectId == SubjectId);
+
+        public Task<AiTopicInfo?> FindTopicAsync(Guid topicId, CancellationToken ct) =>
+            Task.FromResult(topicId == TopicId ? new AiTopicInfo(SubjectId, 10) : null);
+
         public Dictionary<Guid, AiJobView> Jobs { get; } = [];
 
         public List<Guid> Enqueued { get; } = [];

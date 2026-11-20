@@ -29,14 +29,23 @@ public sealed class EfAiJobReader(ExamMakerDbContext db) : IAiJobReader
         }
 
         var total = await query.CountAsync(ct);
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+
+        // Compute in 64 bits: a large page would overflow int into a negative OFFSET, which
+        // PostgreSQL rejects. Such an offset is past any possible row, so the page is simply empty.
+        var offset = (long)(page - 1) * pageSize;
+        if (offset >= total)
+        {
+            return new AiJobPage([], page, pageSize, total, totalPages);
+        }
+
         var rows = await Project(query
                 .OrderByDescending(j => j.CreatedAt)
                 .ThenByDescending(j => j.Id)
-                .Skip((page - 1) * pageSize)
+                .Skip((int)offset)
                 .Take(pageSize))
             .ToListAsync(ct);
 
-        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
         return new AiJobPage(await ToViewsAsync(rows, ct), page, pageSize, total, totalPages);
     }
 

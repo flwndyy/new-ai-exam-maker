@@ -8,22 +8,33 @@ public sealed class AiGenerationServiceTests
     private static readonly Guid UserId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly DateTimeOffset Now = new(2026, 11, 25, 10, 30, 0, TimeSpan.Zero);
 
+    // A catalog where TopicId is a grade-10 chapter of SubjectId.
+    private static readonly Guid SubjectId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid TopicId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    private static readonly Guid OtherSubjectId = Guid.Parse("44444444-4444-4444-4444-444444444444");
+    private static readonly Guid OtherSubjectTopicId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+
     private readonly FakeUsageReader _usage = new();
     private readonly FakeJobQueue _queue = new();
     private readonly FakeJobStore _jobs;
+    private readonly FakeCatalog _catalog = new();
     private readonly AiQuotaOptions _options = new();
     private readonly FakeTimeProvider _time = new(Now);
 
     public AiGenerationServiceTests()
     {
         _jobs = new FakeJobStore(_queue);
+        _catalog.Subjects.Add(SubjectId);
+        _catalog.Subjects.Add(OtherSubjectId);
+        _catalog.Topics[TopicId] = new AiTopicInfo(SubjectId, Grade: 10);
+        _catalog.Topics[OtherSubjectTopicId] = new AiTopicInfo(OtherSubjectId, Grade: 10);
     }
 
-    private AiGenerationService CreateService() => new(_options, _usage, _jobs, _queue, _time);
+    private AiGenerationService CreateService() => new(_options, _catalog, _usage, _jobs, _queue, _time);
 
     private static AiGenerateRequest ValidRequest(int count = 5, string? note = null) => new(
-        SubjectId: Guid.NewGuid(),
-        TopicId: Guid.NewGuid(),
+        SubjectId: SubjectId,
+        TopicId: TopicId,
         Grade: 10,
         Type: "MultipleChoice",
         Difficulty: "Understanding",
@@ -214,6 +225,97 @@ public sealed class AiGenerationServiceTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Submit_UnknownSubject_FailsValidationWithoutTouchingQuota()
+    {
+        var request = ValidRequest() with { SubjectId = Guid.NewGuid() };
+
+        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Contains("subjectId", failed.Errors.Keys);
+        Assert.Null(_usage.LastDate);
+        Assert.Equal(0, _jobs.CreateCalls);
+    }
+
+    [Fact]
+    public async Task Submit_UnknownTopic_FailsValidation()
+    {
+        var request = ValidRequest() with { TopicId = Guid.NewGuid() };
+
+        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Contains("topicId", failed.Errors.Keys);
+        Assert.Equal(0, _jobs.CreateCalls);
+    }
+
+    [Fact]
+    public async Task Submit_TopicOfAnotherSubject_FailsValidation()
+    {
+        var request = ValidRequest() with { TopicId = OtherSubjectTopicId };
+
+        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Contains("topicId", failed.Errors.Keys);
+        Assert.Equal(0, _jobs.CreateCalls);
+    }
+
+    [Fact]
+    public async Task Submit_GradeDifferentFromTheTopicGrade_FailsValidation()
+    {
+        var request = ValidRequest() with { Grade = 11 };
+
+        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Contains("grade", failed.Errors.Keys);
+        Assert.Equal(0, _jobs.CreateCalls);
+    }
+
+    [Fact]
+    public async Task Submit_InvalidCatalogIsReportedBeforeQuota()
+    {
+        _usage.User = new AiUsage(JobsUsed: 0, TokensUsed: 100_000);
+        var request = ValidRequest() with { TopicId = Guid.NewGuid() };
+
+        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+    }
+
+    [Fact]
+    public async Task Submit_MalformedRequest_DoesNotQueryTheCatalog()
+    {
+        var request = ValidRequest(count: 0);
+
+        await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+
+        Assert.Equal(0, _catalog.Lookups);
+    }
+
+    private sealed class FakeCatalog : IAiCatalogReader
+    {
+        public HashSet<Guid> Subjects { get; } = [];
+
+        public Dictionary<Guid, AiTopicInfo> Topics { get; } = [];
+
+        public int Lookups { get; private set; }
+
+        public Task<bool> SubjectExistsAsync(Guid subjectId, CancellationToken ct)
+        {
+            Lookups++;
+            return Task.FromResult(Subjects.Contains(subjectId));
+        }
+
+        public Task<AiTopicInfo?> FindTopicAsync(Guid topicId, CancellationToken ct)
+        {
+            Lookups++;
+            return Task.FromResult(Topics.GetValueOrDefault(topicId));
+        }
     }
 
     private sealed class FakeUsageReader : IAiUsageReader

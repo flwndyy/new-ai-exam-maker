@@ -154,6 +154,21 @@ public sealed class EfAiJobReaderTests(PostgresFixture fixture) : IClassFixture<
     }
 
     [PostgresFact]
+    public async Task Page_whose_offset_overflows_int_is_empty_instead_of_failing()
+    {
+        var userId = await AiTestData.CreateUserAsync(fixture);
+        await CreateJobAsync(userId);
+
+        // (int.MaxValue - 1) * 20 overflows a 32-bit offset; PostgreSQL rejects a negative OFFSET.
+        var page = await ListAsync(userId, null, page: int.MaxValue, pageSize: 20);
+
+        Assert.Empty(page.Items);
+        Assert.Equal(int.MaxValue, page.Page);
+        Assert.Equal(1, page.TotalItems);
+        Assert.Equal(1, page.TotalPages);
+    }
+
+    [PostgresFact]
     public async Task Page_beyond_the_last_is_empty_but_keeps_totals()
     {
         var userId = await AiTestData.CreateUserAsync(fixture);

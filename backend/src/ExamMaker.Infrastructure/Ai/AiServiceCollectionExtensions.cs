@@ -47,6 +47,7 @@ public static class AiServiceCollectionExtensions
             return new SqsAiJobQueue(provider.GetRequiredService<IAmazonSQS>(), queueUrl);
         });
 
+        services.AddScoped<IAiCatalogReader, EfAiCatalogReader>();
         services.AddScoped<IAiUsageReader, EfAiUsageReader>();
         services.AddScoped<IAiJobStore, EfAiJobStore>();
         services.AddScoped<IAiJobReader, EfAiJobReader>();

@@ -89,6 +89,7 @@ public sealed class AiRegistrationTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<AiGenerationService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<AiJobQueries>());
         Assert.IsType<EfAiJobReader>(scope.ServiceProvider.GetRequiredService<IAiJobReader>());
+        Assert.IsType<EfAiCatalogReader>(scope.ServiceProvider.GetRequiredService<IAiCatalogReader>());
     }
 
     [Fact]
