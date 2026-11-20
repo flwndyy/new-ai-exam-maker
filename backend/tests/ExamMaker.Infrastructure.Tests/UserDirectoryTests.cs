@@ -8,7 +8,7 @@ namespace ExamMaker.Infrastructure.Tests;
 public sealed class UserDirectoryTests(PostgresFixture fixture) : IClassFixture<PostgresFixture>
 {
     [PostgresFact]
-    // Dùng PostgreSQL thật để kiểm cache hiển thị không giữ quyền hoặc trạng thái tài khoản cũ.
+    // Use PostgreSQL to verify that display caching does not retain stale permissions or account status.
     public async Task Cached_display_never_hides_role_department_or_active_changes()
     {
         await using var database = fixture.CreateContext();
@@ -47,7 +47,7 @@ public sealed class UserDirectoryTests(PostgresFixture fixture) : IClassFixture<
     }
 
     [PostgresFact]
-    // User mới được tạo phải đọc được ngay; admin được phép không thuộc tổ.
+    // Read newly created users immediately and allow administrators without a department.
     public async Task Missing_users_are_not_cached_and_admin_can_have_no_department()
     {
         await using var database = fixture.CreateContext();

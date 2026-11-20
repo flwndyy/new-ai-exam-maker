@@ -10,7 +10,7 @@ public sealed class CognitoBearerEvents(
 {
     public const string UserIdClaim = "exammaker:user_id";
 
-    /// <summary>Từ chối token khi chưa cấu hình Cognito; không gọi discovery tới địa chỉ giả.</summary>
+    /// <summary>Reject tokens when Cognito is unconfigured without requesting discovery.</summary>
     public override Task MessageReceived(MessageReceivedContext context)
     {
         if (!options.Value.IsConfigured)
@@ -20,7 +20,7 @@ public sealed class CognitoBearerEvents(
         return Task.CompletedTask;
     }
 
-    /// <summary>Sau kiểm chữ ký, kiểm loại token và tải quyền từ DB; không tự tạo tài khoản.</summary>
+    /// <summary>After signature validation, verify the token type and load an existing local account.</summary>
     public override async Task TokenValidated(TokenValidatedContext context)
     {
         var subject = SingleClaim(context.Principal!, "sub");
@@ -31,18 +31,18 @@ public sealed class CognitoBearerEvents(
             return;
         }
 
-        // Chỉ tạo DbContext khi thực sự có token hợp lệ, để /health không cần DB.
+        // Resolve the database only for valid tokens so health checks do not require it.
         var directory = services.GetRequiredService<IUserDirectory>();
         var user = await directory.FindBySubjectAsync(subject, context.HttpContext.RequestAborted);
         if (user is null || !user.IsActive || user.Id == Guid.Empty
-            || user.CognitoSub != subject || user.Role is not ("teacher" or "head" or "admin")
-            || (user.Role != "admin" && user.DepartmentId is null))
+            || user.CognitoSub != subject || user.Role is not (Roles.Teacher or Roles.Head or Roles.Admin)
+            || (user.Role != Roles.Admin && user.DepartmentId is null))
         {
             context.Fail("The local account is unavailable.");
             return;
         }
 
-        // Tạo lại principal để claim role/group do token mang theo không thể tự nâng quyền.
+        // Rebuild the principal so token-supplied roles or groups cannot grant application privileges.
         var claims = new List<Claim>
         {
             new("sub", subject), new(ClaimTypes.NameIdentifier, user.Id.ToString()),
@@ -54,7 +54,7 @@ public sealed class CognitoBearerEvents(
         currentUser.SetUser(user);
     }
 
-    /// <summary>Trả lỗi 401 theo OpenAPI và yêu cầu client gửi Bearer token hợp lệ.</summary>
+    /// <summary>Return an OpenAPI 401 problem and request a valid bearer token.</summary>
     public override async Task Challenge(JwtBearerChallengeContext context)
     {
         context.HandleResponse();
@@ -62,18 +62,18 @@ public sealed class CognitoBearerEvents(
         await WriteProblemAsync(context.HttpContext, StatusCodes.Status401Unauthorized, "Unauthorized", "Chưa xác thực");
     }
 
-    /// <summary>Trả lỗi 403 khi user đã đăng nhập nhưng không đạt policy.</summary>
+    /// <summary>Return a 403 problem when an authenticated user fails authorization.</summary>
     public override Task Forbidden(ForbiddenContext context) =>
         WriteProblemAsync(context.HttpContext, StatusCodes.Status403Forbidden, "Forbidden", "Không đủ quyền");
 
-    /// <summary>Chỉ chấp nhận claim xuất hiện đúng một lần và có giá trị chuỗi.</summary>
+    /// <summary>Accept only a single string-valued claim of the requested type.</summary>
     public static string? SingleClaim(ClaimsPrincipal principal, string type)
     {
         var claims = principal.FindAll(type).ToArray();
         return claims.Length == 1 && claims[0].ValueType == ClaimValueTypes.String ? claims[0].Value : null;
     }
 
-    /// <summary>Ghi ProblemDetails có code ổn định và traceId; không lộ chi tiết token.</summary>
+    /// <summary>Write a stable problem code and trace identifier without exposing token details.</summary>
     private static Task WriteProblemAsync(HttpContext context, int status, string code, string title) =>
         Results.Problem(statusCode: status, title: title, instance: context.Request.Path,
             extensions: new Dictionary<string, object?> { ["code"] = code, ["traceId"] = context.TraceIdentifier })

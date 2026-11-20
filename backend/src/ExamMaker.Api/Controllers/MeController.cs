@@ -9,13 +9,13 @@ namespace ExamMaker.Api.Controllers;
 [Route("api/v1/me")]
 public sealed class MeController(ICurrentUser currentUser) : ControllerBase
 {
-    /// <summary>Trả hồ sơ nội bộ đã xác thực, đúng schema Me; không trả token hoặc Cognito sub.</summary>
+    /// <summary>Return the authenticated local profile using the Me schema without a token or Cognito sub.</summary>
     [HttpGet]
     [ProducesResponseType<MeResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
     public ActionResult<MeResponse> Get()
     {
-        // Thông tin này đã được TokenValidated đối chiếu với database trong cùng request.
+        // TokenValidated has checked this profile against the database in the same request.
         var user = currentUser.User;
         if (user is null) return Challenge();
         return Ok(new MeResponse(user.Id, user.Email, user.FullName, user.Role,
@@ -23,6 +23,6 @@ public sealed class MeController(ICurrentUser currentUser) : ControllerBase
     }
 }
 
-// DTO chỉ chứa các trường frontend cần; tách khỏi entity để không lộ dữ liệu nội bộ.
+// Expose only frontend profile fields rather than the internal database entity.
 public sealed record MeResponse(Guid Id, string Email, string FullName, string Role,
     Guid? DepartmentId, string? DepartmentName, bool IsActive);

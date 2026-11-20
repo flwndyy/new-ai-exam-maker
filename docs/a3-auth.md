@@ -24,10 +24,13 @@ Không có endpoint đăng nhập hoặc tự cấp JWT trong API. Frontend B2 �
 | `Challenge` / `Forbidden` | Trả lỗi 401/403 dạng ProblemDetails với code/traceId; 401 có Bearer challenge. |
 | `DatabaseUserDirectory.FindBySubjectAsync` | Đọc quyền mới; chỉ cache email/họ tên/tên tổ một phút. |
 | `CurrentUser.SetUser` | Giữ hồ sơ đã xác thực trong phạm vi một request, không chia sẻ giữa các user. |
-| `ContentAccessHandler.HandleRequirementAsync` | Kiểm role, cùng tổ, chủ sở hữu và cấm tự duyệt. |
+| `AccessRules.IsSameDepartment` / `IsOwner` / `Review` | Quy tắc quyền thuần ở Application, dùng chung cho use case và API. |
+| `ContentAccessHandler.HandleRequirementAsync` | Gọi quy tắc quyền, giữ lý do `SelfReview` khi tự duyệt. |
+| `ToForbiddenProblem` | Chuyển kết quả từ chối thành ProblemDetails 403 với `SelfReview` hoặc `Forbidden`. |
 | `MeController.Get` | Trả id/email/fullName/role/departmentId/departmentName/isActive; không trả token/sub. |
 
-Comment giải thích hàm trong phần A3 viết bằng tiếng Việt theo yêu cầu người dùng. Tên lớp/hàm/biến giữ tiếng Anh.
+
+Comment kỹ thuật viết bằng tiếng Anh theo quy tắc chung. Bảng trên giải thích tác dụng bằng tiếng Việt.
 
 ## Cấu hình chạy thật
 
@@ -39,6 +42,8 @@ Lấy ba giá trị từ người phụ trách Cognito, không ghi giá trị th
 | `Cognito__UserPoolId` | ID User Pool cùng vùng |
 | `Cognito__ClientId` | App Client dùng cho frontend |
 | `ConnectionStrings__ExamMaker` | Kết nối PostgreSQL đã có migration A2 |
+
+`Cognito:Authority` trong runbook/Parameter Store không được API đọc trực tiếp: API tự tính issuer từ Region và UserPoolId. HostedUiDomain dùng cho giao diện đăng nhập, không dùng làm issuer.
 
 Có thể nạp cùng nhóm cấu hình từ Parameter Store theo cơ chế A1. Xác thực JWT không cần client secret hoặc AWS access key vì JWKS là khóa công khai.
 
@@ -66,6 +71,18 @@ Khi hoàn toàn chưa cấu hình Cognito, `/health` vẫn trả 200 để kiể
 | `Reviewer` | Head cùng tổ hoặc admin; luôn cấm tự duyệt |
 
 Role policy dùng `[Authorize(Policy = AccessPolicies.Admin)]` hoặc ContentAuthor. Resource policy dùng `IAuthorizationService.AuthorizeAsync(User, resource, policyName)` với `ContentAccessResource` lấy creator/department từ DB. Không truyền resource là HttpContext hoặc lấy các ID quyền từ body client.
+
+`AccessRules` và `Roles` nằm ở Application để use case và handler dùng chung. Khi `AuthorizeAsync` thất bại, controller trả `result.ToForbiddenProblem(HttpContext)` (namespace `ExamMaker.Api.Authorization`): tự duyệt nhận 403 `SelfReview`, lỗi role/tổ nhận `Forbidden`. Kiểm trạng thái đăng nhập trước khi đánh giá resource.
+
+Ví dụ controller trả `Task<IResult>` sau khi đã tải resource từ DB:
+
+```csharp
+var result = await authorization.AuthorizeAsync(User, resource, AccessPolicies.Reviewer);
+if (!result.Succeeded) return result.ToForbiddenProblem(HttpContext);
+// Continue with the authorized use case.
+```
+
+B2: 401 vẫn dùng mã `Unauthorized` theo hợp đồng hiện tại, bao gồm user chưa được tạo/bị khóa. Chỉ thử refresh một lần; nếu gọi lại vẫn 401 thì dừng retry, xóa phiên cục bộ và hiển thị hướng dẫn liên hệ quản trị viên. Không tự động đăng nhập/refresh lặp vô hạn.
 
 Các policy này là thành phần dùng chung, không thay thế kiểm tra trạng thái/nội dung của use case. Ví dụ SameDepartment không tự cho phép đọc câu Draft của người khác. Khi ghép đề, Application vẫn phải kiểm tra môn/khối/tổ và trạng thái theo context.md. Không tự duyệt áp dụng cả admin.
 

@@ -11,6 +11,7 @@ using ExamMaker.Application.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -25,8 +26,34 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class AuthenticationTests
 {
+    [Theory]
+    [InlineData("head", true, true, "SelfReview")]
+    [InlineData("admin", true, false, "SelfReview")]
+    [InlineData("teacher", true, true, "Forbidden")]
+    [InlineData("head", true, false, "Forbidden")]
+    [InlineData("head", false, false, "Forbidden")]
+    [InlineData("teacher", false, true, "Forbidden")]
+    [InlineData("head", false, true, null)]
+    [InlineData("admin", false, false, null)]
+    // Exercise resource authorization and its actual HTTP problem response.
+    public async Task Review_returns_specific_self_review_errors_without_weakening_role_checks(
+        string role, bool owned, bool sameDepartment, string? expectedCode)
+    {
+        using var app = new AuthTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = role };
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", app.Token());
+        var response = await client.GetAsync($"/_auth-tests/review?owned={owned}&sameDepartment={sameDepartment}");
+        if (expectedCode is not null)
+            await AssertProblemAsync(response, HttpStatusCode.Forbidden, expectedCode);
+        else
+        {
+            using (response) Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
     [Fact]
-    // Thiếu token phải nhận 401 đúng định dạng, không truy vấn tài khoản.
+    // Missing tokens return a 401 problem without looking up a user.
     public async Task Missing_token_returns_problem_and_bearer_challenge()
     {
         using var app = new AuthTestFactory();
@@ -51,7 +78,7 @@ public sealed class AuthenticationTests
     [InlineData("malformed")]
     [InlineData("duplicate-client")]
     [InlineData("duplicate-sub")]
-    // Thử token sai/hết hạn/giả mạo và bảo đảm chúng bị chặn trước khi truy cập DB.
+    // Reject invalid or forged tokens before database access.
     public async Task Invalid_tokens_are_rejected_before_database_access(string fault)
     {
         using var app = new AuthTestFactory();
@@ -66,7 +93,7 @@ public sealed class AuthenticationTests
     [InlineData("disabled")]
     [InlineData("bad-role")]
     [InlineData("no-department")]
-    // User chưa tồn tại, bị khóa hoặc có quyền không hợp lệ đều không được đăng nhập.
+    // Reject missing, disabled or invalid local account profiles.
     public async Task Unavailable_local_users_cannot_authenticate(string state)
     {
         using var app = new AuthTestFactory();
@@ -85,7 +112,7 @@ public sealed class AuthenticationTests
     [Theory]
     [InlineData(null)]
     [InlineData("no-aud")]
-    // Kiểm hồ sơ /me lấy từ DB; claim admin giả trong token không làm tăng quyền.
+    // Use the database profile and ignore forged administrator claims in the token.
     public async Task Me_returns_database_profile_and_does_not_trust_token_roles(string? tokenMode)
     {
         using var app = new AuthTestFactory();
@@ -106,7 +133,7 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    // Giữ nguyên token nhưng đổi/khóa tài khoản để kiểm quyền được cập nhật ở request sau.
+    // Apply role and account changes on the next request even with the same token.
     public async Task Account_changes_take_effect_with_the_same_token_on_the_next_request()
     {
         using var app = new AuthTestFactory();
@@ -125,7 +152,7 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    // Chưa cấu hình Cognito thì từ chối đăng nhập, nhưng health check vẫn chạy.
+    // Fail authentication when unconfigured while keeping health checks public.
     public async Task Unconfigured_auth_fails_closed_but_health_remains_public()
     {
         using var app = new WebApplicationFactory<Program>();
@@ -136,7 +163,7 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    // DB lỗi phải trả 500, không cấp quyền và không che lỗi hệ thống thành lỗi token.
+    // Report database failures as server errors rather than granting access or returning 401.
     public async Task Database_failure_returns_a_server_error_instead_of_authenticating_or_masking_it_as_401()
     {
         using var app = new AuthTestFactory();
@@ -152,7 +179,7 @@ public sealed class AuthenticationTests
         Assert.True(problem.TryGetProperty("traceId", out _));
     }
 
-    /// <summary>Đối chiếu lỗi HTTP với định dạng code/traceId và không để lộ token.</summary>
+    /// <summary>Check HTTP problem codes, trace identifiers and the bearer challenge.</summary>
     private static async Task AssertProblemAsync(HttpResponseMessage response, HttpStatusCode status, string code)
     {
         using (response)
@@ -180,10 +207,10 @@ public sealed class AuthTestFactory : WebApplicationFactory<Program>
         "Synthetic teacher", "teacher", DepartmentId, "Synthetic department", true);
     public FakeUserDirectory Directory { get; } = new();
 
-    // Tạo khóa RSA tạm riêng cho test host, không sử dụng khóa hoặc token thật.
+    // Create a disposable RSA key for the test host, never a real signing key.
     public AuthTestFactory() => key = new RsaSecurityKey(rsa) { KeyId = "synthetic-key" };
 
-    /// <summary>Thay discovery và kho user trong test host; production không có đường bỏ qua xác thực.</summary>
+    /// <summary>Replace discovery and user lookup only in the test host, without a production bypass.</summary>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
@@ -206,7 +233,7 @@ public sealed class AuthTestFactory : WebApplicationFactory<Program>
         });
     }
 
-    /// <summary>Tạo token RSA tạm và các lỗi có chủ đích để thử toàn bộ pipeline JWT.</summary>
+    /// <summary>Create temporary signed tokens with intentional faults to exercise the JWT pipeline.</summary>
     public string Token(string? fault = null)
     {
         if (fault == "malformed") return "this-is-not-a-jwt";
@@ -232,7 +259,7 @@ public sealed class AuthTestFactory : WebApplicationFactory<Program>
             fault == "no-aud" ? null : ClientId, claims, notBefore, expires, credentials));
     }
 
-    /// <summary>Giải phóng khóa ký tạm khi host kiểm thử đã dừng.</summary>
+    /// <summary>Dispose the temporary signing key after the test host stops.</summary>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -246,7 +273,7 @@ public sealed class FakeUserDirectory : IUserDirectory
     public bool ThrowOnRead { get; set; }
     public int Reads { get; private set; }
 
-    /// <summary>Mô phỏng lookup DB; vẫn chạy xác thực chữ ký và policy thật trong API.</summary>
+    /// <summary>Simulate database lookup while retaining real JWT validation and authorization.</summary>
     public Task<AuthenticatedUser?> FindBySubjectAsync(string subject, CancellationToken cancellationToken)
     {
         Reads++;
@@ -259,13 +286,26 @@ public sealed class FakeUserDirectory : IUserDirectory
 [Route("_auth-tests")]
 public sealed class AuthenticationProbeController : ControllerBase
 {
+    [HttpGet("review")]
+    [Authorize]
+    // Test identifiers are synthesized here; production controllers must load them from the database.
+    public async Task<IResult> Review([FromServices] IAuthorizationService authorization,
+        [FromServices] ICurrentUser currentUser, bool owned, bool sameDepartment)
+    {
+        var user = currentUser.User!;
+        var resource = new ContentAccessResource(owned ? user.Id : Guid.NewGuid(),
+            sameDepartment ? user.DepartmentId!.Value : Guid.NewGuid());
+        var result = await authorization.AuthorizeAsync(User, resource, AccessPolicies.Reviewer);
+        return result.Succeeded ? Results.Ok() : result.ToForbiddenProblem(HttpContext);
+    }
+
     [HttpGet("admin")]
     [Authorize(Policy = AccessPolicies.Admin)]
-    // Endpoint chỉ nằm trong test assembly để kiểm policy quản trị.
+    // This test-only endpoint exercises the administrator policy.
     public IActionResult Admin() => Ok();
 
     [HttpGet("author")]
     [Authorize(Policy = AccessPolicies.ContentAuthor)]
-    // Endpoint chỉ nằm trong test assembly để kiểm quyền tạo nội dung của teacher/head.
+    // This test-only endpoint exercises the content-author policy.
     public IActionResult Author() => Ok();
 }

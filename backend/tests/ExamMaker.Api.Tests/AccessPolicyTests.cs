@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ExamMaker.Api.Authentication;
 using ExamMaker.Api.Authorization;
+using ExamMaker.Application.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,7 +25,7 @@ public sealed class AccessPolicyTests
     [InlineData("head", "Reviewer", true, true, false)]
     [InlineData("admin", "Reviewer", true, false, false)]
     [InlineData("admin", "Reviewer", false, false, true)]
-    // Thử ma trận role/tổ/chủ sở hữu; kể cả admin cũng không được tự duyệt.
+    // Exercise role, department and ownership rules, including administrator self-review denial.
     public async Task Resource_policies_apply_role_department_and_no_self_review(
         string role, string policy, bool owned, bool sameDepartment, bool expected)
     {
@@ -45,7 +46,7 @@ public sealed class AccessPolicyTests
     }
 
     [Fact]
-    // Nhập thiếu cấu hình Cognito phải báo lỗi rõ ràng thay vì chạy với cấu hình sai.
+    // Reject partial Cognito configuration instead of starting with invalid settings.
     public void Partial_cognito_configuration_is_rejected()
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -63,7 +64,7 @@ public sealed class AccessPolicyTests
     [InlineData("https://attacker.invalid", "pool", "client")]
     [InlineData("ap-southeast-1", "us-east-1_EXAMPLE", "client")]
     [InlineData("ap-southeast-1", "ap-southeast-1_EXAMPLE/other", "client")]
-    // Không cho dữ liệu cấu hình sai tạo ra địa chỉ discovery ngoài dự kiến.
+    // Reject configuration components that could produce an unintended discovery address.
     public void Invalid_discovery_components_are_not_accepted(string region, string pool, string client)
     {
         Assert.False(new CognitoOptions { Region = region, UserPoolId = pool, ClientId = client }.IsConfigured);

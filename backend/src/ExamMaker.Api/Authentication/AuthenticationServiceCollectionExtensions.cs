@@ -13,7 +13,7 @@ namespace ExamMaker.Api.Authentication;
 
 public static class AuthenticationServiceCollectionExtensions
 {
-    /// <summary>Đăng ký Cognito, user theo request và policy; không chứa khóa ký hay credential AWS.</summary>
+    /// <summary>Register Cognito authentication, request-scoped users and shared authorization policies.</summary>
     public static IServiceCollection AddExamMakerAuthentication(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<CognitoOptions>().Bind(configuration.GetSection(CognitoOptions.SectionName))
@@ -21,7 +21,7 @@ public static class AuthenticationServiceCollectionExtensions
                 "Provide valid Cognito:Region, Cognito:UserPoolId and Cognito:ClientId together.")
             .ValidateOnStart();
         services.AddMemoryCache();
-        // Scoped tạo hồ sơ riêng cho từng request, tránh lẫn quyền của hai người dùng.
+        // Keep authenticated user state isolated to each request.
         services.AddScoped<IUserDirectory, DatabaseUserDirectory>();
         services.AddScoped<CurrentUser>();
         services.AddScoped<ICurrentUser>(provider => provider.GetRequiredService<CurrentUser>());
@@ -35,14 +35,14 @@ public static class AuthenticationServiceCollectionExtensions
             .RequireAuthenticatedUser().RequireClaim(CognitoBearerEvents.UserIdClaim).Build();
         services.AddAuthorization(options =>
         {
-            // Bảo vệ cả endpoint quên gắn [Authorize]; chỉ endpoint AllowAnonymous được công khai.
+            // Protect endpoints without explicit authorization attributes; only AllowAnonymous is public.
             options.DefaultPolicy = authenticated;
             options.FallbackPolicy = authenticated;
-            options.AddPolicy(AccessPolicies.Admin, policy => policy.Combine(authenticated).RequireRole("admin"));
-            options.AddPolicy(AccessPolicies.ContentAuthor, policy => policy.Combine(authenticated).RequireRole("teacher", "head"));
+            options.AddPolicy(AccessPolicies.Admin, policy => policy.Combine(authenticated).RequireRole(Roles.Admin));
+            options.AddPolicy(AccessPolicies.ContentAuthor, policy => policy.Combine(authenticated).RequireRole(Roles.Teacher, Roles.Head));
             foreach (var permission in new[] { AccessPolicies.SameDepartment, AccessPolicies.Owner, AccessPolicies.Reviewer })
             {
-                // Các policy này cần resource do controller tải từ DB, ngoài việc đăng nhập.
+                // Resource policies require identifiers loaded from the database as well as authentication.
                 options.AddPolicy(permission, policy => policy.Combine(authenticated).AddRequirements(new ContentAccessRequirement(permission)));
             }
         });
@@ -50,14 +50,14 @@ public static class AuthenticationServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Kiểm chữ ký RS256, issuer, hạn dùng và client_id của access token Cognito.</summary>
+    /// <summary>Validate the RS256 signature, issuer, lifetime and Cognito access-token client_id.</summary>
     private static void ConfigureBearer(JwtBearerOptions jwt, CognitoOptions cognito)
     {
         if (cognito.IsConfigured) jwt.Authority = cognito.Issuer;
         jwt.RequireHttpsMetadata = true;
-        // Giữ nguyên tên sub/client_id để đối chiếu đúng claim Cognito phát hành.
+        // Preserve Cognito claim names for exact sub and client_id validation.
         jwt.MapInboundClaims = false;
-        // Không giữ token trong phiên xác thực và không trả chi tiết lỗi token cho client.
+        // Do not retain tokens or expose token-validation details to clients.
         jwt.SaveToken = false;
         jwt.IncludeErrorDetails = false;
         jwt.EventsType = typeof(CognitoBearerEvents);
@@ -67,19 +67,19 @@ public static class AuthenticationServiceCollectionExtensions
             ValidIssuer = cognito.IsConfigured ? cognito.Issuer : null,
             ValidateIssuerSigningKey = true,
             RequireSignedTokens = true,
-            // Chỉ nhận thuật toán Cognito sử dụng, tránh nhận token unsigned hoặc HMAC giả.
+            // Accept only the signing algorithm used by Cognito.
             ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
             ValidateLifetime = true,
             RequireExpirationTime = true,
-            // Cho phép sai lệch đồng hồ nhỏ giữa máy API và Cognito.
+            // Allow a small clock difference between the API and Cognito.
             ClockSkew = TimeSpan.FromSeconds(30),
-            // Cognito access token dùng client_id, còn ID token dùng aud và bị loại ở TokenValidated.
+            // Cognito access tokens use client_id; ID tokens use aud and are rejected in TokenValidated.
             ValidateAudience = true,
             AudienceValidator = (_, token, _) => HasExpectedClient(token, cognito.ClientId)
         };
     }
 
-    /// <summary>Hỗ trợ cả hai token handler của .NET và không chấp nhận client_id trùng lặp.</summary>
+    /// <summary>Support both .NET token handlers and reject duplicate client_id claims.</summary>
     private static bool HasExpectedClient(SecurityToken token, string clientId)
     {
         IEnumerable<Claim> claims = token switch

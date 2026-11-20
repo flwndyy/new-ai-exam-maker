@@ -9,14 +9,14 @@ public sealed class DatabaseUserDirectory(ExamMakerDbContext database, IMemoryCa
 {
     private sealed record DisplayProfile(string Email, string FullName, string? DepartmentName);
 
-    /// <summary>Đọc quyền mới nhất mỗi request; chỉ cache thông tin hiển thị trong một phút.</summary>
+    /// <summary>Read current permissions on each request; cache only display data for one minute.</summary>
     public async Task<AuthenticatedUser?> FindBySubjectAsync(string subject, CancellationToken cancellationToken)
     {
         var access = await database.Users.AsNoTracking().Where(x => x.CognitoSub == subject)
             .Select(x => new { x.Id, x.Role, x.DepartmentId, x.IsActive }).SingleOrDefaultAsync(cancellationToken);
         if (access is null) return null;
 
-        // Khóa cache gồm user và tổ, tránh dùng lại tên tổ cũ khi tài khoản chuyển tổ.
+        // Include the department in the cache key to avoid reusing its previous display name.
         var key = (typeof(DatabaseUserDirectory), access.Id, access.DepartmentId);
         if (!cache.TryGetValue<DisplayProfile>(key, out var display))
         {

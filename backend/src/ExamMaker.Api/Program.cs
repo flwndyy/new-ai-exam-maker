@@ -15,7 +15,7 @@ builder.Services.AddSerilog((services, logger) => logger
 
 builder.Services.AddExamMakerPersistence(builder.Configuration);
 builder.Services.AddControllers();
-// Bổ sung mã lỗi ổn định và mã tra log, kể cả khi DB đang lỗi.
+// Include stable error codes and trace identifiers, including for database failures.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
 {
     context.ProblemDetails.Extensions.TryAdd("code", context.ProblemDetails.Status switch
@@ -37,7 +37,7 @@ var app = builder.Build();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
-// Xác thực trước, sau đó mới kiểm tra quyền truy cập endpoint.
+// Authenticate before evaluating endpoint authorization.
 app.UseAuthentication();
 app.UseAuthorization();
 
