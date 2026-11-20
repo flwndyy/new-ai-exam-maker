@@ -11,19 +11,22 @@
         "sqs:ReceiveMessage",
         "sqs:SendMessage"
       ],
-      "Resource": [
-        "${SQS_QUEUE_ARN}",
-        "${SQS_DLQ_ARN}"
-      ]
+      "Resource": "${SQS_QUEUE_ARN}"
     },
     {
       "Sid": "BedrockModelInvocation",
       "Effect": "Allow",
       "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModel"
       ],
-      "Resource": "${BEDROCK_MODEL_ARN}"
+      "Resource": [
+        "${BEDROCK_HAIKU_MODEL_ARN}",
+        "${BEDROCK_SONNET_MODEL_ARN}",
+        "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
+        "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}",
+        "arn:aws:bedrock:*::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
+        "arn:aws:bedrock:*::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}"
+      ]
     },
     {
       "Sid": "CognitoAdminForConfiguredPool",
@@ -31,10 +34,13 @@
       "Action": [
         "cognito-idp:AdminAddUserToGroup",
         "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminDeleteUser",
         "cognito-idp:AdminDisableUser",
         "cognito-idp:AdminEnableUser",
         "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminListGroupsForUser",
         "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminUpdateUserAttributes",
         "cognito-idp:AdminUserGlobalSignOut",
         "cognito-idp:ListGroups",
         "cognito-idp:ListUsers"
@@ -49,16 +55,32 @@
         "ssm:GetParameters",
         "ssm:GetParametersByPath"
       ],
-      "Resource": "${PARAMETER_ARN_PREFIX}/*"
+      "Resource": [
+        "${PARAMETER_ARN_PREFIX}",
+        "${PARAMETER_ARN_PREFIX}/*"
+      ]
     },
     {
-      "Sid": "DecryptParameterStoreValues",
+      "Sid": "WriteApplicationLogs",
       "Effect": "Allow",
-      "Action": "kms:Decrypt",
-      "Resource": "${PARAMETER_KMS_KEY_ARN}",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "${CLOUDWATCH_LOG_GROUP_ARN}",
+        "${CLOUDWATCH_LOG_GROUP_ARN}:*"
+      ]
+    },
+    {
+      "Sid": "PublishApplicationMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "kms:ViaService": "ssm.ap-southeast-1.amazonaws.com"
+          "cloudwatch:namespace": "${CLOUDWATCH_METRIC_NAMESPACE}"
         }
       }
     }

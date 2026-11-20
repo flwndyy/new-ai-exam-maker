@@ -29,15 +29,34 @@ Thực hiện trong **IAM → Roles → Create role**:
    mở Session Manager. Không gắn `AdministratorAccess`, `IAMFullAccess` hoặc quyền Billing.
 4. Tạo policy inline/customer theo
    [`infra/iam/exammaker-ec2-policy.example.json`](../infra/iam/exammaker-ec2-policy.example.json).
-5. Thay các placeholder bằng ARN thật của queue, DLQ, model Bedrock, Cognito User Pool,
-   Parameter Store path và KMS key **chỉ trong AWS Console hoặc secret manager**; không
-   sửa file mẫu rồi commit lại.
+5. Thay các placeholder bằng ARN thật của queue, hai model Bedrock, inference profile,
+   Cognito User Pool, Parameter Store path và CloudWatch log group **chỉ trong AWS Console
+   hoặc secret manager**; không sửa file mẫu rồi commit lại.
 6. Nếu SQS/Cognito/Parameter Store chưa được tạo bởi OPS-2, chỉ gắn
    `AmazonSSMManagedInstanceCore` ở O3; bổ sung policy runtime sau O9–O12.
 
-Policy runtime chỉ cấp các thao tác app cần: SQS enqueue/consume/retry, gọi model Bedrock,
-quản trị user trong đúng Cognito User Pool và đọc đúng nhánh Parameter Store. SSM Session
-Manager là quyền quản trị máy; không dùng access key trên EC2.
+Policy runtime chỉ cấp các thao tác app cần: SQS enqueue/consume/retry trên queue chính,
+gọi hai model Bedrock, quản trị user và đọc group trong đúng Cognito User Pool, đọc đúng
+nhánh Parameter Store, ghi log vào log group và gửi metric vào namespace đã chỉ định. DLQ
+không nằm trong quyền của app; SQS redrive tự chuyển message sang DLQ. SSM Session Manager
+là quyền quản trị máy; không dùng access key trên EC2.
+
+### 2.1 Bedrock model và inference profile
+
+Parameter Store `ModelId` có thể chứa một foundation model ID cho gọi in-region hoặc một
+inference profile ID có tiền tố `apac.` cho cross-Region inference. Policy mẫu có placeholder
+riêng cho Haiku và Sonnet v2, inference profile ARN của từng model, cùng foundation-model ARN
+ở source và các destination Region. Khi dùng profile `apac.*`, điền đúng các destination
+Region mà Bedrock liệt kê cho profile; không dùng ARN của profile khác model. Không bật
+`InvokeModelWithResponseStream` vì worker hiện gọi bất đồng bộ và không stream.
+
+### 2.2 CloudWatch
+
+Điền `CLOUDWATCH_LOG_GROUP_ARN` bằng ARN log group của API/Worker và
+`CLOUDWATCH_METRIC_NAMESPACE` bằng namespace cố định của ứng dụng. `PutMetricData` bắt buộc
+dùng `Resource: "*"` vì CloudWatch Metrics không hỗ trợ giới hạn resource ARN; điều kiện
+namespace là giới hạn quyền còn lại. Nếu O13/O15 chưa tạo log group hoặc metric heartbeat,
+chỉ cấp statement này sau khi đã chốt tên log group/namespace.
 
 ## 3. Tạo EC2
 
