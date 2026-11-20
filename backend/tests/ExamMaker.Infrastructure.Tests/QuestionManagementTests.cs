@@ -240,7 +240,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    // Two reviewers deciding concurrently must produce exactly one successful terminal decision and one conflict.
+    // Exactly one decision wins; the loser observes either an approved-state conflict or a now-private rejected question.
     public async Task Concurrent_review_decisions_do_not_overwrite_each_other()
     {
         await SeedAsync();
@@ -251,10 +251,32 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             catch (QuestionException error) { return error.Code; }
         }
         var outcomes = await Task.WhenAll(Decide(head, QuestionAction.Approve), Decide(otherHead, QuestionAction.Reject));
-        Assert.Single(outcomes, x => x is "Approved" or "Rejected");
-        Assert.Single(outcomes, x => x == "InvalidStateTransition");
+        var winner = Assert.Single(outcomes, x => x is "Approved" or "Rejected");
+        var loser = Assert.Single(outcomes, x => x != winner);
+        Assert.Equal(winner == "Rejected" ? "NotFound" : "InvalidStateTransition", loser);
         await using var verify = fixture.CreateContext();
         Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id && (x.Action == "ApproveQuestion" || x.Action == "RejectQuestion")));
+    }
+
+    [PostgresFact]
+    // Force both decision orders so scheduling cannot hide the rejected-question privacy branch.
+    public async Task Later_review_decisions_respect_the_winning_state_and_visibility()
+    {
+        await SeedAsync();
+        foreach (var first in new[] { QuestionAction.Approve, QuestionAction.Reject })
+        {
+            var q = await CreateAsync();
+            await ActAsync(owner, q.Id, QuestionAction.Submit);
+            var winner = await ActAsync(head, q.Id, first, "First decision");
+            var second = first == QuestionAction.Approve ? QuestionAction.Reject : QuestionAction.Approve;
+            var error = await Assert.ThrowsAsync<QuestionException>(() => ActAsync(otherHead, q.Id, second, "Late decision"));
+            Assert.Equal(first == QuestionAction.Reject ? "NotFound" : "InvalidStateTransition", error.Code);
+            Assert.Equal(first == QuestionAction.Reject ? 404 : 409, error.StatusCode);
+            await using var verify = fixture.CreateContext();
+            Assert.Equal(winner.Status, (await verify.Questions.SingleAsync(x => x.Id == q.Id)).Status);
+            Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id
+                && (x.Action == "ApproveQuestion" || x.Action == "RejectQuestion")));
+        }
     }
 
     [PostgresFact]

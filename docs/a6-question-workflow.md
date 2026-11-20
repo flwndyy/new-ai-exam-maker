@@ -73,7 +73,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 
 Mỗi ghi giữ shared advisory lock quản trị `48683401`, sau đó đọc actor live, giữ shared catalog lock `48683402` rồi khóa hàng câu hỏi. Thứ tự này phối hợp với A4/A5; A4 đồng bộ Cognito có thể khiến A6 trả Conflict sau 2 giây chờ khóa. Mức khóa chung phù hợp demo, chưa tối ưu thông lượng lớn. Role/tổ bị thay đổi trong lúc chờ khóa sẽ được kiểm lại sau khi có khóa.
 
-Duyệt đồng thời: người thắng commit quyết định; người còn lại đọc trạng thái mới rồi nhận InvalidStateTransition. SQLSTATE lock/deadlock/FK/unique được chuyển thành lỗi an toàn. Audit lỗi làm rollback cả trạng thái, nội dung hoặc lệnh DELETE đã chạy. Log server chỉ ghi loại exception, SQLSTATE và stack, bỏ raw message.
+Duyệt đồng thời: người thắng commit quyết định. Nếu Approved thắng, reviewer còn lại vẫn nhìn thấy câu và nhận 409 InvalidStateTransition. Nếu Rejected thắng, câu trở lại phạm vi riêng tư của tác giả; reviewer khác nhận 404 NotFound trước kiểm trạng thái. Chỉ có một audit quyết định thành công. SQLSTATE lock/deadlock/FK/unique được chuyển thành lỗi an toàn. Audit lỗi làm rollback cả trạng thái, nội dung hoặc lệnh DELETE đã chạy. Log server chỉ ghi loại exception, SQLSTATE và stack, bỏ raw message.
 
 Khi đề submit, trigger A2 giữ FOR SHARE trên câu nguồn; sửa nguồn giữ FOR UPDATE nên hai thao tác được tuần tự hóa. Snapshot đã đóng băng không bị sửa khi câu gốc trở về Draft/revision mới. A6 không tạo snapshot hoặc tính hash thay A7.
 
@@ -107,6 +107,8 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 - Audit chỉ ghi ReviewNote cho Approve/Reject; archive/mark-reviewed không mượn lại note cũ. So sánh nội dung chuẩn hóa trim stem cả hai bên, explanation trim và blank→null. PUT không đổi ngữ nghĩa giữ nguyên Approved/revision/AI flags; không sửa whitespace của bản Approved khi chỉ chuẩn hóa.
 
 ## Kết quả sửa review 20/11/2026
+
+- Sửa CI run #43: test race cũ luôn đòi 409 nhưng Rejected phải che khỏi reviewer khác bằng 404. Đã kiểm kỳ vọng theo trạng thái thắng, thêm test ép cả hai thứ tự quyết định; toàn Infrastructure Release **120/120 pass, không skip** trên PostgreSQL. Giữ nguyên chính sách quyền trong production.
 
 - Toàn solution backend Release: **426/426 test pass, 0 failed, 0 skipped** — 269 API/quy tắc, 38 Application và 119 Infrastructure, gồm 83 test PostgreSQL thật.
 - Thêm 16 test hồi quy (10 API/quy tắc và 6 PostgreSQL) cho số thập phân dấu phẩy, shared lock, phân loại nguồn trong đề editable, audit note, che ID ngoài phạm vi, no-op chuẩn hóa, giới hạn text/array và ưu tiên lỗi trạng thái. Các test snapshot/race/thu hồi quyền cũ tiếp tục pass.
