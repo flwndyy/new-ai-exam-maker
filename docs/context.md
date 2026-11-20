@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.7** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.8** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -130,6 +130,14 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 
 - Giới hạn A4: mỗi lệnh AWS async tối đa 5 giây bằng CancellationToken, không tự retry SDK; toàn thao tác tối đa 20 giây, cleanup độc lập tối đa 5 giây; chờ lock DB tối đa 2 giây và trả Conflict khi bận. Đây là giới hạn hợp tác theo cancellation, không bảo đảm cứng khi mạng/driver không phản hồi hủy. Client phải kiểm tra lại DB/reconcile trước khi retry sau timeout.
 - AWS client singleton được tạo lazy. Create gọi AdminCreateUser rồi AdminAddUserToGroup, không cập nhật lại profile vừa tạo. Bootstrap tách IAdminBootstrapper và chỉ đăng ký trong CLI. Audit sửa user ghi role/tổ trước-sau, không ghi email. Log lỗi chứa loại lỗi/mã AWS hoặc SQL/stack, bỏ raw message để tránh lộ dữ liệu nhạy cảm.
+
+#### Chi tiết triển khai A5
+
+- Danh sách tổ/môn/chương dành cho mọi người dùng đã xác thực; chỉ admin được tạo/sửa/xóa. Không giới hạn danh sách theo tổ của người đọc, đúng ma trận 3.2.
+- Phân trang mặc định 1/20, tối đa 100 phần tử; tên được trim, không nhận tên chỉ có khoảng trắng. Giữ phạm vi unique hiện có: tên tổ toàn cục, tên môn trong tổ, tên chương trong môn/khối (phân biệt hoa/thường theo PostgreSQL).
+- Sửa/xóa bản ghi không tồn tại trả 404; parent không tồn tại hoặc đầu vào không hợp lệ trả 400. Trùng unique hoặc vi phạm FK RESTRICT khi xóa/chuyển tổ/môn/khối trả 409, không tự sửa dữ liệu tham chiếu.
+- Ghi danh mục dùng cùng advisory transaction lock với A4 (chờ tối đa 2 giây), kiểm lại admin active trong DB sau khi giữ lock. Thay đổi và audit Create/Update/Delete theo entity Department/Subject/Topic được commit cùng transaction; lỗi không để lại audit thành công.
+- Sắp xếp tổ/môn theo tên rồi id; chương theo khối, sortOrder rồi id để phân trang ổn định. Bộ lọc không khớp trả trang rỗng. Không gọi AWS cho thao tác danh mục.
 
 ---
 
@@ -559,6 +567,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.8 — 20/11/2026**
+- Triển khai A5: API danh mục, phân quyền admin, phân trang/lọc, ràng buộc FK/unique và audit trong cùng transaction. Không thay schema hoặc seed.
 
 **0.7 — 20/11/2026**
 - Sửa review PR #64: log chẩn đoán an toàn, timeout async/lock có giới hạn, audit đổi quyền, client AWS dùng chung, tối giản Create và tách bootstrap khỏi service API.

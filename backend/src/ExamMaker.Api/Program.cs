@@ -1,6 +1,9 @@
 using ExamMaker.Api.Authentication;
+using ExamMaker.Api.Catalog;
 using ExamMaker.Api.Users;
+using ExamMaker.Application.Catalog;
 using ExamMaker.Infrastructure;
+using ExamMaker.Infrastructure.Catalog;
 using ExamMaker.Infrastructure.Persistence;
 using ExamMaker.Infrastructure.Users;
 using Serilog;
@@ -18,6 +21,9 @@ builder.Services.AddSerilog((services, logger) => logger
 builder.Services.AddExamMakerPersistence(builder.Configuration);
 builder.Services.AddUserManagement(builder.Configuration);
 builder.Services.AddExceptionHandler<UserOperationExceptionHandler>();
+// Keep catalog persistence scoped to the request and translate its safe application errors.
+builder.Services.AddScoped<ICatalogManagement, CatalogManagement>();
+builder.Services.AddExceptionHandler<CatalogExceptionHandler>();
 builder.Services.AddControllers();
 // Include stable error codes and trace identifiers, including for database failures.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
