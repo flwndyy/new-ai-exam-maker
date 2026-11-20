@@ -68,7 +68,7 @@ trạng thái sau, ghi chú và thời điểm.
 
 ## Ràng buộc chính
 
-- `users.cognito_sub` phải duy nhất.
+- `users.cognito_sub` phải duy nhất. A4 bổ sung unique email qua `lower(btrim(email))` và `users.created_at` UTC.
 - `questions.payload` là JSONB bắt buộc. Cấu trúc phụ thuộc vào
   `type` theo mục 8.2 trong `docs/context.md`.
 - Mỗi đề có nhiều phiên bản. Cặp `(exam_id, version_no)` phải
@@ -86,7 +86,7 @@ trạng thái sau, ghi chú và thời điểm.
 | Bảng | PK và FK | Các cột nghiệp vụ |
 |---|---|---|
 | `departments` | PK `id` | `name` |
-| `users` | PK `id`; FK `department_id → departments.id` | `cognito_sub`, `email`, `full_name`, `role`, `is_active` |
+| `users` | PK `id`; FK `department_id → departments.id` | `cognito_sub`, `email`, `full_name`, `role`, `is_active`, `created_at` |
 | `subjects` | PK `id`; FK `department_id → departments.id` | `name` |
 | `topics` | PK `id`; FK `subject_id → subjects.id` | `grade`, `name`, `sort_order` |
 | `questions` | PK `id`; FK `department_id`, `subject_id`, `topic_id`, `ai_job_id`; `created_by` và `reviewed_by` trỏ đến `users.id` | `grade`, `type`, `difficulty`, `stem`, `payload`, `explanation`, `status`, `revision`, `source`, `ai_ordinal`, `ai_verification` và ghi chú, `ai_reviewed_by_author`, `submitted_at`, `reviewed_at`, `review_note`, thời điểm tạo/cập nhật |

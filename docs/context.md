@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.6** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.7** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -106,6 +106,17 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 - Job đối soát (admin chạy tay hoặc định kỳ): so group Cognito với `users.role`, báo lệch.
 - **Admin đầu tiên (bootstrap)**: vì self sign-up tắt, admin đầu tiên được tạo bằng script/lệnh chạy một lần bởi người triển khai (tạo user Cognito + group `admin` + dòng `users`), không qua API công khai. Ghi quy trình vào `docs/`.
 - **Đăng nhập lần đầu / mật khẩu**: admin tạo user với mật khẩu tạm → user phải đổi mật khẩu ở lần đăng nhập đầu (dùng giao diện đăng nhập của Cognito, Managed Login); có luồng quên mật khẩu. Đổi email phải cập nhật cả Cognito và `users.email`.
+
+#### Chi tiết triển khai A4
+
+- API quản lý user chỉ dành cho admin. Kiểm lại quyền admin trong DB khi giữ khóa ghi, không cho admin tự hạ vai trò hoặc tự khóa. Các thao tác ghi/bootstrap dùng khóa advisory transaction PostgreSQL chung để tránh trùng email và ghi đè đồng bộ giữa nhiều process.
+- Email được trim/lowercase; unique index trên lower(btrim(email)). Bổ sung users.created_at UTC theo schema AdminUser; user cũ lấy thời điểm migration vì không có lịch sử tạo chính xác.
+- Tạo user: Cognito tạo mật khẩu tạm và gửi email mời, thêm group, sau đó lưu DB. API không nhận/trả mật khẩu. Lỗi trước commit sẽ xóa tài khoản Cognito vừa được thao tác này tạo; không xóa tài khoản đã tồn tại. Nếu kết quả commit không rõ ràng thì không xóa Cognito tự động, báo cần đối soát.
+- Sửa user: đọc snapshot Cognito theo sub và kiểm sub khớp, đồng bộ thuộc tính và đúng một group ứng dụng; giữ nguyên group ngoài teacher/head/admin. Khi lỗi trước commit, khôi phục snapshot bằng token hủy độc lập có timeout. Lỗi commit không rõ ràng không tự đảo trạng thái, báo cần đối soát.
+- Khóa user là thao tác fail-closed: commit is_active=false trong DB trước khi Disable/GlobalSignOut. Nếu Cognito lỗi, giữ DB bị khóa và báo lỗi; retry khóa sẽ thử lại các thao tác AWS. Không tự mở khóa user khi đền bù. Đổi role/email kèm khóa cần thực hiện sau khi khóa đã được lưu; lỗi đồng bộ không khôi phục quyền truy cập cũ.
+- Tạo/sửa/khóa user ghi audit_logs cùng transaction với thay đổi DB; bootstrap dùng actor NULL và note nêu công cụ.
+- Reconcile chỉ đọc và báo lệch role/trạng thái/thiếu user hai phía, có phân trang AWS; không tự sửa. Bootstrap admin chạy qua công cụ CLI riêng, chỉ cho phép khi chưa có admin trong DB, không có API bootstrap công khai.
+- Admin chịu trách nhiệm xác nhận quyền sở hữu email mới trước khi cập nhật; thao tác quản trị đặt email_verified=true để email được cập nhật ngay, tránh DB/Cognito dùng hai email khác nhau. Không sử dụng cơ chế này cho tự sửa hồ sơ của người dùng.
 
 #### Chi tiết triển khai A3
 
@@ -345,7 +356,7 @@ Cấu trúc repo (monorepo):
 
 ### 8.1 Bảng chính
 
-- **users**: id, cognito_sub (unique), email, full_name, role, department_id, is_active
+- **users**: id, cognito_sub (unique), email (unique theo lower/btrim), full_name, role, department_id, is_active, created_at
 - **departments** (tổ chuyên môn): id, name · tổ trưởng = các `users` có `role='head'` và `department_id` của tổ (một tổ có thể có nhiều tổ trưởng; không cần bảng riêng)
 - **subjects**: id, name, department_id · **topics** (chương): id, subject_id, grade (10/11/12), name, `sort_order` (tránh dùng từ khóa SQL `order` làm tên cột)
 - **questions**: id, subject_id, topic_id, **department_id** (lưu cố định lúc tạo, dùng cho phân quyền "cùng tổ"), grade, **type**, difficulty, **stem** (Markdown+LaTeX), **payload** (jsonb, theo dạng — mục 8.2), explanation, **status**, **revision**, source (`AI`/`Manual`), ai_job_id, ai_ordinal, **ai_verification** (`NotChecked/Agree/Disagree` + note), ai_reviewed_by_author (bool), created_by, submitted_at, reviewed_by, reviewed_at, review_note, timestamps
@@ -545,6 +556,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.7 — 20/11/2026**
+- Triển khai quản lý user A4, đồng bộ Cognito có đền bù/fail-closed, đối soát chỉ đọc và bootstrap admin CLI. Bổ sung created_at và unique email cho users theo hợp đồng API.
+
 
 **0.6 — 20/11/2026**
 - Hoàn thiện xác thực A3: access token Cognito, hồ sơ/quyền DB theo request và policy mặc định. Quy tắc quyền dùng chung ở Application; tự duyệt trả 403 `SelfReview`, các lỗi quyền khác trả `Forbidden`.

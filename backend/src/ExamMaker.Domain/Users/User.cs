@@ -22,5 +22,8 @@ namespace ExamMaker.Domain.Users
         public Department? Department { get; set; }
 
         public bool IsActive { get; set; } = true;
+
+        // Records insertion time in UTC; existing accounts are backfilled by the migration.
+        public DateTimeOffset CreatedAt { get; set; }
     }
 }

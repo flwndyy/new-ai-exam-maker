@@ -708,6 +708,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("cognito_sub");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
                     b.Property<Guid?>("DepartmentId")
                         .HasColumnType("uuid")
                         .HasColumnName("department_id");
