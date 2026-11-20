@@ -109,3 +109,13 @@ A3 adds two PostgreSQL user-directory tests plus signed-token HTTP and policy
 tests. Only display fields are cached; authorization fields are read on every
 request. A real Cognito smoke test still requires deployment configuration and
 a matching internal account.
+
+## User administration (A4)
+
+See `docs/a4-user-management.md` for administrator endpoints, migration,
+Cognito permissions, failure compensation, read-only reconciliation and the
+private `tools/ExamMaker.Bootstrap` command. Never run bootstrap in CI.
+
+A4 review hardening: shared lazy Cognito client, bounded async/operation/lock
+waits, permission-change audit details and sanitized server diagnostics.
+Bootstrap capability is registered only by the private CLI.

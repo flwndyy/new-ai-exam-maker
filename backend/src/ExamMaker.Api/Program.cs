@@ -1,6 +1,8 @@
 using ExamMaker.Api.Authentication;
+using ExamMaker.Api.Users;
 using ExamMaker.Infrastructure;
 using ExamMaker.Infrastructure.Persistence;
+using ExamMaker.Infrastructure.Users;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +16,8 @@ builder.Services.AddSerilog((services, logger) => logger
     .WriteTo.Console());
 
 builder.Services.AddExamMakerPersistence(builder.Configuration);
+builder.Services.AddUserManagement(builder.Configuration);
+builder.Services.AddExceptionHandler<UserOperationExceptionHandler>();
 builder.Services.AddControllers();
 // Include stable error codes and trace identifiers, including for database failures.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>

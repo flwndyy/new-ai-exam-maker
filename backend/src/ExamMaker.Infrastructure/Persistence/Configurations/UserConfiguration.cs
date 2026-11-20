@@ -52,6 +52,11 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
             builder.Property(x => x.IsActive)
                 .HasColumnName("is_active");
 
+            builder.Property(x => x.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamp with time zone")
+                .HasDefaultValueSql("now()");
+
             builder.HasOne(x => x.Department)
                 .WithMany()
 

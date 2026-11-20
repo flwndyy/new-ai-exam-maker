@@ -207,7 +207,7 @@ public sealed class AuthenticationTests
     }
 }
 
-public sealed class AuthTestFactory : WebApplicationFactory<Program>
+public class AuthTestFactory : WebApplicationFactory<Program>
 {
     private readonly RSA rsa = RSA.Create(2048);
     private readonly RsaSecurityKey key;

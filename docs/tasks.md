@@ -84,6 +84,10 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
   - Smoke test Cognito thật 20/11/2026 do DEV-A thực hiện: Authorization Code + PKCE thành công; GET /api/v1/me trả 200 và hồ sơ teacher đúng tổ. Khóa user trong PostgreSQL local: cùng access token nhận 401; mở khóa: cùng token nhận lại 200. Không lưu token, thông tin đăng nhập hoặc định danh tài nguyên thật trong repo.
 
 - [ ] A4. Quản lý user + đồng bộ Cognito (`AdminCreateUser`/`AddUserToGroup`/`Disable`/`GlobalSignOut`, đền bù khi lỗi); `POST /admin/users/reconcile`; **script tạo admin đầu tiên** (mục 3.3). *Cần Cognito của OPS-2.*
+  - Triển khai local 20/11/2026: API danh sách/chi tiết/tạo/sửa/xóa mềm user chỉ cho admin; đồng bộ Cognito có đền bù, fail-closed, audit log, đối soát chỉ đọc và CLI bootstrap admin. Migration AddUserAdministration bổ sung created_at và unique email chuẩn hóa.
+  - Kiểm tra Release: 135/135 test pass, không skip (79 API, 56 Infrastructure; gồm 30 test PostgreSQL thật và 9 test adapter AWS dùng stub). Chưa chạy bootstrap/tạo lời mời hoặc smoke test A4 với Cognito thật. Chờ review, CI, kiểm thử AWS thật và PR merge vào dev trước khi tick hoàn tất. Xem docs/a4-user-management.md.
+  - Sửa review PR #64: log loại lỗi/mã AWS hoặc SQL/stack không chứa raw message; deadline async 5 giây, toàn thao tác 20 giây, cleanup 5 giây, lock DB 2 giây; audit role/tổ trước-sau; AWS client singleton lazy, Create còn 2 lệnh AWS; bootstrap chỉ đăng ký trong CLI. Các mục tối ưu reconcile/phân tầng/EmailMismatch ghi ở tài liệu để theo dõi riêng.
+
 - [ ] A5. Danh mục: `GET /departments|subjects|topics` + CRUD `/admin/*`.
 
 **Chặng 2 (25–29/11) — Quy trình**
