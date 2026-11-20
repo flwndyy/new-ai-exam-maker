@@ -18,6 +18,7 @@ export MSYS2_ARG_CONV_EXCL="*"
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
+EC2_SG_NAME="${EC2_SG_NAME:-aem-ec2-sg}"
 EXPECT_DELETION_PROTECTION="${EXPECT_DELETION_PROTECTION:-$([ "$ENV_NAME" = "prod" ] && echo "true" || echo "any")}"
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
@@ -137,13 +138,14 @@ else
   fail "Storage encryption at rest is NOT enabled (StorageEncrypted=${STORAGE_ENCRYPTED})"
 fi
 
-# 7. Storage type is gp3 and allocated storage <= 20 GB (budget guardrail)
+# 7. Storage type is gp3 and allocated storage <= 40 GB (budget target: 20 GB initial, 40 GB max autoscaling)
 STORAGE_TYPE="$(jq -r '.DBInstances[0].StorageType // empty' <<<"$DB_JSON")"
 ALLOCATED_STORAGE="$(jq -r '.DBInstances[0].AllocatedStorage // 0' <<<"$DB_JSON")"
-if [ "$STORAGE_TYPE" = "gp3" ] && [ "$ALLOCATED_STORAGE" -le 20 ]; then
-  pass "Storage is gp3 ${ALLOCATED_STORAGE} GB (<= 20 GB budget target)"
+MAX_ALLOCATED_STORAGE="$(jq -r '.DBInstances[0].MaxAllocatedStorage // 0' <<<"$DB_JSON")"
+if [ "$STORAGE_TYPE" = "gp3" ] && [ "$ALLOCATED_STORAGE" -le 40 ]; then
+  pass "Storage is gp3 (allocated=${ALLOCATED_STORAGE} GB, max=${MAX_ALLOCATED_STORAGE} GB <= 40 GB budget ceiling)"
 else
-  fail "Expected gp3 <= 20 GB, got '${STORAGE_TYPE} ${ALLOCATED_STORAGE} GB'"
+  fail "Expected gp3 <= 40 GB, got '${STORAGE_TYPE} ${ALLOCATED_STORAGE} GB (max=${MAX_ALLOCATED_STORAGE})'"
 fi
 
 # 8. Automated backup retention is short (1..7 days)
@@ -162,7 +164,7 @@ else
   fail "CopyTagsToSnapshot is NOT enabled (${COPY_TAGS})"
 fi
 
-# 10. DB Subnet Group spans >= 2 AZs and none of its subnets route 0.0.0.0/0 to an Internet Gateway
+# 10. DB Subnet Group spans >= 2 AZs and none of its subnets route 0.0.0.0/0 or ::/0 to IGW or use NAT Gateway
 SUBNET_GROUP_NAME="$(jq -r '.DBInstances[0].DBSubnetGroup.DBSubnetGroupName // empty' <<<"$DB_JSON" | tr -d '\r\n')"
 VPC_ID="$(jq -r '.DBInstances[0].DBSubnetGroup.VpcId // empty' <<<"$DB_JSON" | tr -d '\r\n')"
 AZ_COUNT="$(jq -r '[.DBInstances[0].DBSubnetGroup.Subnets[].SubnetAvailabilityZone.Name] | unique | length' <<<"$DB_JSON" | tr -d '\r\n')"
@@ -172,41 +174,64 @@ while IFS= read -r sid; do
   [ -n "$sid" ] && SUBNET_IDS_ARR+=("$sid")
 done < <(jq -r '.DBInstances[0].DBSubnetGroup.Subnets[].SubnetIdentifier' <<<"$DB_JSON")
 
-HAS_IGW_ROUTE="false"
+HAS_PUBLIC_OR_NAT_ROUTE="false"
 if [ "${#SUBNET_IDS_ARR[@]}" -gt 0 ] && [ -n "$VPC_ID" ]; then
   RT_JSON="$(aws ec2 describe-route-tables \
     --region "$AWS_REGION" \
     --filters "Name=vpc-id,Values=${VPC_ID}" \
     --output json)"
-  MAIN_RT_HAS_IGW="$(jq -r '
-    [.RouteTables[] | select(any(.Associations[]?; .Main == true)) | .Routes[]? | select(.DestinationCidrBlock == "0.0.0.0/0" and ((.GatewayId // "") | startswith("igw-")))] | length > 0
+  MAIN_RT_BAD="$(jq -r '
+    [.RouteTables[] | select(any(.Associations[]?; .Main == true)) | .Routes[]? |
+      select(
+        ((.DestinationCidrBlock == "0.0.0.0/0") and ((.GatewayId // "") | startswith("igw-"))) or
+        ((.DestinationIpv6CidrBlock == "::/0") and ((.GatewayId // "") | (startswith("igw-") or startswith("eigw-")))) or
+        ((.NatGatewayId // "") | startswith("nat-"))
+      )
+    ] | length > 0
   ' <<<"$RT_JSON")"
   for sid in "${SUBNET_IDS_ARR[@]}"; do
     EXPLICIT_RT="$(jq -c --arg sid "$sid" '[.RouteTables[] | select(any(.Associations[]?; .SubnetId == $sid))]' <<<"$RT_JSON")"
     if [ "$(jq -r 'length' <<<"$EXPLICIT_RT")" -gt 0 ]; then
-      if jq -e '[.[].Routes[]? | select(.DestinationCidrBlock == "0.0.0.0/0" and ((.GatewayId // "") | startswith("igw-")))] | length > 0' <<<"$EXPLICIT_RT" >/dev/null; then
-        HAS_IGW_ROUTE="true"
+      if jq -e '[.[].Routes[]? |
+        select(
+          ((.DestinationCidrBlock == "0.0.0.0/0") and ((.GatewayId // "") | startswith("igw-"))) or
+          ((.DestinationIpv6CidrBlock == "::/0") and ((.GatewayId // "") | (startswith("igw-") or startswith("eigw-")))) or
+          ((.NatGatewayId // "") | startswith("nat-"))
+        )
+      ] | length > 0' <<<"$EXPLICIT_RT" >/dev/null; then
+        HAS_PUBLIC_OR_NAT_ROUTE="true"
       fi
-    elif [ "$MAIN_RT_HAS_IGW" = "true" ]; then
-      HAS_IGW_ROUTE="true"
+    elif [ "$MAIN_RT_BAD" = "true" ]; then
+      HAS_PUBLIC_OR_NAT_ROUTE="true"
     fi
   done
 fi
 
-if [ "$AZ_COUNT" -ge 2 ] && [ "$HAS_IGW_ROUTE" = "false" ]; then
-  pass "DB Subnet Group '${SUBNET_GROUP_NAME}' spans ${AZ_COUNT} AZs with private subnets (no 0.0.0.0/0 -> IGW)"
+if [ "$AZ_COUNT" -ge 2 ] && [ "$HAS_PUBLIC_OR_NAT_ROUTE" = "false" ]; then
+  pass "DB Subnet Group '${SUBNET_GROUP_NAME}' spans ${AZ_COUNT} AZs with private subnets (no 0.0.0.0/0 or ::/0 -> IGW, no NAT Gateway)"
 else
-  fail "DB Subnet Group check failed (AZs=${AZ_COUNT}, has_igw_route=${HAS_IGW_ROUTE})"
+  fail "DB Subnet Group check failed (AZs=${AZ_COUNT}, has_public_or_nat_route=${HAS_PUBLIC_OR_NAT_ROUTE})"
 fi
 
-# 11. Security Group allows TCP 5432 ONLY from Security Group sources (no CIDR / 0.0.0.0/0 / ::/0)
+# 11. Security Group allows TCP 5432 ONLY from aem-ec2-sg source (no CIDR / 0.0.0.0/0 / ::/0, no prefix lists)
 SG_IDS_ARR=()
 while IFS= read -r sgid; do
   sgid="$(printf '%s' "$sgid" | tr -d '\r\n')"
   [ -n "$sgid" ] && SG_IDS_ARR+=("$sgid")
 done < <(jq -r '.DBInstances[0].VpcSecurityGroups[].VpcSecurityGroupId' <<<"$DB_JSON")
 
+EC2_SG_ID=""
+if [ -n "$VPC_ID" ]; then
+  EC2_SG_ID="$(aws ec2 describe-security-groups \
+    --region "$AWS_REGION" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${EC2_SG_NAME}" \
+    --query "SecurityGroups[0].GroupId" \
+    --output text 2>/dev/null | tr -d '\r\n' || echo "")"
+  [ "$EC2_SG_ID" = "None" ] && EC2_SG_ID=""
+fi
+
 SG_OK="false"
+SG_ERR=""
 if [ "${#SG_IDS_ARR[@]}" -gt 0 ]; then
   SG_JSON="$(aws ec2 describe-security-groups \
     --region "$AWS_REGION" \
@@ -215,21 +240,34 @@ if [ "${#SG_IDS_ARR[@]}" -gt 0 ]; then
   HAS_CIDR_INGRESS="$(jq -r '
     [.SecurityGroups[].IpPermissions[]? | ((.IpRanges // []) + (.Ipv6Ranges // []))[]] | length > 0
   ' <<<"$SG_JSON")"
-  HAS_SG_5432="$(jq -r '
-    [.SecurityGroups[].IpPermissions[]? | select(.IpProtocol == "tcp" and .FromPort == 5432 and .ToPort == 5432 and ((.UserIdGroupPairs // []) | length > 0))] | length > 0
+  HAS_PL_INGRESS="$(jq -r '
+    [.SecurityGroups[].IpPermissions[]? | (.PrefixListIds // [])[]] | length > 0
   ' <<<"$SG_JSON")"
   HAS_OTHER_INGRESS="$(jq -r '
     [.SecurityGroups[].IpPermissions[]? | select((.IpProtocol == "tcp" and .FromPort == 5432 and .ToPort == 5432) | not)] | length > 0
   ' <<<"$SG_JSON")"
-  if [ "$HAS_CIDR_INGRESS" = "false" ] && [ "$HAS_SG_5432" = "true" ] && [ "$HAS_OTHER_INGRESS" = "false" ]; then
+
+  SOURCE_SG_IDS="$(jq -r '[.SecurityGroups[].IpPermissions[]? | select(.IpProtocol == "tcp" and .FromPort == 5432 and .ToPort == 5432) | .UserIdGroupPairs[]?.GroupId] | unique | .[]' <<<"$SG_JSON" | tr -d '\r\n')"
+
+  if [ "$HAS_CIDR_INGRESS" = "true" ]; then
+    SG_ERR="Contains CIDR / IP ranges in ingress"
+  elif [ "$HAS_PL_INGRESS" = "true" ]; then
+    SG_ERR="Contains PrefixListIds in ingress"
+  elif [ "$HAS_OTHER_INGRESS" = "true" ]; then
+    SG_ERR="Contains ports/protocols other than TCP 5432"
+  elif [ -z "$SOURCE_SG_IDS" ]; then
+    SG_ERR="No Security Group ingress source found for TCP 5432"
+  elif [ -n "$EC2_SG_ID" ] && [ "$SOURCE_SG_IDS" != "$EC2_SG_ID" ]; then
+    SG_ERR="Ingress source '${SOURCE_SG_IDS}' does not match expected EC2 SG '${EC2_SG_NAME}' (${EC2_SG_ID})"
+  else
     SG_OK="true"
   fi
 fi
 
 if [ "$SG_OK" = "true" ]; then
-  pass "RDS Security Group restricts ingress strictly to TCP 5432 from Security Group source(s) only"
+  pass "RDS Security Group restricts ingress strictly to TCP 5432 from '${EC2_SG_NAME}' (${EC2_SG_ID:-SG verified}) only"
 else
-  fail "RDS Security Group ingress is not strictly TCP 5432 from SG source only (cidr=${HAS_CIDR_INGRESS:-unknown}, sg5432=${HAS_SG_5432:-unknown}, other=${HAS_OTHER_INGRESS:-unknown})"
+  fail "RDS Security Group ingress check failed: ${SG_ERR:-unknown error}"
 fi
 
 # 12. Performance Insights & Enhanced Monitoring disabled (cost guardrail)

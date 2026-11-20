@@ -19,9 +19,10 @@ Tài liệu hướng dẫn dựng, kiểm tra, bàn giao, chụp snapshot và **
 | Lưu trữ | **`gp3` 20 GB** (autoscaling trần 40 GB để tránh đầy đĩa đột ngột) | `docs/context.md` §6 |
 | Mã hóa lưu trữ (at rest) | **Bật** (`StorageEncrypted = true`), dùng key AWS-managed `alias/aws/rds` (**$0**) | `docs/context.md` §5.2, §10 |
 | Mã hóa truyền tải (in transit) | **Bật** (`rds.force_ssl = 1` mặc định trên PG 16; Npgsql dùng `SSL Mode=Require`) | `docs/context.md` §10 |
-| Backup tự động | Retention **3 ngày** (ngắn để nằm gọn trong 20 GB free backup storage), cửa sổ `15:00-15:30` UTC (`22:00-22:30` giờ VN) | `docs/context.md` §6, §12 |
+| Automated backups | Retention **3 ngày** (ngắn để nằm gọn trong 20 GB free backup storage), cửa sổ `13:00-13:30` UTC (`20:00-20:30` giờ VN, trước giờ dừng 23:00) | `docs/context.md` §6, §12 |
 | Giám sát nâng cao | Tắt Performance Insights & Enhanced Monitoring (`MonitoringInterval = 0`) để không phát sinh phí CloudWatch | `docs/context.md` §6 |
-| Bảo vệ xoá (`DeletionProtection`) | `dev`: `false` · `prod`: `true` | `infra/rds/setup-rds.sh` |
+| Bảo vệ xoá (`DeletionProtection`) | `false` cho dev; có thể bật `true` trước demo để chống xoá nhầm | `infra/rds/setup-rds.sh` |
+| Hạn mức instance ($200) | **Duy nhất 1 instance** dùng chung cho dev và demo (`exammaker-dev-pg`). Cấm tạo thêm instance song song để không vượt trần ngân sách | `docs/context.md` §6, §11 |
 | Dự toán chi phí (2 tháng) | Compute `$19.20` (480 giờ/tháng, 07:00–23:00) + Storage/Snapshot `$6.48` = **`$25.68`** | `docs/context.md` §6 |
 
 ---
@@ -43,31 +44,35 @@ Trước khi chạy script hoặc dựng trên Console, tài khoản AWS ở reg
 **Yêu cầu công cụ:** `aws` (CLI v2), `jq`, `openssl` — cả 3 đều **được cài sẵn trong AWS CloudShell** (`ap-southeast-1`). Script cũng đã tích hợp `MSYS_NO_PATHCONV=1` cho Git Bash trên Windows.
 
 ```bash
-# Môi trường dev (DeletionProtection=false)
+# Môi trường chuẩn (Single-instance, DeletionProtection=false)
 ./infra/rds/setup-rds.sh
 
-# Môi trường prod / demo (DeletionProtection=true)
-ENV_NAME=prod ./infra/rds/setup-rds.sh
+# Bật DeletionProtection để bảo vệ trước buổi demo:
+DELETION_PROTECTION=true ./infra/rds/setup-rds.sh
 ```
 
-**Hành vi idempotent:**
+> [!WARNING]
+> **Quy tắc ngân sách $200:** Ngân sách dự án chỉ tính cho **duy nhất 1 instance RDS**. Tuyệt đối không chạy thêm `ENV_NAME=prod` cùng lúc với `dev` (sẽ nhân đôi chi phí compute/storage lên ~$51, có nguy cơ vượt hạn mức $200). Môi trường dev và demo dùng chung instance `exammaker-dev-pg`.
+
+**Hành vi create-if-absent & an toàn mật khẩu:**
 - Tự động tìm `aem-demo-vpc`, `aem-private-a`, `aem-private-b`, `aem-rds-sg` theo tên (có thể ghi đè qua biến `VPC_NAME`, `PRIVATE_SUBNET_NAMES`, `RDS_SG_NAME`, hoặc truyền trực tiếp `SUBNET_IDS` và `RDS_SG_ID`).
-- Nếu tạo mới: tự sinh mật khẩu mạnh 32 ký tự chữ-số (an toàn cho Npgsql connection string), đợi RDS `available` (~4–7 phút), lưu `${SSM_PREFIX}/ConnectionStrings/ExamMaker` dạng **`SecureString`** (không in mật khẩu ra màn hình) và 5 metadata key dưới `${SSM_PREFIX}/Rds/*`.
-- Nếu chạy lại trên instance đã tồn tại: tái sử dụng instance và giữ nguyên mật khẩu/SecureString hiện có trong SSM (không ghi đè làm hỏng mật khẩu DB).
+- **An toàn mật khẩu:** Nếu tạo mới, script sinh mật khẩu ngẫu nhiên 32 ký tự chữ-số và **lưu ngay vào SSM Parameter Store dạng `SecureString` (`${SSM_PREFIX}/Rds/MasterPassword`) TRƯỚC KHI gọi `create-db-instance`**. Điều này đảm bảo mật khẩu không bao giờ bị mất nếu phiên CloudShell bị timeout hay rớt mạng giữa chừng khi đang chờ RDS khởi tạo.
+- Đợi RDS `available` (~4–7 phút), lưu `${SSM_PREFIX}/ConnectionStrings/ExamMaker` dạng **`SecureString`** (không in mật khẩu ra màn hình) và 5 metadata key dưới `${SSM_PREFIX}/Rds/*`.
+- Nếu chạy lại trên instance đã tồn tại: script đọc lại `${SSM_PREFIX}/Rds/MasterPassword` từ SSM để đảm bảo connection string luôn đầy đủ và không ghi đè làm mất mật khẩu DB. Để kiểm tra độ sai lệch cấu hình (drift), hãy chạy `./infra/rds/verify-rds.sh`.
 
 ---
 
 ## 4. Cách 2: Dựng thủ công trên AWS Console
 
 1. **Tạo DB Subnet Group** (*RDS → Subnet groups → Create DB subnet group*):
-   - Name: `exammaker-dev-db-subnets` (hoặc `exammaker-prod-db-subnets`).
+   - Name: `exammaker-dev-db-subnets`.
    - VPC: `aem-demo-vpc`.
    - Subnets: chọn **`aem-private-a`** và **`aem-private-b`** (2 AZ khác nhau).
 2. **Tạo Database** (*RDS → Databases → Create database*):
    - Creation method: **Standard create** · Engine: **PostgreSQL** · Version: **16.x** (mới nhất trong dòng 16).
    - Templates: **Free tier** hoặc **Dev/Test** (chủ động kiểm tra lại các mục bên dưới để đảm bảo Single-AZ).
    - Availability and durability: **Single-AZ DB instance deployment**.
-   - DB instance identifier: `exammaker-dev-pg` (hoặc `exammaker-prod-pg`).
+   - DB instance identifier: `exammaker-dev-pg`.
    - Master username: `exammaker_admin` · đặt mật khẩu mạnh 24–32 ký tự chữ + số (tránh ký tự `;`, `=`, `@`, `/`, `"`).
    - Instance configuration: Burstable classes → **`db.t4g.micro`**.
    - Storage: **`gp3`**, Allocated storage **`20` GiB**, Enable storage autoscaling max **`40` GiB**.
@@ -80,14 +85,15 @@ ENV_NAME=prod ./infra/rds/setup-rds.sh
    - Monitoring: **Tắt** Performance Insights và **Tắt** Enhanced monitoring.
    - Additional configuration:
      - Initial database name: **`exammaker`**
-     - Automated backups: **Bật**, Retention period **`3` days**, Backup window `15:00-15:30` UTC, bật **Copy tags to snapshots**.
+     - Automated backups: **Bật**, Retention period **`3` days**, Backup window `13:00-13:30` UTC, bật **Copy tags to snapshots**.
      - Encryption: **Enable encryption** với AWS-managed key `(default) aws/rds`.
-     - Deletion protection: **Tắt** cho `dev`, **Bật** cho `prod`.
+     - Deletion protection: **Tắt** cho `dev` (hoặc **Bật** trước ngày demo).
 3. **Lưu cấu hình vào SSM Parameter Store** (*Systems Manager → Parameter Store → Create parameter*):
+   - `${SSM_PREFIX}/Rds/MasterPassword` — Type: **`SecureString`** (KMS key mặc định `alias/aws/ssm`), Value: `<mat-khau>`
    - `${SSM_PREFIX}/ConnectionStrings/ExamMaker` — Type: **`SecureString`** (KMS key mặc định `alias/aws/ssm`), Value:
      `Host=<endpoint>;Port=5432;Database=exammaker;Username=exammaker_admin;Password=<mat-khau>;SSL Mode=Require`
    - Các metadata dạng `String` (Standard, miễn phí):
-     - `${SSM_PREFIX}/Rds/InstanceId` = `exammaker-<env>-pg`
+     - `${SSM_PREFIX}/Rds/InstanceId` = `exammaker-dev-pg`
      - `${SSM_PREFIX}/Rds/Endpoint` = `<endpoint>`
      - `${SSM_PREFIX}/Rds/Port` = `5432`
      - `${SSM_PREFIX}/Rds/Database` = `exammaker`
@@ -99,9 +105,11 @@ ENV_NAME=prod ./infra/rds/setup-rds.sh
 
 - **Backend (.NET 10):** `backend/src/ExamMaker.Infrastructure/ParameterStoreConfiguration.cs` khi đặt `ParameterStore__Path=/exammaker/<env>` sẽ tự động ánh xạ `${SSM_PREFIX}/ConnectionStrings/ExamMaker` vào `ConnectionStrings:ExamMaker` (`ConnectionStrings__ExamMaker` theo `backend/README.md`).
 - **Quyền IAM tối thiểu cho EC2 Instance Profile (Task `O3`):**
-  - `ssm:GetParametersByPath`, `ssm:GetParameter`, `ssm:GetParameters` giới hạn `Resource` ở `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/<env>/*`.
-  - `kms:Decrypt` giới hạn ở AWS-managed key `alias/aws/ssm` (để giải mã `SecureString`).
-  - **Không** cấp quyền `rds:*` cho EC2 runtime (ứng dụng chỉ kết nối qua TCP 5432 bằng connection string).
+  - Xem định nghĩa mẫu tại [`infra/iam/exammaker-ec2-policy.example.json`](../../infra/iam/exammaker-ec2-policy.example.json) (statement `ReadConfiguredParameters`).
+  - EC2 chỉ cần quyền `ssm:GetParametersByPath`, `ssm:GetParameter`, `ssm:GetParameters` trên `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/<env>/*`.
+  - Với key AWS-managed `alias/aws/ssm`, key policy mặc định của AWS đã cho phép tất cả principal trong tài khoản giải mã khi gọi qua dịch vụ SSM (`kms:ViaService`), do đó **không cần** thêm quyền `kms:Decrypt` riêng trong IAM policy của EC2.
+  - **Không** cấp quyền `rds:*` cho EC2 runtime (ứng dụng kết nối bảo mật qua mạng nội bộ TCP 5432 bằng connection string).
+- **Ghi nhận nợ kỹ thuật (Least Privilege - B1):** Hiện tại connection string đang dùng master user `exammaker_admin`. Để tuân thủ least-privilege triệt để trong tương lai, nên tạo role ứng dụng riêng `exammaker_app` (owner của DB schema để chạy migration bundle nhưng không có `rds_superuser`).
 
 ---
 
@@ -110,11 +118,8 @@ ENV_NAME=prod ./infra/rds/setup-rds.sh
 ### 6.1 Kiểm tra tự động 15 tiêu chí bảo mật, mạng & ngân sách
 
 ```bash
-# Môi trường dev
+# Môi trường dev (Single-instance)
 ./infra/rds/verify-rds.sh
-
-# Môi trường prod (bắt buộc DeletionProtection=true)
-ENV_NAME=prod ./infra/rds/verify-rds.sh
 ```
 
 Script xác minh đầy đủ **15 tiêu chí**:
@@ -124,42 +129,75 @@ Script xác minh đầy đủ **15 tiêu chí**:
 4. Triển khai Single-AZ (`MultiAZ = false`).
 5. Không công khai (`PubliclyAccessible = false`).
 6. Mã hóa đĩa (`StorageEncrypted = true`).
-7. Loại ổ đĩa `gp3` và dung lượng khởi tạo `≤ 20 GB`.
+7. Loại ổ đĩa `gp3`, dung lượng ban đầu 20 GB và trần autoscaling `≤ 40 GB` (bảo vệ ngân sách).
 8. Automated backup retention ngắn (`1–7` ngày).
 9. `CopyTagsToSnapshot = true`.
-10. DB Subnet Group trải trên `≥ 2` AZ và **không** có subnet nào route `0.0.0.0/0` ra Internet Gateway (`igw-*`).
-11. Security Group chỉ mở duy nhất TCP `5432` từ nguồn là Security Group (`aem-ec2-sg`), không có rule CIDR / `0.0.0.0/0` / `::/0`.
-12. Performance Insights và Enhanced Monitoring đều tắt.
+10. DB Subnet Group trải trên `≥ 2` AZ và **không** có subnet nào route `0.0.0.0/0` hoặc `::/0` ra Internet Gateway (`igw-*`, `eigw-*`) hoặc đi qua NAT Gateway.
+11. Security Group chỉ mở duy nhất TCP `5432` từ nguồn là Security Group `aem-ec2-sg`, không có rule CIDR / `0.0.0.0/0` / `::/0` và không có Prefix List.
+12. Performance Insights và Enhanced Monitoring đều tắt (tránh phát sinh chi phí CloudWatch).
 13. `rds.force_ssl = 1` đang có hiệu lực trong parameter group.
-14. `DeletionProtection` khớp chính sách môi trường (`true` trên `prod`).
+14. `DeletionProtection` khớp chính sách môi trường.
 15. Trạng thái instance là `available`.
 
 ### 6.2 Kiểm tra kết nối & chạy migration `A2` từ EC2 (sau khi có Task `O3`)
 
-Vì RDS nằm trong private subnet, không kết nối trực tiếp từ máy cá nhân. Mở **SSM Session Manager** vào EC2 (`aem-ec2-sg`) rồi kiểm tra:
+Vì RDS nằm trong private subnet, không thể kết nối trực tiếp từ máy cá nhân. Mở **SSM Session Manager** vào EC2 (`aem-ec2-sg`) rồi thực hiện:
 
 ```bash
-# 1. Lấy connection string từ SSM vào biến phiên tạm (không ghi ra file)
+# 1. Cài đặt PostgreSQL 16 client trên Amazon Linux 2023
+sudo dnf install -y postgresql16
+
+# 2. Lấy connection string hoặc password từ SSM vào biến phiên tạm (không ghi ra file, không lộ vào shell history)
 export ConnectionStrings__ExamMaker="$(aws ssm get-parameter --region ap-southeast-1 \
   --name /exammaker/dev/ConnectionStrings/ExamMaker --with-decryption \
   --query Parameter.Value --output text)"
 
-# 2. Chạy EF Core migration bundle (hoặc dotnet ef database update trên máy build)
-# 3. Xác nhận dữ liệu seed A2 (kỳ vọng: departments=4, subjects=4, topics=82)
-psql "host=$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Rds/Endpoint --query Parameter.Value --output text) \
-  port=5432 dbname=exammaker user=exammaker_admin sslmode=require" \
+export PGPASSWORD="$(aws ssm get-parameter --region ap-southeast-1 \
+  --name /exammaker/dev/Rds/MasterPassword --with-decryption \
+  --query Parameter.Value --output text 2>/dev/null || \
+  aws ssm get-parameter --region ap-southeast-1 \
+  --name /exammaker/dev/ConnectionStrings/ExamMaker --with-decryption \
+  --query Parameter.Value --output text | sed -n 's/.*Password=\([^;]*\).*/\1/p')"
+
+# 3. Chạy EF Core migration bundle (hoặc dotnet ef database update trên máy build)
+# 4. Xác nhận dữ liệu seed A2 (kỳ vọng: departments=4, subjects=4, topics=82)
+DB_HOST="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Rds/Endpoint --query Parameter.Value --output text)"
+DB_USER="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Rds/Username --query Parameter.Value --output text)"
+
+psql "host=${DB_HOST} port=5432 dbname=exammaker user=${DB_USER} sslmode=require" \
   -c "SELECT 'departments' AS table_name, COUNT(*) FROM departments
       UNION ALL SELECT 'subjects', COUNT(*) FROM subjects
       UNION ALL SELECT 'topics', COUNT(*) FROM topics;"
+```
 ```
 
 ---
 
 ## 7. Quy trình chụp Snapshot & Thử khôi phục (Restore Drill — bắt buộc theo mục 12)
 
-Theo `docs/context.md` §11–§12 và yêu cầu Issue #22, cần **chụp snapshot thủ công trước mỗi migration lớn** và **thực hiện thử khôi phục ít nhất 1 lần trước buổi demo** trên một instance tạm (tuyệt đối không ghi đè DB đang chạy):
+Theo `docs/context.md` §11–§12 và yêu cầu Issue #22:
+1. **Chụp snapshot thủ công trước mỗi migration lớn.**
+2. **Thực hiện thử khôi phục ít nhất 1 lần trước buổi demo** trên một instance tạm (tuyệt đối không ghi đè DB đang chạy).
+3. **Phân định hai mức kiểm thử khôi phục:**
+   - **Chặng 1 (O10):** Đã chạy thành công kịch bản thử khôi phục tự động ở tầng hạ tầng (**Infrastructure Restore Drill**) qua `./infra/rds/restore-drill.sh`: tự động chụp snapshot -> restore instance tạm -> xác minh 100% guardrails (Single-AZ, private, storage encrypted, available) -> tự động dọn dẹp an toàn qua `EXIT` trap để không phát sinh chi phí.
+   - **Chặng 3 (O16):** Thực hiện kiểm thử toàn vẹn dữ liệu ứng dụng (**Data Integrity Verification**) từ EC2 (O3) qua SSM Session Manager sau khi đã triển khai migration bundle A2 và seed data.
 
-### Bước 1: Chụp snapshot thủ công
+> [!CAUTION]
+> **Cảnh báo chống mất dữ liệu:** Lệnh `aws rds delete-db-instance --skip-final-snapshot` **CHỈ ĐƯỢC PHÉP ÁP DỤNG cho instance tạm `exammaker-dev-pg-restore-test`**. TUYỆT ĐỐI KHÔNG chạy lệnh này trên instance chính `exammaker-dev-pg`!
+
+### Cách khuyên dùng: Chạy script tự động có cơ chế bảo vệ ngân sách (Trap Cleanup)
+
+```bash
+# Chạy toàn bộ quy trình drill và tự động dọn dẹp sạch sẽ
+./infra/rds/restore-drill.sh
+
+# Hoặc tạm dừng trước khi dọn dẹp để kết nối kiểm tra thủ công qua EC2
+KEEP_FOR_MANUAL_CHECK=1 ./infra/rds/restore-drill.sh
+```
+
+### Các bước thao tác chi tiết (tham chiếu):
+
+#### Bước 1: Chụp snapshot thủ công
 
 ```bash
 ENV_NAME="${ENV_NAME:-dev}"
@@ -177,7 +215,7 @@ aws rds wait db-snapshot-available \
 echo "Snapshot ready: ${SNAP_ID}"
 ```
 
-### Bước 2: Khôi phục ra instance tạm trong cùng private subnet & SG
+#### Bước 2: Khôi phục ra instance tạm trong cùng private subnet & SG
 
 ```bash
 RESTORE_ID="${DB_ID}-restore-test"
@@ -202,7 +240,7 @@ aws rds wait db-instance-available \
   --db-instance-identifier "$RESTORE_ID"
 ```
 
-### Bước 3: Xác minh instance khôi phục
+#### Bước 3: Xác minh instance khôi phục
 
 ```bash
 aws rds describe-db-instances \
@@ -212,9 +250,9 @@ aws rds describe-db-instances \
   --output table
 ```
 
-*(Nếu đã có EC2 từ O3, kết nối từ EC2 qua SSM Session Manager tới Endpoint của `RESTORE_ID` và chạy lại câu `SELECT COUNT(*)` bảng `departments`/`subjects`/`topics`/`users` để xác nhận dữ liệu nguyên vẹn 100%).*
+*(Trong Chặng 3, sau khi có EC2 từ O3, kết nối từ EC2 qua SSM Session Manager tới Endpoint của `RESTORE_ID` và chạy lại câu `SELECT COUNT(*)` bảng `departments`/`subjects`/`topics`/`users` và bảng `__EFMigrationsHistory` để xác nhận dữ liệu nguyên vẹn 100%).*
 
-### Bước 4: Xoá ngay tài nguyên test để không tốn ngân sách
+#### Bước 4: Xoá ngay tài nguyên test để không tốn ngân sách
 
 ```bash
 aws rds delete-db-instance \

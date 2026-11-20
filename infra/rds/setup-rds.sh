@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Idempotent setup script for Amazon RDS PostgreSQL 16 (AI Exam Maker - Task O10).
-# Creates or reconciles:
+# Create-if-absent setup script for Amazon RDS PostgreSQL 16 (AI Exam Maker - Task O10).
+# Creates (if not already present) and publishes configuration for:
 #   - DB Subnet Group spanning >= 2 private subnets in different AZs (from O2: aem-private-a, aem-private-b)
 #   - RDS PostgreSQL 16 instance: db.t4g.micro, Single-AZ, private (non-public), gp3 20 GB,
 #     storage-encrypted (AWS-managed aws/rds key = $0), automated backups (3-day retention)
-#   - SSM Parameter Store entries under ${SSM_PREFIX}/ConnectionStrings/ExamMaker (SecureString)
-#     and ${SSM_PREFIX}/Rds/* (Standard String metadata)
+#   - SSM Parameter Store entries under ${SSM_PREFIX}/ConnectionStrings/ExamMaker (SecureString),
+#     ${SSM_PREFIX}/Rds/MasterPassword (SecureString), and ${SSM_PREFIX}/Rds/* (Standard String metadata)
+#
+# Note: For drift detection and compliance auditing against the $200 budget, run ./infra/rds/verify-rds.sh.
 #
 # Dependencies: aws (CLI v2), jq, openssl (all pre-installed in AWS CloudShell).
 #
 # Usage (AWS CloudShell, Linux, macOS, or Git Bash with jq):
 #   ./infra/rds/setup-rds.sh
 #
-# Production / demo environment (enables DeletionProtection=true by default):
-#   ENV_NAME=prod ./infra/rds/setup-rds.sh
+# Explicitly set DeletionProtection (e.g., for demo protection):
+#   DELETION_PROTECTION=true ./infra/rds/setup-rds.sh
 #
 # Custom O2 resource names (if different from docs/aws-o2-vpc-security-groups.md):
 #   VPC_NAME=aem-demo-vpc PRIVATE_SUBNET_NAMES="aem-private-a,aem-private-b" RDS_SG_NAME=aem-rds-sg \
@@ -47,9 +49,9 @@ DB_USERNAME="${DB_USERNAME:-exammaker_admin}"
 DB_ALLOCATED_STORAGE="${DB_ALLOCATED_STORAGE:-20}"
 DB_MAX_ALLOCATED_STORAGE="${DB_MAX_ALLOCATED_STORAGE:-40}"
 DB_BACKUP_RETENTION_DAYS="${DB_BACKUP_RETENTION_DAYS:-3}"
-# 15:00-15:30 UTC = 22:00-22:30 ICT (inside 07:00-23:00 active window before nightly stop)
-DB_BACKUP_WINDOW="${DB_BACKUP_WINDOW:-15:00-15:30}"
-DB_MAINTENANCE_WINDOW="${DB_MAINTENANCE_WINDOW:-sun:15:30-sun:16:00}"
+# 13:00-13:30 UTC = 20:00-20:30 ICT (comfortably before nightly stop at 23:00 to avoid InvalidDBInstanceState)
+DB_BACKUP_WINDOW="${DB_BACKUP_WINDOW:-13:00-13:30}"
+DB_MAINTENANCE_WINDOW="${DB_MAINTENANCE_WINDOW:-sun:13:30-sun:14:00}"
 DELETION_PROTECTION="${DELETION_PROTECTION:-}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 
@@ -195,10 +197,33 @@ if [ "$INSTANCE_EXISTS" = "false" ]; then
     fi
   fi
 
+  PASSWORD_PARAM_NAME="${SSM_PREFIX}/Rds/MasterPassword"
   if [ -z "$DB_PASSWORD" ]; then
-    # Alphanumeric 32-char password avoids Npgsql delimiter/quoting issues (;, =, ', ", @, /) and avoids SIGPIPE under pipefail
-    DB_PASSWORD="A$(openssl rand -hex 15)9"
+    # Check if MasterPassword already exists in SSM (e.g. from an earlier interrupted run)
+    EXISTING_SSM_PASS="$(aws ssm get-parameter \
+      --region "$AWS_REGION" \
+      --name "$PASSWORD_PARAM_NAME" \
+      --with-decryption \
+      --query "Parameter.Value" \
+      --output text 2>/dev/null || echo "")"
+    if [ -n "$EXISTING_SSM_PASS" ] && [ "$EXISTING_SSM_PASS" != "None" ]; then
+      DB_PASSWORD="$EXISTING_SSM_PASS"
+      echo "==> Reusing existing master password from SSM '${PASSWORD_PARAM_NAME}'."
+    else
+      # Alphanumeric 32-char password avoids Npgsql delimiter/quoting issues (;, =, ', ", @, /) and avoids SIGPIPE under pipefail
+      DB_PASSWORD="A$(openssl rand -hex 15)9"
+    fi
   fi
+
+  # Persist master password to SSM SecureString BEFORE calling create-db-instance so password is never lost if interrupted
+  echo "==> Persisting master password to SSM SecureString '${PASSWORD_PARAM_NAME}'..."
+  aws ssm put-parameter \
+    --region "$AWS_REGION" \
+    --name "$PASSWORD_PARAM_NAME" \
+    --type SecureString \
+    --value "$DB_PASSWORD" \
+    --description "RDS PostgreSQL master password for AI Exam Maker (AWS-managed aws/ssm)" \
+    --overwrite >/dev/null
 
   CREATE_DEL_PROT="${DELETION_PROTECTION:-$([ "$ENV_NAME" = "prod" ] && echo "true" || echo "false")}"
   DEL_PROT_FLAG="--no-deletion-protection"
@@ -241,12 +266,23 @@ if [ "$INSTANCE_EXISTS" = "false" ]; then
 else
   CURRENT_STATUS="$(jq -r '.DBInstances[0].DBInstanceStatus // empty' <<<"$DB_DESC_OUT")"
   echo "==> Reusing existing RDS instance '${DB_INSTANCE_ID}' (status=${CURRENT_STATUS})."
-  if [ "$CURRENT_STATUS" = "creating" ] || [ "$CURRENT_STATUS" = "starting" ] || [ "$CURRENT_STATUS" = "modifying" ]; then
-    echo "==> Waiting for RDS instance '${DB_INSTANCE_ID}' to become available..."
-    aws rds wait db-instance-available \
-      --region "$AWS_REGION" \
-      --db-instance-identifier "$DB_INSTANCE_ID"
-  fi
+  case "$CURRENT_STATUS" in
+    creating|starting|modifying|backing-up|rebooting|upgrading|storage-optimization)
+      echo "==> Waiting for RDS instance '${DB_INSTANCE_ID}' to become available..."
+      aws rds wait db-instance-available \
+        --region "$AWS_REGION" \
+        --db-instance-identifier "$DB_INSTANCE_ID"
+      ;;
+    available)
+      ;;
+    stopped)
+      echo "WARNING: RDS instance '${DB_INSTANCE_ID}' is currently 'stopped'." >&2
+      echo "         Start it via: aws rds start-db-instance --region ${AWS_REGION} --db-instance-identifier ${DB_INSTANCE_ID}" >&2
+      ;;
+    *)
+      echo "NOTE: RDS instance status is '${CURRENT_STATUS}'."
+      ;;
+  esac
 fi
 
 # 5. Fetch live endpoint/port/db/user metadata
@@ -288,7 +324,18 @@ put_string_param "${SSM_PREFIX}/Rds/Database" "${ACTUAL_DB_NAME:-$DB_NAME}" "RDS
 put_string_param "${SSM_PREFIX}/Rds/Username" "${ACTUAL_USERNAME:-$DB_USERNAME}" "RDS PostgreSQL master username"
 
 CONN_PARAM_NAME="${SSM_PREFIX}/ConnectionStrings/ExamMaker"
-if [ -n "$DB_PASSWORD" ]; then
+PASSWORD_PARAM_NAME="${SSM_PREFIX}/Rds/MasterPassword"
+if [ -z "$DB_PASSWORD" ]; then
+  # Try to read master password from SSM to construct connection string
+  DB_PASSWORD="$(aws ssm get-parameter \
+    --region "$AWS_REGION" \
+    --name "$PASSWORD_PARAM_NAME" \
+    --with-decryption \
+    --query "Parameter.Value" \
+    --output text 2>/dev/null || echo "")"
+fi
+
+if [ -n "$DB_PASSWORD" ] && [ "$DB_PASSWORD" != "None" ]; then
   CONN_STRING="Host=${DB_ENDPOINT};Port=${DB_PORT};Database=${ACTUAL_DB_NAME:-$DB_NAME};Username=${ACTUAL_USERNAME:-$DB_USERNAME};Password=${DB_PASSWORD};SSL Mode=Require"
   aws ssm put-parameter \
     --region "$AWS_REGION" \
@@ -300,11 +347,11 @@ if [ -n "$DB_PASSWORD" ]; then
   unset DB_PASSWORD CONN_STRING
   echo "    Stored SSM SecureString parameter: ${CONN_PARAM_NAME} (value hidden)"
 else
-  # Existing instance reused without passing DB_PASSWORD: verify SSM connection string already exists
+  # Existing instance reused without password available: verify SSM connection string already exists
   if aws ssm get-parameter --region "$AWS_REGION" --name "$CONN_PARAM_NAME" >/dev/null 2>&1; then
     echo "    Kept existing SSM SecureString parameter: ${CONN_PARAM_NAME}"
   else
-    echo "WARNING: Existing RDS instance reused, but '${CONN_PARAM_NAME}' was not found in SSM." >&2
+    echo "WARNING: Existing RDS instance reused, but neither '${PASSWORD_PARAM_NAME}' nor '${CONN_PARAM_NAME}' was found in SSM." >&2
     echo "         Re-run with DB_PASSWORD='<existing-password>' ./infra/rds/setup-rds.sh to populate it." >&2
   fi
 fi
