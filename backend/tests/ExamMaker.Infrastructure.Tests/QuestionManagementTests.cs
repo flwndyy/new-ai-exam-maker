@@ -1,0 +1,317 @@
+using System.Text.Json;
+using ExamMaker.Application.Questions;
+using ExamMaker.Domain.Ai;
+using ExamMaker.Domain.Exams;
+using ExamMaker.Domain.Questions;
+using ExamMaker.Domain.QuestionSets;
+using ExamMaker.Domain.Users;
+using ExamMaker.Infrastructure.Persistence;
+using ExamMaker.Infrastructure.Questions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ExamMaker.Infrastructure.Tests;
+
+public sealed class QuestionManagementTests : IAsyncLifetime
+{
+    private readonly PostgresFixture fixture = new();
+    private readonly Guid owner = Guid.NewGuid(), head = Guid.NewGuid(), otherHead = Guid.NewGuid(), admin = Guid.NewGuid(), outsider = Guid.NewGuid();
+    private static readonly Guid Department = Guid.Parse("10000000-0000-0000-0000-000000000001");
+    private static readonly Guid Subject = Guid.Parse("20000000-0000-0000-0000-000000000001");
+    private static readonly Guid Topic = Guid.Parse("30000000-0000-0000-0000-000000000001");
+    private const string Payload = """{"options":[{"label":"A","text":"One"},{"label":"B","text":"Two"},{"label":"C","text":"Three"},{"label":"D","text":"Four"}],"correctLabel":"A"}""";
+    public Task InitializeAsync() => fixture.InitializeAsync();
+    public Task DisposeAsync() => fixture.DisposeAsync();
+    private static QuestionManagement Service(ExamMakerDbContext db) => new(db, NullLogger<QuestionManagement>.Instance);
+    private static QuestionInput Input(string stem = "Synthetic question") => new(Subject, Topic, 10, "MultipleChoice", "Recognition", stem, JsonSerializer.Deserialize<JsonElement>(Payload));
+
+    /// <summary>Seed synthetic authorization profiles in a disposable database; never call Cognito from integration tests.</summary>
+    private async Task SeedAsync()
+    {
+        await using var db = fixture.CreateContext();
+        foreach (var (id, role, department) in new (Guid, string, Guid?)[]
+        { (owner, "teacher", Department), (head, "head", Department), (otherHead, "head", Department), (admin, "admin", null),
+            (outsider, "head", Guid.Parse("10000000-0000-0000-0000-000000000002")) })
+            db.Users.Add(new User
+            {
+                Id = id,
+                CognitoSub = id.ToString(),
+                Email = id + "@example.invalid",
+                FullName = "Synthetic " + role,
+                Role = role,
+                DepartmentId = department
+            });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Create a question through the production use case with an independent request-scoped DbContext.</summary>
+    private async Task<QuestionView> CreateAsync(Guid? creator = null)
+    {
+        await using var db = fixture.CreateContext();
+        return await Service(db).CreateAsync(creator ?? owner, Input(), default);
+    }
+
+    private async Task<QuestionView> ActAsync(Guid actor, Guid id, QuestionAction action, string? note = null)
+    {
+        await using var db = fixture.CreateContext();
+        return await Service(db).TransitionAsync(actor, id, action, note, default);
+    }
+
+    [PostgresFact]
+    // Exercise rejection/resubmission, metadata clearing, approval, no-op PUT and approved revision reopening.
+    public async Task Review_rounds_and_content_revisions_are_audited_and_persisted()
+    {
+        await SeedAsync();
+        var question = await CreateAsync();
+        Assert.Equal("Draft", question.Status); Assert.Equal("Manual", question.Source); Assert.Equal(1, question.Revision);
+        Assert.Equal(Department, question.DepartmentId); Assert.Equal(owner, question.CreatedBy.Id);
+        await ActAsync(owner, question.Id, QuestionAction.Submit);
+        Assert.Equal(400, (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Reject, " "))).StatusCode);
+        question = await ActAsync(head, question.Id, QuestionAction.Reject, "Correct the reasoning");
+        Assert.Equal("Rejected", question.Status); Assert.Equal(head, question.ReviewedBy!.Id);
+        await using (var db = fixture.CreateContext()) question = await Service(db).UpdateAsync(owner, question.Id, Input("Corrected"), default);
+        Assert.Equal("Rejected", question.Status); Assert.Equal(1, question.Revision);
+        question = await ActAsync(owner, question.Id, QuestionAction.Submit);
+        Assert.Null(question.ReviewedBy); Assert.Null(question.ReviewNote);
+        question = await ActAsync(head, question.Id, QuestionAction.Approve, "Ready");
+        Assert.Equal("Approved", question.Status);
+        await using (var db = fixture.CreateContext()) question = await Service(db).UpdateAsync(owner, question.Id, Input("Corrected"), default);
+        Assert.Equal("Approved", question.Status); Assert.Equal(1, question.Revision);
+        await using (var db = fixture.CreateContext()) question = await Service(db).UpdateAsync(owner, question.Id, Input("New edition"), default);
+        Assert.Equal("Draft", question.Status); Assert.Equal(2, question.Revision); Assert.Null(question.ReviewedBy);
+        await using var verify = fixture.CreateContext();
+        var audit = await verify.AuditLogs.Where(x => x.EntityId == question.Id).ToListAsync();
+        Assert.Equal(7, audit.Count);
+        Assert.Contains(audit, x => x.FromStatus == "Submitted" && x.ToStatus == "Rejected" && x.ActorId == head);
+        Assert.Contains(audit, x => x.FromStatus == "Approved" && x.ToStatus == "Draft" && x.Note == "revision=1->2");
+    }
+
+    [PostgresFact]
+    // Enforce creator ownership, department scope, forbidden admin authorship and admin self-review after a role change.
+    public async Task Permissions_are_rechecked_from_database_for_every_mutation()
+    {
+        await SeedAsync();
+        var question = await CreateAsync(head);
+        await ActAsync(head, question.Id, QuestionAction.Submit);
+        Assert.Equal("SelfReview", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Approve))).Code);
+        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(outsider, question.Id, QuestionAction.Approve))).Code);
+        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(owner, question.Id, QuestionAction.Withdraw))).Code);
+        await using (var db = fixture.CreateContext())
+        {
+            Assert.Equal(403, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(admin, Input(), default))).StatusCode);
+            await db.Users.Where(x => x.Id == head).ExecuteUpdateAsync(x => x.SetProperty(u => u.Role, "admin"));
+        }
+        Assert.Equal("SelfReview", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Approve))).Code);
+        await using (var db = fixture.CreateContext()) await db.Users.Where(x => x.Id == otherHead).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
+        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(otherHead, question.Id, QuestionAction.Approve))).Code);
+        Assert.Equal("Approved", (await ActAsync(admin, question.Id, QuestionAction.Approve)).Status);
+    }
+
+    [PostgresFact]
+    // Submitted questions are immutable, and archived questions cannot be edited, deleted or restored through workflow actions.
+    public async Task Submitted_and_archived_questions_cannot_be_modified_outside_their_workflow()
+    {
+        await SeedAsync();
+        var question = await CreateAsync();
+        await ActAsync(owner, question.Id, QuestionAction.Submit);
+        await using (var db = fixture.CreateContext())
+            Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).UpdateAsync(owner, question.Id, Input("Blocked"), default))).Code);
+        await ActAsync(owner, question.Id, QuestionAction.Withdraw);
+        await ActAsync(owner, question.Id, QuestionAction.Submit);
+        await ActAsync(head, question.Id, QuestionAction.Approve);
+        question = await ActAsync(head, question.Id, QuestionAction.Archive);
+        Assert.Equal("Archived", question.Status);
+        foreach (var action in new[] { QuestionAction.Submit, QuestionAction.Withdraw, QuestionAction.Archive })
+            Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(owner, question.Id, action))).Code);
+        await using var db2 = fixture.CreateContext();
+        Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() => Service(db2).DeleteAsync(owner, question.Id, default))).Code);
+    }
+
+    [PostgresFact]
+    // Review queues omit self-authored work, honor live departments and keep oldest submissions first.
+    public async Task Lists_and_review_queue_apply_visibility_filters_and_pagination_in_SQL()
+    {
+        await SeedAsync();
+        var ownDraft = await CreateAsync();
+        var headDraft = await CreateAsync(head);
+        var submitted = await CreateAsync();
+        await ActAsync(owner, submitted.Id, QuestionAction.Submit);
+        var headSubmitted = await CreateAsync(head);
+        await ActAsync(head, headSubmitted.Id, QuestionAction.Submit);
+        await using var db = fixture.CreateContext();
+        var service = Service(db);
+        Assert.Equal(2, (await service.ListAsync(owner, new(), default)).TotalItems);
+        Assert.Equal(2, (await service.ListAsync(head, new(), default)).TotalItems);
+        Assert.Equal(2, (await service.ListAsync(owner, new(Mine: true), default)).TotalItems);
+        Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => service.GetAsync(owner, headDraft.Id, default))).StatusCode);
+        Assert.Equal(4, (await service.ListAsync(admin, new(), default)).TotalItems);
+        Assert.Equal(submitted.Id, Assert.Single((await service.ReviewQueueAsync(head, new(), default)).Items).Id);
+        Assert.Equal(2, (await service.ReviewQueueAsync(admin, new(), default)).TotalItems);
+        Assert.Empty((await service.ReviewQueueAsync(outsider, new(), default)).Items);
+        Assert.Equal(403, (await Assert.ThrowsAsync<QuestionException>(() => service.ReviewQueueAsync(owner, new(), default))).StatusCode);
+        Assert.Empty((await service.ListAsync(owner, new(Page: 2, PageSize: 100), default)).Items);
+        Assert.Equal(400, (await Assert.ThrowsAsync<QuestionException>(() => service.ListAsync(owner, new(Status: "Unknown"), default))).StatusCode);
+    }
+
+    [PostgresFact]
+    // The worker's AI provenance survives edits while review and verification flags are invalidated.
+    public async Task Ai_questions_require_author_review_and_reset_flags_after_content_changes()
+    {
+        await SeedAsync();
+        var q = await CreateAsync();
+        await using (var db = fixture.CreateContext())
+        {
+            var job = new AiGenerationJob { Id = Guid.NewGuid(), RequestedBy = owner };
+            db.AiGenerationJobs.Add(job); await db.SaveChangesAsync();
+            await db.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Source, "AI")
+                .SetProperty(v => v.AiJobId, job.Id).SetProperty(v => v.AiOrdinal, 1).SetProperty(v => v.AiVerification, "Agree"));
+        }
+        Assert.Equal("AiReviewRequired", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(owner, q.Id, QuestionAction.Submit))).Code);
+        await ActAsync(owner, q.Id, QuestionAction.MarkReviewed);
+        await ActAsync(owner, q.Id, QuestionAction.Submit);
+        await ActAsync(owner, q.Id, QuestionAction.Withdraw);
+        await using var edit = fixture.CreateContext();
+        q = await Service(edit).UpdateAsync(owner, q.Id, Input("Changed AI content"), default);
+        Assert.False(q.AiReviewedByAuthor); Assert.Equal("NotChecked", q.AiVerification); Assert.NotNull(q.AiJobId); Assert.Equal(1, q.AiOrdinal);
+    }
+
+    [PostgresFact]
+    // Keep every source reference intact and permit deletion only after editable links have been removed.
+    public async Task Deletion_rejects_exam_and_collection_references_and_preserves_audit_history()
+    {
+        await SeedAsync();
+        var q = await CreateAsync();
+        await using var db = fixture.CreateContext();
+        var exam = new Exam { Id = Guid.NewGuid(), Title = "Synthetic", SubjectId = Subject, DepartmentId = Department, Grade = 10, CreatedBy = owner };
+        var version = new ExamVersion { Id = Guid.NewGuid(), Exam = exam, VersionNo = 1, DurationMinutes = 45, TotalPoints = 10 };
+        db.ExamVersions.Add(version);
+        await db.SaveChangesAsync();
+        db.ExamVersionQuestions.Add(new ExamVersionQuestion { ExamVersionId = version.Id, SourceQuestionId = q.Id, SourceRevision = 1, SortOrder = 1, Points = 10 });
+        await db.SaveChangesAsync();
+        Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).DeleteAsync(owner, q.Id, default))).Code);
+        await db.ExamVersionQuestions.Where(x => x.SourceQuestionId == q.Id).ExecuteDeleteAsync();
+        var set = new QuestionSet { Id = Guid.NewGuid(), Name = "Synthetic", CreatedBy = owner };
+        db.QuestionSets.Add(set); db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = set.Id, QuestionId = q.Id });
+        await db.SaveChangesAsync();
+        Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).DeleteAsync(owner, q.Id, default))).Code);
+        await db.QuestionSetItems.Where(x => x.QuestionId == q.Id).ExecuteDeleteAsync();
+        await Service(db).DeleteAsync(owner, q.Id, default);
+        Assert.False(await db.Questions.AnyAsync(x => x.Id == q.Id));
+        Assert.True(await db.AuditLogs.AnyAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion"));
+    }
+
+    [PostgresFact]
+    // Submitted exam snapshots retain their old text and revision after the source is reopened and edited.
+    public async Task Editing_approved_source_does_not_change_submitted_exam_snapshots()
+    {
+        await SeedAsync();
+        var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit); await ActAsync(head, q.Id, QuestionAction.Approve);
+        var versionId = Guid.NewGuid();
+        await using (var db = fixture.CreateContext())
+        {
+            var exam = new Exam { Id = Guid.NewGuid(), Title = "Synthetic", SubjectId = Subject, DepartmentId = Department, Grade = 10, CreatedBy = owner };
+            db.ExamVersions.Add(new ExamVersion { Id = versionId, Exam = exam, VersionNo = 1, DurationMinutes = 45, TotalPoints = 10, ContentHash = new string('a', 64) });
+            await db.SaveChangesAsync();
+            db.ExamVersionQuestions.Add(new ExamVersionQuestion
+            {
+                ExamVersionId = versionId,
+                SourceQuestionId = q.Id,
+                SourceRevision = 1,
+                SortOrder = 1,
+                Points = 10,
+                Type = q.Type,
+                Difficulty = q.Difficulty,
+                StemSnapshot = q.Stem,
+                PayloadSnapshot = Payload
+            });
+            await db.SaveChangesAsync();
+            await db.ExamVersions.Where(x => x.Id == versionId).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Submitted").SetProperty(v => v.SubmittedAt, DateTime.UtcNow));
+        }
+        await using var edit = fixture.CreateContext();
+        var changed = await Service(edit).UpdateAsync(owner, q.Id, Input("New source"), default);
+        Assert.Equal(2, changed.Revision);
+        var snapshot = await edit.ExamVersionQuestions.SingleAsync(x => x.ExamVersionId == versionId);
+        Assert.Equal(q.Stem, snapshot.StemSnapshot); Assert.Equal(1, snapshot.SourceRevision);
+    }
+
+    [PostgresFact]
+    // Two reviewers deciding concurrently must produce exactly one successful terminal decision and one conflict.
+    public async Task Concurrent_review_decisions_do_not_overwrite_each_other()
+    {
+        await SeedAsync();
+        var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit);
+        async Task<string> Decide(Guid actor, QuestionAction action)
+        {
+            try { return (await ActAsync(actor, q.Id, action, "Synthetic decision")).Status; }
+            catch (QuestionException error) { return error.Code; }
+        }
+        var outcomes = await Task.WhenAll(Decide(head, QuestionAction.Approve), Decide(otherHead, QuestionAction.Reject));
+        Assert.Single(outcomes, x => x is "Approved" or "Rejected");
+        Assert.Single(outcomes, x => x == "InvalidStateTransition");
+        await using var verify = fixture.CreateContext();
+        Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id && (x.Action == "ApproveQuestion" || x.Action == "RejectQuestion")));
+    }
+
+    [PostgresFact]
+    // Failure to persist the audit must roll back both the row update and its status metadata.
+    public async Task Audit_failure_rolls_back_the_question_transition()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        var options = new DbContextOptionsBuilder<ExamMakerDbContext>().UseNpgsql(fixture.ConnectionString).AddInterceptors(new FailAudit()).Options;
+        await using (var db = new ExamMakerDbContext(options))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Service(db).TransitionAsync(owner, q.Id, QuestionAction.Submit, null, default));
+        await using (var db = new ExamMakerDbContext(options))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Service(db).DeleteAsync(owner, q.Id, default));
+        await using var verify = fixture.CreateContext();
+        Assert.Equal("Draft", (await verify.Questions.SingleAsync(x => x.Id == q.Id)).Status);
+        Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id));
+    }
+
+    [PostgresFact]
+    // Catalog membership and fixed department are server-derived; malformed content cannot be stored or audited as success.
+    public async Task Catalog_and_payload_validation_prevent_cross_department_content_moves()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using var db = fixture.CreateContext();
+        var other = await db.Topics.FirstAsync(x => x.SubjectId != Subject && x.Grade == 10);
+        var outside = Input() with { SubjectId = other.SubjectId, TopicId = other.Id };
+        Assert.Equal(403, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, outside, default))).StatusCode);
+        Assert.Equal(400, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).UpdateAsync(owner, q.Id, outside, default))).StatusCode);
+        var bad = Input() with { Payload = JsonSerializer.Deserialize<JsonElement>("{}") };
+        Assert.Equal("payload", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, bad, default))).Field);
+        Assert.Equal(400, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).UpdateAsync(owner, q.Id,
+            Input() with { Grade = 11 }, default))).StatusCode);
+        Assert.Equal(Department, (await Service(db).GetAsync(owner, q.Id, default)).DepartmentId);
+        Assert.Equal(1, await db.AuditLogs.CountAsync());
+    }
+
+    [PostgresFact]
+    // Observe a real lock waiter before committing a deactivation, so an authorization check moved before the lock fails this test.
+    public async Task Activation_is_rechecked_after_waiting_for_the_user_management_lock()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using var holder = fixture.CreateContext();
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)");
+        await holder.Users.Where(x => x.Id == owner).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
+        await using var attempt = fixture.CreateContext();
+        await attempt.Database.OpenConnectionAsync();
+        var pid = ((Npgsql.NpgsqlConnection)attempt.Database.GetDbConnection()).ProcessID;
+        var pending = Service(attempt).TransitionAsync(owner, q.Id, QuestionAction.Submit, null, default);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1.8));
+        while (!await holder.Database.SqlQuery<bool>($"""
+            SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = {pid}
+                AND classid = 0 AND objid = 48683401 AND NOT granted) AS "Value"
+            """).SingleAsync(timeout.Token)) await Task.Delay(10, timeout.Token);
+        await transaction.CommitAsync();
+        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => pending)).Code);
+        Assert.Equal("Draft", (await attempt.Questions.AsNoTracking().SingleAsync(x => x.Id == q.Id)).Status);
+    }
+
+    private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException("Synthetic audit failure.");
+    }
+}

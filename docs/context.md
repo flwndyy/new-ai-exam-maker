@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.8** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.9** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -197,6 +197,15 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 - Sửa nội dung câu `Approved` → quay về `Draft` và tăng `revision` (câu `Submitted` thì phải rút lại trước); các đề **đã snapshot** không bị ảnh hưởng (mục 4.3).
 - **Xóa**: chỉ xóa được câu `Draft`/`Rejected` **chưa được đề nào tham chiếu**; câu đã `Approved` thì dùng `Archive`, không xóa.
 - Mọi chuyển trạng thái ghi `AuditLog`.
+
+#### Chi tiết triển khai A6
+
+- API ngân hàng câu hỏi và workflow dùng schema A2, không thêm migration. State machine và kiểm payload ở Application, transaction/khóa hàng câu hỏi ở Infrastructure. Chỉ creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
+- Teacher/head đọc câu của mình (kể cả Archived) hoặc Approved cùng tổ. Head được đọc Submitted cùng tổ để duyệt; admin đọc tất cả. GET chi tiết ngoài phạm vi trả 404. Hàng đợi chỉ head/admin, bỏ câu của chính người xem, Submitted theo submittedAt tăng dần.
+- Department câu cố định lúc tạo. Tạo câu phải thuộc môn của tổ người tạo; khi sửa chỉ chọn môn/chương cùng department cố định. Payload validate chặt theo cả bốn schema OpenAPI, không nhận giả mạo trạng thái, creator hoặc provenance AI.
+- Chỉ thay đổi nội dung thực sự mới đưa Approved về Draft và revision+1; PUT cùng nội dung không đổi revision/trạng thái. Sửa Draft/Rejected giữ trạng thái và revision. Nội dung AI đổi thì reset cờ rà soát, kết quả kiểm chứng và note; mark-reviewed bắt buộc trước submit.
+- Submit mới xóa quyết định duyệt cũ, đặt submittedAt; withdraw xóa submittedAt và quyết định duyệt. Reject bắt buộc note, approve có note tùy chọn; cả hai ghi reviewer và reviewedAt. Archived không được phục hồi. Admin cũng không tự duyệt (403 SelfReview).
+- Mọi ghi kiểm lại actor active/role/tổ sau khóa quản trị chung A4; giữ shared khóa catalog 48683402 và khóa hàng câu hỏi FOR UPDATE đến commit để tránh cập nhật/duyệt trùng. Audit và thay đổi cùng transaction, thời gian UTC; xóa bị FK tham chiếu đề/bộ câu trả 409 QuestionReferenced. Chờ khóa tối đa 2 giây, quá hạn trả Conflict.
 
 ### 4.3 Đề thi: phiên bản & snapshot
 
@@ -570,6 +579,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.9 — 20/11/2026**
+- Triển khai A6: ngân hàng câu hỏi, state machine ở Application, payload validation, review queue, audit và khóa chống chuyển trạng thái đồng thời.
 
 **0.8 — 20/11/2026**
 - Sửa review: bảo vệ tham chiếu job AI đang chờ/chạy, khóa phối hợp với B5, audit xóa có metadata, tên NFC và bộ lọc đúng endpoint.

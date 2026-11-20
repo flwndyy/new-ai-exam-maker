@@ -223,6 +223,7 @@ paths:
       tags: [Questions]
       operationId: getQuestion
       summary: Chi tiết câu hỏi
+      description: Tác giả xem câu của mình; câu Approved dùng chung trong tổ; Head được xem Submitted cùng tổ để duyệt; Admin xem tất cả. Ngoài phạm vi hoặc không tồn tại trả 404.
       responses:
         '200':
           description: OK
@@ -1755,6 +1756,7 @@ components:
     # ───────────── Questions ─────────────
     QuestionInput:
       type: object
+      additionalProperties: false
       required: [subjectId, topicId, grade, type, difficulty, stem, payload]
       properties:
         subjectId: { type: string, format: uuid }
@@ -1842,10 +1844,12 @@ components:
 
     ApproveRequest:
       type: object
+      additionalProperties: false
       properties:
         note: { type: [string, 'null'], maxLength: 2000 }
     RejectRequest:
       type: object
+      additionalProperties: false
       required: [note]
       properties:
         note:

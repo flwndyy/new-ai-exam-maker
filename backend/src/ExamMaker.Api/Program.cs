@@ -1,12 +1,15 @@
 using ExamMaker.Api.Ai;
 using ExamMaker.Api.Authentication;
 using ExamMaker.Api.Catalog;
+using ExamMaker.Api.Questions;
 using ExamMaker.Api.Users;
 using ExamMaker.Application.Catalog;
+using ExamMaker.Application.Questions;
 using ExamMaker.Infrastructure;
 using ExamMaker.Infrastructure.Ai;
 using ExamMaker.Infrastructure.Catalog;
 using ExamMaker.Infrastructure.Persistence;
+using ExamMaker.Infrastructure.Questions;
 using ExamMaker.Infrastructure.Users;
 using Serilog;
 
@@ -29,6 +32,9 @@ builder.Services.AddExceptionHandler<UserOperationExceptionHandler>();
 // Keep catalog persistence scoped to the request and translate its safe application errors.
 builder.Services.AddScoped<ICatalogManagement, CatalogManagement>();
 builder.Services.AddExceptionHandler<CatalogExceptionHandler>();
+// Keep the question workflow scoped so its row changes and audit share one DbContext transaction.
+builder.Services.AddScoped<IQuestionManagement, QuestionManagement>();
+builder.Services.AddExceptionHandler<QuestionExceptionHandler>();
 builder.Services.AddControllers();
 // Include stable error codes and trace identifiers, including for database failures.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
