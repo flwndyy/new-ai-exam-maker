@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ExamMaker.Api.Tests/ExamMaker.Api.Tests.csproj" />
+    <Project Path="tests/ExamMaker.Application.Tests/ExamMaker.Application.Tests.csproj" />
     <Project Path="tests/ExamMaker.Infrastructure.Tests/ExamMaker.Infrastructure.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
