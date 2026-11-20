@@ -388,7 +388,7 @@ public sealed class A2PostgresTests(PostgresFixture fixture) : IClassFixture<Pos
     }
 
     private const string Seed = """
-        INSERT INTO users VALUES ('40000000-0000-0000-0000-000000000001',
+        INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active) VALUES ('40000000-0000-0000-0000-000000000001',
             'a2-test', 'test@example.invalid', 'Synthetic teacher', 'teacher',
             '10000000-0000-0000-0000-000000000001', true);
         INSERT INTO ai_generation_jobs

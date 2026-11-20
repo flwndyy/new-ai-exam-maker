@@ -116,8 +116,9 @@ MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path \
 ### Ánh xạ sang cấu hình ứng dụng
 
 - **Backend (.NET 10 — `A3`, `A4`):**
-  - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): đọc qua section `Cognito` (`Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`). *(Lưu ý: tham số `Cognito:Authority` trong SSM dùng làm giá trị tham chiếu OIDC; theo `docs/a3-auth.md`, API tự tính issuer từ Region và UserPoolId nên không cần đọc trực tiếp `Cognito:Authority`).*
-  - Chạy local không cần SSM: để trống `ParameterStore__Path`, đặt 3 biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo; API tự tính issuer từ Region + UserPoolId). Chi tiết xem tại `docs/runbooks/aws-local-cli.md` (Mục 4 Cách 2) và `docs/a3-auth.md`.
+  - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): A3 đọc ba giá trị trong section `Cognito`: `Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`.
+  - Chạy local không cần SSM: để trống `ParameterStore__Path`, đặt ba biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo). Chi tiết xem `docs/runbooks/aws-local-cli.md` (Mục 4 Cách 2) và `docs/a3-auth.md`.
+  - A3 tự tính issuer `https://cognito-idp.<Region>.amazonaws.com/<UserPoolId>` và gán vào `JwtBearerOptions.Authority`. Key SSM `Cognito/Authority` vẫn thuộc bộ tham số bàn giao để đối chiếu, nhưng A3 không đọc trực tiếp key này; đặt `Cognito__Authority` không thay đổi issuer của API. `HostedUiDomain` là domain đăng nhập, không phải issuer. Xem `docs/a3-auth.md`.
   - **Quyền IAM tối thiểu cho EC2 Instance Profile (tác vụ `O3`):** giới hạn `Resource` chỉ tới ARN của User Pool này, bao gồm đúng các action ứng dụng thực sự gọi theo `docs/context.md` §3.3 và `docs/api/openapi.yaml`:
     - `cognito-idp:AdminCreateUser` — tạo user mới (`POST /admin/users`), gửi mật khẩu tạm qua email.
     - `cognito-idp:AdminDeleteUser` — **bắt buộc cho cơ chế rollback/đền bù** khi `AdminAddUserToGroup` hoặc ghi bảng `users` lỗi, tránh để lại user mồ côi trên Cognito.
@@ -140,7 +141,7 @@ MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path \
 
 Theo `docs/context.md` §3.3, vì self sign-up đã bị tắt và API từ chối mọi `sub` chưa có trong bảng `users`, tài khoản **Admin đầu tiên** được người triển khai tạo **một lần duy nhất** bằng CLI/script (không qua API công khai).
 
-> **Lưu ý phối hợp với task `A4`:** Khi DEV-A hoàn tất migration `A2` và script bootstrap ở task `A4`, có thể dùng trực tiếp script của `A4` cho Bước 2. Quy trình bên dưới mô tả đầy đủ hai phía Cognito + PostgreSQL theo `docs/erd.md`.
+> **Khuyến nghị A4:** Sau migration `AddUserAdministration`, dùng công cụ `backend/tools/ExamMaker.Bootstrap` theo [hướng dẫn A4](../a4-user-management.md). Công cụ tự tạo cả Cognito, group admin, dòng DB và audit, có khóa chống tạo trùng và đền bù khi lỗi. Nếu dùng công cụ này, bỏ qua Bước 1–2 bên dưới và chuyển thẳng tới Bước 3. Không chạy CLI để nối/tự nâng quyền tài khoản đã tạo thủ công; quy trình bên dưới chỉ dành cho người triển khai xử lý thủ công có kiểm soát.
 
 ### Bước 1: Tạo user trên Cognito và gán vào nhóm `admin`
 
@@ -185,7 +186,7 @@ VALUES (gen_random_uuid(), '<COGNITO_SUB>', '<admin-email>', '<Ho va ten Admin>'
 ON CONFLICT (cognito_sub) DO NOTHING;
 ```
 
-*(Kiểm tra lại tên cột chính xác theo migration `A2` trước khi chạy nếu có thay đổi schema).*
+*Schema users không có updated_at. Sau migration A4, created_at được DB tự điền. Không chạy SQL thủ công và công cụ bootstrap cho cùng tài khoản; người triển khai phải ghi nhận audit khi xử lý thủ công.*
 
 ### Bước 3: Xác minh đăng nhập & đổi mật khẩu lần đầu
 

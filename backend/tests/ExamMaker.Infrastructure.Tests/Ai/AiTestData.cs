@@ -12,11 +12,13 @@ internal static class AiTestData
     {
         await using var context = fixture.CreateContext();
         var departmentId = await context.Departments.Select(d => d.Id).FirstAsync();
+        // users.email is unique (case-insensitive) since A4, so every synthetic user needs its own address.
+        var suffix = Guid.NewGuid().ToString("N");
         var user = new User
         {
             Id = Guid.NewGuid(),
-            CognitoSub = "ai-test-" + Guid.NewGuid().ToString("N"),
-            Email = "ai-test@example.invalid",
+            CognitoSub = "ai-test-" + suffix,
+            Email = $"ai-test-{suffix}@example.invalid",
             FullName = "Synthetic teacher",
             Role = "teacher",
             DepartmentId = departmentId,
