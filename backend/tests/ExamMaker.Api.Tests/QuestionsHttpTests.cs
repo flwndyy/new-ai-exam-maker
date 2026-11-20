@@ -84,6 +84,7 @@ public sealed class QuestionsHttpTests
 
     [Theory]
     [InlineData(400, "ValidationFailed", "payload")]
+    [InlineData(401, "Unauthorized", null)]
     [InlineData(403, "SelfReview", null)]
     [InlineData(404, "NotFound", null)]
     [InlineData(409, "AiReviewRequired", null)]
@@ -97,9 +98,26 @@ public sealed class QuestionsHttpTests
         client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
         using var response = await client.PostAsync($"/api/v1/questions/{app.Management.View.Id}/submit", null);
         Assert.Equal((HttpStatusCode)status, response.StatusCode);
+        if (status == 401) Assert.Equal("Bearer", Assert.Single(response.Headers.WwwAuthenticate).Scheme);
         var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(code, problem.GetProperty("code").GetString()); Assert.True(problem.TryGetProperty("traceId", out _));
         if (field is not null) Assert.True(problem.GetProperty("errors").TryGetProperty(field, out _));
+    }
+
+    [Theory]
+    [InlineData("approve")]
+    [InlineData("reject")]
+    // Strict review bodies apply only to question endpoints and must reject unknown fields before dispatch.
+    public async Task Question_review_bodies_reject_unknown_properties(string action)
+    {
+        using var app = new QuestionsTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = "head" };
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/{action}",
+            new { note = "Synthetic reason", unexpected = true });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, app.Management.Calls);
     }
 
     [Theory]

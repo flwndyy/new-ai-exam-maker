@@ -95,6 +95,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 **Chặng 2 (25–29/11) — Quy trình**
 - [ ] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
+  - Rà soát bổ sung PR #69 (20/11/2026): sửa bốn điểm nhỏ về 401 sau chờ khóa, audit từng bộ bị gỡ liên kết, tài liệu điều kiện xóa và schema approve/reject riêng cho câu hỏi. Toàn backend Release **447/447 pass, không skip** (285 API/quy tắc, 38 Application, 124 Infrastructure); schema frontend đồng bộ. Chờ CI/review trên commit mới trước khi merge.
   - Sửa review PR #69 (20/11/2026): xử lý đủ 8 điểm, thêm 16 test hồi quy; toàn backend 426/426 pass, không skip (269 API/quy tắc, 38 Application, 119 Infrastructure; 83 PostgreSQL). Đã sinh lại schema frontend và kiểm đồng bộ; chờ CI/review trên commit sửa trước khi merge.
   - Triển khai local 20/11/2026: ngân hàng câu hỏi CRUD + 6 action workflow + review queue; state machine/validation payload ở Application, quyền DB/row lock/audit transaction ở Infrastructure. Không thêm migration. Xem `docs/a6-question-workflow.md`.
   - Lượt triển khai ban đầu có 372 test ở hai project pass; hạn chế restore Application.Tests đã được giải quyết ở lượt review phía trên. PR #69 đang mở; giữ task chưa tick cho tới khi CI xanh và merge vào dev.

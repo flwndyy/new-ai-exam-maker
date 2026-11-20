@@ -118,9 +118,24 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             if (question.Status is not ("Draft" or "Rejected")) throw QuestionRules.InvalidState();
             if (await database.ExamVersionQuestions.AnyAsync(x => x.SourceQuestionId == id, cancellationToken)) throw Referenced();
             // Collection ownership does not prevent the author deleting an eligible bank question (context section 8.1).
-            var unlinked = await database.QuestionSetItems.Where(x => x.QuestionId == id).ExecuteDeleteAsync(cancellationToken);
+            // RETURNING identifies only memberships actually removed, even if a collection is edited concurrently.
+            var affectedSets = await database.Database.SqlQuery<Guid>($"""
+                DELETE FROM question_set_items WHERE question_id = {id}
+                RETURNING question_set_id AS "Value"
+                """).ToListAsync(cancellationToken);
+            foreach (var setId in affectedSets.Distinct())
+                database.AuditLogs.Add(new AuditLog
+                {
+                    Id = Guid.NewGuid(),
+                    ActorId = actor.Id,
+                    EntityType = "QuestionSet",
+                    EntityId = setId,
+                    Action = "RemoveQuestionFromSet",
+                    Note = $"Source question deleted; question={id}; revision={question.Revision}",
+                    CreatedAt = DateTime.UtcNow
+                });
             Audit(actor.Id, question, "DeleteQuestion", question.Status,
-                $"revision={question.Revision}; subject={question.SubjectId}; topic={question.TopicId}; removedCollectionLinks={unlinked}");
+                $"revision={question.Revision}; subject={question.SubjectId}; topic={question.TopicId}; removedCollectionLinks={affectedSets.Count}");
             // Execute the restricted delete in PostgreSQL; tracked collection links must not trigger client-side cascades.
             await database.Questions.Where(x => x.Id == id).ExecuteDeleteAsync(cancellationToken);
             return null;
@@ -190,7 +205,9 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     private async Task<AuthenticatedUser> ActorAsync(Guid id, CancellationToken cancellationToken)
     {
         var user = await database.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
-        if (user is null || !user.IsActive || user.Role is not (Roles.Teacher or Roles.Head or Roles.Admin)) throw QuestionRules.Forbidden();
+        if (user is null || !user.IsActive)
+            throw new QuestionException(401, "Unauthorized", "Chưa xác thực");
+        if (user.Role is not (Roles.Teacher or Roles.Head or Roles.Admin)) throw QuestionRules.Forbidden();
         return new(user.Id, user.CognitoSub, user.Email, user.FullName, user.Role, user.DepartmentId, null, true);
     }
 

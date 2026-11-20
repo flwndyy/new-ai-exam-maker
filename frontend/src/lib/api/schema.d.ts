@@ -1267,6 +1267,13 @@ export interface components {
         QuestionPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["Question"][];
         };
+        QuestionApproveRequest: {
+            note?: string | null;
+        };
+        QuestionRejectRequest: {
+            /** @description Lý do từ chối — bắt buộc. */
+            note: string;
+        };
         ApproveRequest: {
             note?: string | null;
         };
@@ -2064,7 +2071,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["ApproveRequest"];
+                "application/json": components["schemas"]["QuestionApproveRequest"];
             };
         };
         responses: {
@@ -2086,7 +2093,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RejectRequest"];
+                "application/json": components["schemas"]["QuestionRejectRequest"];
             };
         };
         responses: {

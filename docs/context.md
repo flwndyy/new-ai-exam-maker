@@ -200,6 +200,9 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 
 #### Chi tiết triển khai A6
 
+- Rà soát bổ sung A6: actor không tồn tại hoặc bị khóa khi đọc lại sau khóa quản trị trả 401 Unauthorized và WWW-Authenticate: Bearer; actor hợp lệ nhưng thiếu quyền vẫn trả 403. Xóa câu ghi audit QuestionSet cho từng bộ bị gỡ liên kết, cùng transaction với DeleteQuestion.
+- Approve/reject câu hỏi dùng QuestionApproveRequest/QuestionRejectRequest và từ chối field thừa; ApproveRequest/RejectRequest của exam-version giữ nguyên contract A7, không áp đặt additionalProperties: false.
+
 - Review lần 3: DELETE câu Draft/Rejected tự xóa question_set_items trong cùng transaction (kể cả bộ của người khác); chỉ exam_version_questions chặn xóa. Audit lỗi phải khôi phục cả câu và liên kết bộ.
 - Chặn đổi môn/chương/khối khi đề Draft/Rejected/Submitted tham chiếu câu vì Submitted còn có thể withdraw/reject. Approved/Published/Archived dùng snapshot vẫn cho đổi phân loại nguồn; không sửa snapshot. Các chỉnh sửa nội dung không đổi phân loại vẫn theo quy tắc revision hiện có.
 - Payload từ chối surrogate Unicode lẻ bằng 400 errors[payload]. Đáp án số dùng dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng hoặc số mũ; dấu trừ và phẩy/chấm thập phân được phép. Options phải đúng thứ tự A–D, statements a–d.
@@ -216,7 +219,7 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 - Department câu cố định lúc tạo. Tạo câu phải thuộc môn của tổ người tạo; khi sửa chỉ chọn môn/chương cùng department cố định. Payload validate chặt theo cả bốn schema OpenAPI, không nhận giả mạo trạng thái, creator hoặc provenance AI.
 - Chỉ thay đổi nội dung thực sự mới đưa Approved về Draft và revision+1; PUT cùng nội dung không đổi revision/trạng thái. Sửa Draft/Rejected giữ trạng thái và revision. Nội dung AI đổi thì reset cờ rà soát, kết quả kiểm chứng và note; mark-reviewed bắt buộc trước submit.
 - Submit mới xóa quyết định duyệt cũ, đặt submittedAt; withdraw xóa submittedAt và quyết định duyệt. Reject bắt buộc note, approve có note tùy chọn; cả hai ghi reviewer và reviewedAt. Archived không được phục hồi. Admin cũng không tự duyệt (403 SelfReview).
-- Mọi ghi kiểm lại actor active/role/tổ sau shared khóa quản trị chung A4; giữ shared khóa catalog 48683402 và khóa hàng câu hỏi FOR UPDATE đến commit để tránh cập nhật/duyệt trùng. Audit và thay đổi cùng transaction, thời gian UTC; xóa bị FK tham chiếu đề/bộ câu trả 409 QuestionReferenced. Chờ khóa tối đa 2 giây, quá hạn trả Conflict.
+- Mọi ghi kiểm lại actor active/role/tổ sau shared khóa quản trị chung A4; giữ shared khóa catalog 48683402 và khóa hàng câu hỏi FOR UPDATE đến commit để tránh cập nhật/duyệt trùng. Audit và thay đổi cùng transaction, thời gian UTC; chỉ tham chiếu từ exam_version_questions chặn xóa bằng 409 QuestionReferenced; liên kết bộ câu hỏi được tự gỡ trong cùng transaction. Chờ khóa tối đa 2 giây, quá hạn trả Conflict.
 
 ### 4.3 Đề thi: phiên bản & snapshot
 
@@ -592,6 +595,8 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ## Lịch sử thay đổi
 
 **0.9 — 20/11/2026**
+
+- Làm rõ A6: thu hồi tài khoản trả 401 sau chờ khóa, audit từng bộ khi tự gỡ liên kết và tách schema duyệt câu hỏi khỏi A7; chỉ tham chiếu đề chặn xóa.
 - Review lần 3: tự gỡ liên kết bộ khi xóa câu, bảo vệ phân loại khi đề Submitted, từ chối surrogate lỗi, đáp án số/nhãn chặt, mark-reviewed idempotent và timestamp tạo bằng nhau.
 - Sửa review A6: dấu phẩy thập phân, shared lock, bảo vệ phân loại trong đề editable, che ID ngoài phạm vi, audit đúng hành động, chuẩn hóa nội dung và giới hạn payload.
 - Triển khai A6: ngân hàng câu hỏi, state machine ở Application, payload validation, review queue, audit và khóa chống chuyển trạng thái đồng thời.

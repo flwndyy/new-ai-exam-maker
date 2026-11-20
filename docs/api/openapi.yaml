@@ -320,7 +320,7 @@ paths:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ApproveRequest' }
+            schema: { $ref: '#/components/schemas/QuestionApproveRequest' }
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -340,7 +340,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/RejectRequest' }
+            schema: { $ref: '#/components/schemas/QuestionRejectRequest' }
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -1847,14 +1847,28 @@ components:
               type: array
               items: { $ref: '#/components/schemas/Question' }
 
-    ApproveRequest:
+    QuestionApproveRequest:
       type: object
       additionalProperties: false
       properties:
         note: { type: [string, 'null'], maxLength: 2000 }
-    RejectRequest:
+    QuestionRejectRequest:
       type: object
       additionalProperties: false
+      required: [note]
+      properties:
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Lý do từ chối — bắt buộc.
+
+    ApproveRequest:
+      type: object
+      properties:
+        note: { type: [string, 'null'], maxLength: 2000 }
+    RejectRequest:
+      type: object
       required: [note]
       properties:
         note:

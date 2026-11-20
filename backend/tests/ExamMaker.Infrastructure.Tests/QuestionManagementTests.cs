@@ -105,7 +105,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         }
         Assert.Equal("SelfReview", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Approve))).Code);
         await using (var db = fixture.CreateContext()) await db.Users.Where(x => x.Id == otherHead).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
-        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(otherHead, question.Id, QuestionAction.Approve))).Code);
+        Assert.Equal("Unauthorized", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(otherHead, question.Id, QuestionAction.Approve))).Code);
         Assert.Equal("Approved", (await ActAsync(admin, question.Id, QuestionAction.Approve)).Status);
     }
 
@@ -328,15 +328,17 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         await using var attempt = fixture.CreateContext();
         await attempt.Database.OpenConnectionAsync();
         var pid = ((Npgsql.NpgsqlConnection)attempt.Database.GetDbConnection()).ProcessID;
-        var pending = Service(attempt).TransitionAsync(owner, q.Id, QuestionAction.Submit, null, default);
+        var pending = Service(attempt).UpdateAsync(owner, q.Id, Input("Should not be saved"), default);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1.8));
         while (!await holder.Database.SqlQuery<bool>($"""
             SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = {pid}
                 AND classid = 0 AND objid = 48683401 AND NOT granted) AS "Value"
             """).SingleAsync(timeout.Token)) await Task.Delay(10, timeout.Token);
         await transaction.CommitAsync();
-        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => pending)).Code);
+        var error = await Assert.ThrowsAsync<QuestionException>(() => pending);
+        Assert.Equal(401, error.StatusCode); Assert.Equal("Unauthorized", error.Code);
         Assert.Equal("Draft", (await attempt.Questions.AsNoTracking().SingleAsync(x => x.Id == q.Id)).Status);
+        Assert.Equal(q.Stem, (await attempt.Questions.AsNoTracking().SingleAsync(x => x.Id == q.Id)).Stem);
     }
 
 
@@ -482,11 +484,13 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         foreach (var reject in new[] { false, true })
         {
             var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit); await ActAsync(head, q.Id, QuestionAction.Approve);
-            var setId = Guid.NewGuid();
+            var setId = Guid.NewGuid(); var secondSetId = Guid.NewGuid();
             await using (var db = fixture.CreateContext())
             {
                 db.QuestionSets.Add(new QuestionSet { Id = setId, Name = "Other user's collection", CreatedBy = otherHead });
                 db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = setId, QuestionId = q.Id });
+                db.QuestionSets.Add(new QuestionSet { Id = secondSetId, Name = "Another collection", CreatedBy = head });
+                db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = secondSetId, QuestionId = q.Id });
                 await db.SaveChangesAsync();
                 q = await Service(db).UpdateAsync(owner, q.Id, Input("Reopened"), default);
                 Assert.Equal(2, q.Revision);
@@ -497,7 +501,17 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             Assert.False(await deletion.Questions.AnyAsync(x => x.Id == q.Id));
             Assert.False(await deletion.QuestionSetItems.AnyAsync(x => x.QuestionId == q.Id));
             Assert.True(await deletion.QuestionSets.AnyAsync(x => x.Id == setId && x.CreatedBy == otherHead));
-            Assert.Contains("removedCollectionLinks=1", (await deletion.AuditLogs.SingleAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion")).Note);
+            Assert.Contains("removedCollectionLinks=2", (await deletion.AuditLogs.SingleAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion")).Note);
+            var setAudits = await deletion.AuditLogs.Where(x => x.EntityType == "QuestionSet"
+                && (x.EntityId == setId || x.EntityId == secondSetId)).ToListAsync();
+            Assert.Equal(2, setAudits.Count);
+            Assert.Equal(2, setAudits.Select(x => x.EntityId).Distinct().Count());
+            Assert.All(setAudits, audit =>
+            {
+                Assert.Equal(owner, audit.ActorId);
+                Assert.Equal("RemoveQuestionFromSet", audit.Action);
+                Assert.Contains($"question={q.Id}", audit.Note);
+            });
         }
     }
 
@@ -519,6 +533,19 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.True(await verify.Questions.AnyAsync(x => x.Id == q.Id));
         Assert.True(await verify.QuestionSetItems.AnyAsync(x => x.QuestionSetId == setId && x.QuestionId == q.Id));
         Assert.False(await verify.AuditLogs.AnyAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion"));
+        Assert.False(await verify.AuditLogs.AnyAsync(x => x.EntityType == "QuestionSet" && x.EntityId == setId));
+    }
+
+    [PostgresFact]
+    // An account removed after token validation has no usable session, regardless of the requested question identifier.
+    public async Task Missing_live_accounts_return_unauthorized_for_reads_and_mutations()
+    {
+        await SeedAsync(); var q = await CreateAsync(); var missingActor = Guid.NewGuid();
+        await using var db = fixture.CreateContext();
+        var read = await Assert.ThrowsAsync<QuestionException>(() => Service(db).GetAsync(missingActor, q.Id, default));
+        Assert.Equal(401, read.StatusCode); Assert.Equal("Unauthorized", read.Code);
+        var write = await Assert.ThrowsAsync<QuestionException>(() => Service(db).UpdateAsync(missingActor, q.Id, Input(), default));
+        Assert.Equal(401, write.StatusCode); Assert.Equal("Unauthorized", write.Code);
     }
 
     [PostgresFact]

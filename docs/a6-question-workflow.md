@@ -65,8 +65,10 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 - PUT cùng nội dung (so payload theo cấu trúc JSON) không tăng revision hoặc mở lại Approved.
 - AI chưa rà soát không submit được: 409 `AiReviewRequired`. Sửa nội dung AI reset aiReviewedByAuthor, aiVerification và aiVerificationNote, giữ nguyên job/ordinal/source.
 - Submit xóa quyết định cũ và đặt submittedAt mới. Withdraw xóa submittedAt và quyết định duyệt. Reject note không trắng, tối đa 2000; approve note tùy chọn, tối đa 2000. Reviewer và thời gian lưu UTC.
-- 403 `SelfReview` riêng cho tự duyệt của head/admin; các lỗi quyền khác `Forbidden`. Sai trạng thái trả 409 `InvalidStateTransition`.
+- Actor không tồn tại hoặc bị khóa lúc kiểm lại DB trả 401 `Unauthorized` kèm `WWW-Authenticate: Bearer`, kể cả sau khi chờ khóa. Actor hợp lệ nhưng thiếu quyền trả 403 `Forbidden`; tự duyệt của head/admin trả 403 `SelfReview`. Sai trạng thái trả 409 `InvalidStateTransition`.
 - Câu bị exam_version_questions tham chiếu trả 409 `QuestionReferenced`. Liên kết question_set_items được tự xóa trong cùng transaction trước khi xóa câu đủ điều kiện, kể cả thuộc bộ của người khác; không xóa bộ và không sửa snapshot.
+- Mỗi bộ thực sự mất liên kết có một audit `QuestionSet` / `RemoveQuestionFromSet`, ghi actor và id/revision câu bị xóa. Dùng `DELETE ... RETURNING` để ghi đúng các bộ bị ảnh hưởng; các audit này commit hoặc rollback cùng `DeleteQuestion` và dữ liệu.
+- Approve/reject câu hỏi dùng schema riêng `QuestionApproveRequest` / `QuestionRejectRequest`, từ chối field ngoài hợp đồng. Schema `ApproveRequest` / `RejectRequest` dùng cho exam-version giữ nguyên contract A7.
 - Validation trả 400 `ValidationFailed` với errors[field]; body không cho field ngoài hợp đồng. Bốn dạng payload đều kiểm: MC đúng 4 nhãn A–D/1 correctLabel; TrueFalse 4 nhãn a–d và boolean; ShortAnswer có đáp án, tolerance chỉ cho number; Essay có rubric điểm dương. Tổng rubric bằng điểm câu kiểm khi ghép đề ở A7.
 
 ## Transaction và đồng thời
@@ -116,6 +118,10 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 - Tạo câu lấy một mốc UTC duy nhất cho createdAt và updatedAt.
 
 ## Kết quả sửa review 20/11/2026
+
+- Rà soát bổ sung bốn điểm nhỏ: trả 401 kèm Bearer challenge cho tài khoản bị thu hồi, audit từng QuestionSet bị gỡ liên kết, thống nhất điều kiện chặn xóa trong context và tách schema duyệt câu hỏi khỏi exam-version.
+- Toàn solution backend Release sau lượt sửa này: **447/447 pass, 0 failed, 0 skipped** (285 API/quy tắc, 38 Application, 124 Infrastructure). Test PostgreSQL xác nhận PUT bị khóa tài khoản trong lúc chờ trả Unauthorized, audit riêng từng bộ và rollback khôi phục liên kết/câu, không để lại audit.
+- Đã sinh lại schema TypeScript; kiểm đồng bộ OpenAPI, formatter whitespace và `git diff --check` đều đạt. CI trên commit mới vẫn cần chạy sau khi push.
 
 - Sửa CI run #43: test race cũ luôn đòi 409 nhưng Rejected phải che khỏi reviewer khác bằng 404. Đã kiểm kỳ vọng theo trạng thái thắng, thêm test ép cả hai thứ tự quyết định; toàn Infrastructure Release **120/120 pass, không skip** trên PostgreSQL. Giữ nguyên chính sách quyền trong production.
 
