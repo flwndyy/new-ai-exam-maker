@@ -47,6 +47,8 @@ builder.Services.AddExamMakerAuthentication(builder.Configuration);
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Nginx must normalize CloudFront-Viewer-Address to one client hop first.
+    options.ForwardLimit = 1;
     options.KnownProxies.Add(IPAddress.Loopback);
 });
 

@@ -143,8 +143,15 @@ Không dùng `certbot renew --force-renewal` trong demo vì có thể chạm gi�
 
 ## 8. Kiểm tra forwarded headers và origin guard
 
-API đã bật `ForwardedHeaders` và chỉ tin proxy loopback `127.0.0.1`. Nginx đặt
-`X-Forwarded-For`/`X-Forwarded-Proto` và xóa `X-Origin-Verify` trước Kestrel.
+API đã bật `ForwardedHeaders` và chỉ tin proxy loopback `127.0.0.1`. Nginx lấy
+`CloudFront-Viewer-Address`, tách thành một địa chỉ IP người dùng duy nhất rồi đặt
+`X-Forwarded-For` bằng giá trị đã chuẩn hóa. Vì vậy API không tự suy đoán IP người dùng
+từ chuỗi hai proxy. Nginx cũng đặt `X-Forwarded-Proto` và xóa `X-Origin-Verify` trước Kestrel.
+
+Ở O5, origin request policy của CloudFront phải cho phép gửi `CloudFront-Viewer-Address`
+tới origin. Không cho client tự gửi trực tiếp header này: Security Group vẫn phải giới hạn
+443 bằng CloudFront managed prefix list; nếu header không có, Nginx dùng địa chỉ peer làm
+giá trị dự phòng và không coi đó là IP người dùng.
 
 Kiểm tra trên EC2, không ghi secret vào shell history hoặc log:
 
@@ -169,4 +176,5 @@ Request HTTPS thiếu origin header phải trả `403`. Header đúng chỉ đư
 - [ ] Deploy hook chạy `nginx -t` rồi reload sau khi renew thành công.
 - [ ] Request origin thiếu `X-Origin-Verify` nhận `403`.
 - [ ] API đã chạy `UseForwardedHeaders` trước request logging/authentication.
+- [ ] CloudFront origin request policy gửi `CloudFront-Viewer-Address` tới origin.
 - [ ] Không có domain, IP, ARN, private key hoặc secret thật trong Git.
