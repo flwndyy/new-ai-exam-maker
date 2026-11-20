@@ -18,12 +18,12 @@ tiếp từ máy cá nhân (Windows, macOS, Linux) bằng AWS CLI, thay cho AWS 
 
 | Vai trò | Có cần AWS CLI? | Quyền IAM gợi ý |
 |---|---|---|
-| OPS (dựng hạ tầng, chạy script `infra/`) | **Có** | Quyền quản trị cho các dịch vụ dự án (giai đoạn dựng có thể dùng `AdministratorAccess`, thu hẹp sau) |
+| OPS (dựng hạ tầng, chạy script `infra/`) | **Có** | Policy giới hạn theo dịch vụ dự án và region `ap-southeast-1` (giai đoạn dựng có thể dùng `AdministratorAccess`, **thu hẹp trước khi tạo access key lâu dài** và xoay key định kỳ 90 ngày) |
 | DEV backend/frontend (chỉ đọc cấu hình) | Không bắt buộc | Policy tối thiểu chỉ đọc SSM Cognito: `/exammaker/*/Cognito/*` (tuyệt đối **không** dùng `AmazonSSMReadOnlyAccess` hay wildcard `/exammaker/*` để tránh lộ connection string/secret) |
 
 DEV không có AWS CLI vẫn làm được: OPS đọc tham số và gửi riêng các giá trị **không bí mật**
-(Region, UserPoolId, ClientId, Authority, HostedUiDomain) để DEV đặt biến môi trường local.
-Backend validate JWT Cognito qua endpoint HTTPS công khai, không cần AWS credentials.
+(Region, UserPoolId, ClientId, HostedUiDomain) để DEV đặt biến môi trường local.
+Backend validate JWT Cognito qua endpoint HTTPS công khai, không cần AWS credentials hay biến Authority (API tự tính issuer theo `docs/a3-auth.md`).
 
 ---
 
@@ -51,12 +51,16 @@ Access Key cho tài khoản root).
            "ssm:GetParameters",
            "ssm:GetParametersByPath"
          ],
-         "Resource": "arn:aws:ssm:ap-southeast-1:*:parameter/exammaker/*/Cognito/*"
+         "Resource": [
+            "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/*/Cognito",
+            "arn:aws:ssm:ap-southeast-1:<ACCOUNT_ID>:parameter/exammaker/*/Cognito/*"
+          ]
        }
      ]
    }
    ```
-3. Đặt tên policy: `ExamMakerDevCognitoReadOnly` → **Create policy**. Policy này chỉ cho phép đọc các tham số public của Cognito, hoàn toàn không cho đọc connection string hay giải mã secrets.
+3. Thay `<ACCOUNT_ID>` bằng account ID thật của nhóm (hỏi OPS, **không** commit vào repo).
+4. Đặt tên policy: `ExamMakerDevCognitoReadOnly` → **Create policy**. Policy này chỉ cho phép đọc các tham số public của Cognito, hoàn toàn không cho đọc connection string hay giải mã secrets.
 
 ### 2.2 Tạo IAM User và cấp Access Key
 
@@ -134,25 +138,31 @@ Mọi tài nguyên dự án nằm ở region **`ap-southeast-1` (Singapore)**. T
 region ở góc phải; để `us-east-1` sẽ không thấy gì.
 
 ```bash
-# Tham số Cognito
-aws ssm get-parameters-by-path --region ap-southeast-1 \
+# Tham số Cognito (trên Git Bash Windows: thêm MSYS_NO_PATHCONV=1 trước lệnh)
+MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path --region ap-southeast-1 \
   --path "/exammaker/dev/Cognito" \
   --query "Parameters[].{Name:Name,Value:Value}" --output table
 ```
 
 ### Cách 1: Nạp tự động từ Parameter Store (Khi máy đã cấu hình AWS CLI)
 
-> **Lưu ý về quyền:** IAM User của DEV được giới hạn chỉ đọc `/exammaker/*/Cognito/*`. Nếu cấu hình app đọc ở đường dẫn gốc `/exammaker/dev`, AWS SDK sẽ bị từ chối truy cập (`AccessDeniedException`). Vì vậy, DEV cần trỏ biến môi trường `ParameterStore__Path` đúng vào `/exammaker/dev/Cognito`:
+`AddSystemsManager(path)` cắt prefix `path` khỏi tên parameter rồi ánh xạ phần còn lại thành .NET configuration key. Ví dụ: `path=/exammaker/dev` → parameter `/exammaker/dev/Cognito/Region` → config key `Cognito:Region`.
+
+Nếu đặt `path=/exammaker/dev/Cognito`, phần `Cognito` bị cắt mất → config key chỉ còn `Region`, `UserPoolId`... và backend không tìm thấy section `Cognito:*` → auth sẽ fail.
+
+**Vì vậy path đúng là `/exammaker/<env>` (khớp với `docs/runbooks/cognito.md` §4).**
+
+> ⚠️ **Lưu ý về quyền IAM:** DEV có policy `ExamMakerDevCognitoReadOnly` chỉ cho phép đọc `/exammaker/*/Cognito/*`, trong khi `AddSystemsManager("/exammaker/dev")` gọi `GetParametersByPath` trên toàn bộ `/exammaker/dev` (sẽ nhận `AccessDeniedException` cho các path ngoài Cognito). **Khuyến nghị DEV dùng Cách 2** (biến môi trường thủ công) để tránh lỗi quyền. Cách 1 phù hợp cho OPS hoặc EC2 Instance Profile có quyền đọc rộng hơn.
 
 ```powershell
-# PowerShell
-$env:ParameterStore__Path = "/exammaker/dev/Cognito"
+# PowerShell (dành cho OPS hoặc tài khoản có quyền đọc /exammaker/dev/*)
+$env:ParameterStore__Path = "/exammaker/dev"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
 ```bash
-# Bash
-export ParameterStore__Path="/exammaker/dev/Cognito"
+# Bash (dành cho OPS hoặc tài khoản có quyền đọc /exammaker/dev/*)
+export ParameterStore__Path="/exammaker/dev"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
@@ -169,7 +179,6 @@ Thành viên không cài AWS CLI vẫn làm việc và test bình thường. OPS
 $env:Cognito__Region = "ap-southeast-1"
 $env:Cognito__UserPoolId = "<UserPoolId-do-OPS-cung-cap>"
 $env:Cognito__ClientId = "<ClientId-do-OPS-cung-cap>"
-$env:Cognito__Authority = "https://cognito-idp.ap-southeast-1.amazonaws.com/<UserPoolId-do-OPS-cung-cap>"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
@@ -178,11 +187,10 @@ dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 export Cognito__Region="ap-southeast-1"
 export Cognito__UserPoolId="<UserPoolId-do-OPS-cung-cap>"
 export Cognito__ClientId="<ClientId-do-OPS-cung-cap>"
-export Cognito__Authority="https://cognito-idp.ap-southeast-1.amazonaws.com/<UserPoolId-do-OPS-cung-cap>"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
-*(Thư viện JWT Bearer của ASP.NET Core sẽ tự động gọi endpoint OIDC công khai của AWS để tải public key và xác thực chữ ký token, **không cần tài khoản AWS hay credentials**).*
+*(Theo `docs/a3-auth.md`, API tự tính OIDC issuer từ `Region` và `UserPoolId` (`https://cognito-idp.{Region}.amazonaws.com/{UserPoolId}`), nên **không cần đặt biến `Cognito__Authority`**. API tự động tải JWKS public key qua endpoint OIDC công khai của AWS để xác thực chữ ký RS256 của access token — **không cần tài khoản AWS hay credentials**. Khi gọi endpoint được bảo vệ như `GET /api/v1/me`, DEV cần đặt thêm `ConnectionStrings__ExamMaker` kết nối PostgreSQL local).*
 
 #### B. Dành cho Frontend (Next.js — Task B2)
 

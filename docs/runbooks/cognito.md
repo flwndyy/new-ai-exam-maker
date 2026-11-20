@@ -114,8 +114,8 @@ MSYS_NO_PATHCONV=1 aws ssm get-parameters-by-path \
 ### Ánh xạ sang cấu hình ứng dụng
 
 - **Backend (.NET 10 — `A3`, `A4`):**
-  - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): đọc qua section `Cognito` (`Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`, `Cognito:Authority`).
-  - Chạy local không cần SSM: đặt biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId`, `Cognito__Authority` (không commit vào repo).
+  - Chạy trên EC2 (tự nạp từ SSM khi đặt `ParameterStore__Path=/exammaker/<env>`): đọc qua section `Cognito` (`Cognito:Region`, `Cognito:UserPoolId`, `Cognito:ClientId`). *(Lưu ý: tham số `Cognito:Authority` trong SSM dùng làm giá trị tham chiếu OIDC; theo `docs/a3-auth.md`, API tự tính issuer từ Region và UserPoolId nên không cần đọc trực tiếp `Cognito:Authority`).*
+  - Chạy local không cần SSM: đặt 3 biến môi trường `Cognito__Region`, `Cognito__UserPoolId`, `Cognito__ClientId` (không commit vào repo; API tự tính issuer từ Region + UserPoolId).
   - **Quyền IAM tối thiểu cho EC2 Instance Profile (tác vụ `O3`):** giới hạn `Resource` chỉ tới ARN của User Pool này, bao gồm đúng các action ứng dụng thực sự gọi theo `docs/context.md` §3.3 và `docs/api/openapi.yaml`:
     - `cognito-idp:AdminCreateUser` — tạo user mới (`POST /admin/users`), gửi mật khẩu tạm qua email.
     - `cognito-idp:AdminDeleteUser` — **bắt buộc cho cơ chế rollback/đền bù** khi `AdminAddUserToGroup` hoặc ghi bảng `users` lỗi, tránh để lại user mồ côi trên Cognito.
