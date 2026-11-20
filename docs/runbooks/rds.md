@@ -202,7 +202,8 @@ KEEP_FOR_MANUAL_CHECK=1 ./infra/rds/restore-drill.sh
 ```
 
 > [!TIP]
-> Khi chạy với `KEEP_FOR_MANUAL_CHECK=1`, nên chạy trong một phiên `tmux` trên EC2 để tránh bị mất tiến trình nếu phiên SSM Session Manager bị ngắt. Script đã cài sẵn giới hạn chờ tối đa 20 phút (`read -t 1200`). Sau khi kết thúc, luôn có thể kiểm tra lại qua lệnh `aws rds describe-db-instances --region ap-southeast-1 --db-instance-identifier exammaker-dev-pg-restore-test` để chắc chắn instance tạm đã bị xoá.
+> Script `restore-drill.sh` phải được chạy bằng danh tính OPS (AWS CloudShell hoặc máy local có quyền quản trị RDS; có thể chạy trong `tmux` để tránh rớt mạng). Instance profile của EC2 cố tình **không** có quyền `rds:*` theo nguyên tắc least privilege.
+> Khi đặt `KEEP_FOR_MANUAL_CHECK=1`, script tự động chờ tối đa 20 phút (`read -t 1200`) để OPS mở phiên SSM vào EC2 và chạy `psql` kiểm tra dữ liệu trên endpoint tạm. Sau khi kết thúc, luôn kiểm tra lại qua lệnh `aws rds describe-db-instances --region ap-southeast-1 --db-instance-identifier exammaker-dev-pg-restore-test` để chắc chắn instance tạm đã được dọn sạch.
 
 ### Các bước thao tác chi tiết (tham chiếu):
 

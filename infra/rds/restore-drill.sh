@@ -77,9 +77,14 @@ cleanup() {
 
     if [ "$del_inst_rc" -eq 0 ]; then
       echo "    Waiting for temporary instance '${RESTORE_INSTANCE_ID}' to finish deleting..."
-      aws rds wait db-instance-deleted \
+      if ! aws rds wait db-instance-deleted \
         --region "$AWS_REGION" \
-        --db-instance-identifier "$RESTORE_INSTANCE_ID" 2>/dev/null || true
+        --db-instance-identifier "$RESTORE_INSTANCE_ID" 2>/dev/null; then
+        echo "    [WARNING] Waiter timed out while waiting for instance deletion." >&2
+        echo "              Check status: aws rds describe-db-instances --region ${AWS_REGION} --db-instance-identifier ${RESTORE_INSTANCE_ID}" >&2
+      else
+        echo "    Temporary instance '${RESTORE_INSTANCE_ID}' successfully DELETED."
+      fi
     elif grep -q "DBInstanceNotFound" <<<"$del_inst_err"; then
       echo "    (Instance already deleted)"
     else
@@ -234,10 +239,14 @@ aws rds delete-db-instance \
   --delete-automated-backups >/dev/null
 
 echo "==> Waiting for temporary instance '${RESTORE_INSTANCE_ID}' to be deleted..."
-aws rds wait db-instance-deleted \
+if ! aws rds wait db-instance-deleted \
   --region "$AWS_REGION" \
-  --db-instance-identifier "$RESTORE_INSTANCE_ID"
-echo "    Temporary instance '${RESTORE_INSTANCE_ID}' successfully DELETED."
+  --db-instance-identifier "$RESTORE_INSTANCE_ID"; then
+  echo "    [WARNING] Waiter timed out while waiting for instance deletion." >&2
+  echo "              Check status: aws rds describe-db-instances --region ${AWS_REGION} --db-instance-identifier ${RESTORE_INSTANCE_ID}" >&2
+else
+  echo "    Temporary instance '${RESTORE_INSTANCE_ID}' successfully DELETED."
+fi
 
 echo "==> Deleting drill snapshot '${SNAPSHOT_ID}'..."
 aws rds delete-db-snapshot \
