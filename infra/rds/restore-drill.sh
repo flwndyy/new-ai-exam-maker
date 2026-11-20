@@ -232,6 +232,8 @@ fi
 
 # 5. Cleanup temporary test instance and snapshot immediately to save budget
 echo "==> Step 5: Cleaning up temporary test instance and snapshot (Budget Protection)..."
+CLEANUP_WARN=false
+
 aws rds delete-db-instance \
   --region "$AWS_REGION" \
   --db-instance-identifier "$RESTORE_INSTANCE_ID" \
@@ -244,19 +246,35 @@ if ! aws rds wait db-instance-deleted \
   --db-instance-identifier "$RESTORE_INSTANCE_ID"; then
   echo "    [WARNING] Waiter timed out while waiting for instance deletion." >&2
   echo "              Check status: aws rds describe-db-instances --region ${AWS_REGION} --db-instance-identifier ${RESTORE_INSTANCE_ID}" >&2
+  CLEANUP_WARN=true
 else
   echo "    Temporary instance '${RESTORE_INSTANCE_ID}' successfully DELETED."
 fi
 
 echo "==> Deleting drill snapshot '${SNAPSHOT_ID}'..."
-aws rds delete-db-snapshot \
+if ! aws rds delete-db-snapshot \
   --region "$AWS_REGION" \
-  --db-snapshot-identifier "$SNAPSHOT_ID" >/dev/null
-echo "    Drill snapshot '${SNAPSHOT_ID}' successfully DELETED."
+  --db-snapshot-identifier "$SNAPSHOT_ID" >/dev/null 2>&1; then
+  echo "    [WARNING] Failed to delete drill snapshot '${SNAPSHOT_ID}'." >&2
+  echo "              Check status: aws rds describe-db-snapshots --region ${AWS_REGION} --db-snapshot-identifier ${SNAPSHOT_ID}" >&2
+  CLEANUP_WARN=true
+else
+  echo "    Drill snapshot '${SNAPSHOT_ID}' successfully DELETED."
+fi
 
 CLEANUP_COMPLETED=true
 
 echo ""
+if [ "$CLEANUP_WARN" = "true" ]; then
+  echo "==========================================================================" >&2
+  echo " WARNING: RESTORE DRILL FINISHED WITH CLEANUP WARNINGS!" >&2
+  echo " Please verify and manually purge any remaining resources to avoid cost:" >&2
+  echo " aws rds describe-db-instances --region ${AWS_REGION} --db-instance-identifier ${RESTORE_INSTANCE_ID}" >&2
+  echo " aws rds describe-db-snapshots --region ${AWS_REGION} --db-snapshot-identifier ${SNAPSHOT_ID}" >&2
+  echo "==========================================================================" >&2
+  exit 1
+fi
+
 echo "=========================================================================="
 echo " RESTORE DRILL COMPLETED SUCCESSFULLY!"
 echo " All temporary resources have been cleaned up. Zero unnecessary cost incurred."
