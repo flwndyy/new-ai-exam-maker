@@ -121,7 +121,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Chi tiết câu hỏi */
+        /**
+         * Chi tiết câu hỏi
+         * @description Tác giả xem câu của mình; câu Approved dùng chung trong tổ; Head được xem Submitted cùng tổ để duyệt; Admin xem tất cả. Ngoài phạm vi hoặc không tồn tại trả 404.
+         */
         get: operations["getQuestion"];
         /**
          * Sửa câu hỏi
