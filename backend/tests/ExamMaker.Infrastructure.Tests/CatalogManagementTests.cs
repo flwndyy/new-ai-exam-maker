@@ -1,3 +1,9 @@
+using System.Text.Json;
+using ExamMaker.Application.Ai;
+using ExamMaker.Domain.Ai;
+using ExamMaker.Domain.Catalog;
+using ExamMaker.Infrastructure.Ai;
+using Npgsql;
 using ExamMaker.Application.Catalog;
 using ExamMaker.Domain.Questions;
 using ExamMaker.Domain.Users;
@@ -63,6 +69,9 @@ public sealed class CatalogManagementTests : IAsyncLifetime
         await using var final = fixture.CreateContext();
         var audits = await final.AuditLogs.Where(x => x.ActorId == actorId).ToListAsync();
         Assert.Equal(9, audits.Count);
+        Assert.Contains(audits, x => x.Action == "DeleteDepartment" && x.Note!.Contains("Renamed Department"));
+        Assert.Contains(audits, x => x.Action == "DeleteSubject" && x.Note!.Contains("Renamed Subject") && x.Note.Contains("department="));
+        Assert.Contains(audits, x => x.Action == "DeleteTopic" && x.Note!.Contains("Renamed Chapter") && x.Note.Contains("grade=12"));
         Assert.All(audits, x => Assert.False(string.IsNullOrWhiteSpace(x.Note)));
         Assert.Contains(audits, x => x.EntityId == topic.Id && x.Action == "UpdateTopic" && x.Note!.Contains("grade=10") && x.Note.Contains("grade=12"));
         Assert.False(await final.Topics.AnyAsync(x => x.Id == topic.Id));
@@ -220,7 +229,10 @@ public sealed class CatalogManagementTests : IAsyncLifetime
         await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)");
         await holder.Users.Where(x => x.Id == actorId).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
         await using var db = fixture.CreateContext();
+        await db.Database.OpenConnectionAsync();
+        var pid = ((NpgsqlConnection)db.Database.GetDbConnection()).ProcessID;
         var pending = Service(db).SaveDepartmentAsync(actorId, null, new("Must Not Exist"), default);
+        await WaitForLockAsync(holder, pid, 48683401);
         await transaction.CommitAsync();
         Assert.Equal(403, (await Assert.ThrowsAsync<CatalogException>(() => pending)).StatusCode);
         Assert.Empty(await db.AuditLogs.ToListAsync());
@@ -256,6 +268,151 @@ public sealed class CatalogManagementTests : IAsyncLifetime
         await using var verify = fixture.CreateContext();
         Assert.Equal(original, (await verify.Departments.SingleAsync(x => x.Id == DepartmentId)).Name);
         Assert.Empty(await verify.AuditLogs.ToListAsync());
+    }
+
+    [PostgresFact]
+    // Visually identical decomposed names must hit the same unique index after NFC normalization.
+    public async Task Unicode_equivalent_department_names_conflict_after_normalization()
+    {
+        await SeedAdminAsync();
+        await using (var db = fixture.CreateContext())
+            await Service(db).SaveDepartmentAsync(actorId, null, new("Tổ thử Toán"), default);
+        await using var duplicate = fixture.CreateContext();
+        Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => Service(duplicate).SaveDepartmentAsync(actorId, null,
+            new("Tổ thử Toán".Normalize(System.Text.NormalizationForm.FormD)), default))).StatusCode);
+    }
+
+    /// <summary>Observe an actual waiter so concurrency tests cannot pass merely because operations ran sequentially.</summary>
+    private static async Task WaitForLockAsync(ExamMakerDbContext observer, int pid, int key)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1.8));
+        while (!await observer.Database.SqlQuery<bool>($"""
+            SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory'
+                AND pid = {pid} AND classid = 0 AND objid = {key}::oid AND NOT granted) AS "Value"
+            """).SingleAsync(timeout.Token))
+            await Task.Delay(10, timeout.Token);
+    }
+
+    [PostgresFact]
+    // Active JSON references protect otherwise unreferenced chapters and parent subject identity.
+    public async Task Active_jobs_block_catalog_deletion_and_moves_but_allow_label_changes()
+    {
+        await SeedAdminAsync();
+        foreach (var status in new[] { "Queued", "Running" })
+        {
+            Guid topicId;
+            await using (var db = fixture.CreateContext())
+            {
+                var topic = await Service(db).SaveTopicAsync(actorId, null, new(SubjectId, 10, "Job " + status, 0), default);
+                topicId = topic.Id;
+                db.AiGenerationJobs.Add(new AiGenerationJob
+                {
+                    Id = Guid.NewGuid(),
+                    RequestedBy = actorId,
+                    Params = JsonSerializer.Serialize(new { subjectId = SubjectId, topicId }),
+                    Status = status,
+                    LeaseExpiresAt = status == "Running" ? DateTime.UtcNow.AddMinutes(1) : null
+                });
+                await db.SaveChangesAsync();
+            }
+            await using var attempt = fixture.CreateContext();
+            var service = Service(attempt);
+            Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => service.DeleteTopicAsync(actorId, topicId, default))).StatusCode);
+            Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => service.SaveTopicAsync(actorId, topicId,
+                new(SubjectId, 11, "Moved", 0), default))).StatusCode);
+            Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => service.SaveTopicAsync(actorId, topicId,
+                new(Guid.Parse("20000000-0000-0000-0000-000000000002"), 10, "Moved", 0), default))).StatusCode);
+            Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => service.SaveSubjectAsync(actorId, SubjectId,
+                new("Moved", Guid.Parse("10000000-0000-0000-0000-000000000002")), default))).StatusCode);
+            await service.SaveTopicAsync(actorId, topicId, new(SubjectId, 10, "Renamed " + status, 1), default);
+        }
+    }
+
+    [PostgresFact]
+    // JSON-only subjects are protected too; historical terminal jobs do not permanently pin the catalog.
+    public async Task Subject_json_references_block_deletion_until_jobs_are_terminal()
+    {
+        await SeedAdminAsync();
+        await using var db = fixture.CreateContext();
+        var service = Service(db);
+        var subject = await service.SaveSubjectAsync(actorId, null, new("Job Subject", DepartmentId), default);
+        var job = new AiGenerationJob
+        {
+            Id = Guid.NewGuid(),
+            RequestedBy = actorId,
+            Params = JsonSerializer.Serialize(new { subjectId = subject.Id }),
+            Status = "Queued"
+        };
+        db.AiGenerationJobs.Add(job);
+        await db.SaveChangesAsync();
+        Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => service.DeleteSubjectAsync(actorId, subject.Id, default))).StatusCode);
+        await db.AiGenerationJobs.Where(x => x.Id == job.Id).ExecuteUpdateAsync(x => x.SetProperty(j => j.Status, "Succeeded")
+            .SetProperty(j => j.FinishedAt, DateTime.UtcNow));
+        await service.DeleteSubjectAsync(actorId, subject.Id, default);
+        foreach (var status in new[] { "Succeeded", "Failed" })
+        {
+            var topic = await service.SaveTopicAsync(actorId, null, new(SubjectId, 10, "Terminal " + status, 0), default);
+            db.AiGenerationJobs.Add(new AiGenerationJob
+            {
+                Id = Guid.NewGuid(),
+                RequestedBy = actorId,
+                Params = JsonSerializer.Serialize(new { subjectId = SubjectId, topicId = topic.Id }),
+                Status = status,
+                FinishedAt = DateTime.UtcNow,
+                ErrorCode = status == "Failed" ? "Synthetic" : null
+            });
+            await db.SaveChangesAsync();
+            await service.SaveTopicAsync(actorId, topic.Id, new(SubjectId, 11, "Moved " + status, 0), default);
+            await service.DeleteTopicAsync(actorId, topic.Id, default);
+        }
+    }
+
+    [PostgresFact]
+    // If a catalog transaction wins the race, submission revalidates after waiting without consuming quota.
+    public async Task Job_creation_rechecks_catalog_after_waiting_for_a_catalog_mutation()
+    {
+        await SeedAdminAsync();
+        await using var holder = fixture.CreateContext();
+        var topic = await Service(holder).SaveTopicAsync(actorId, null, new(SubjectId, 10, "Race", 0), default);
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683402)");
+        await holder.Topics.Where(x => x.Id == topic.Id).ExecuteDeleteAsync();
+        await using var submit = fixture.CreateContext();
+        await submit.Database.OpenConnectionAsync();
+        var pid = ((NpgsqlConnection)submit.Database.GetDbConnection()).ProcessID;
+        var pending = new EfAiJobStore(submit).TryCreateQueuedJobAsync(actorId,
+            new(SubjectId, topic.Id, 10, "MultipleChoice", "Recognition", 1, null), DateOnly.FromDateTime(DateTime.UtcNow), 10, 3, default);
+        await WaitForLockAsync(holder, pid, 48683402);
+        await transaction.CommitAsync();
+        await Assert.ThrowsAsync<AiCatalogChangedException>(() => pending);
+        Assert.False(await submit.AiGenerationJobs.AnyAsync());
+        Assert.False(await submit.AiUsageDaily.AnyAsync());
+    }
+
+    [PostgresFact]
+    // If job creation wins the race, A5 waits for its commit and then rejects the newly protected deletion.
+    public async Task Catalog_mutation_observes_a_job_committed_while_waiting_for_the_catalog_lock()
+    {
+        await SeedAdminAsync();
+        await using var holder = fixture.CreateContext();
+        var topic = await Service(holder).SaveTopicAsync(actorId, null, new(SubjectId, 10, "Job Race", 0), default);
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683402)");
+        holder.AiGenerationJobs.Add(new AiGenerationJob
+        {
+            Id = Guid.NewGuid(),
+            RequestedBy = actorId,
+            Params = JsonSerializer.Serialize(new { subjectId = SubjectId, topicId = topic.Id })
+        });
+        await holder.SaveChangesAsync();
+        await using var attempt = fixture.CreateContext();
+        await attempt.Database.OpenConnectionAsync();
+        var pid = ((NpgsqlConnection)attempt.Database.GetDbConnection()).ProcessID;
+        var pending = Service(attempt).DeleteTopicAsync(actorId, topic.Id, default);
+        await WaitForLockAsync(holder, pid, 48683402);
+        await transaction.CommitAsync();
+        Assert.Equal(409, (await Assert.ThrowsAsync<CatalogException>(() => pending)).StatusCode);
+        Assert.True(await attempt.Topics.AnyAsync(x => x.Id == topic.Id));
     }
 
     private sealed class RejectCatalogAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor

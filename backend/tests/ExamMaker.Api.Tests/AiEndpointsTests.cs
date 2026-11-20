@@ -290,6 +290,19 @@ public sealed class AiEndpointsTests : IDisposable
         Assert.Empty(_ai.Jobs);
     }
 
+    [Fact]
+    // A transactional catalog race must return the documented validation response, without a job or queue message.
+    public async Task Generate_handles_catalog_change_after_initial_validation()
+    {
+        _ai.CatalogChanged = true;
+        using var client = Client();
+        using var response = await client.PostAsJsonAsync("/api/v1/ai/generate", Body());
+        var problem = await ProblemAsync(response, HttpStatusCode.BadRequest, "ValidationFailed");
+        Assert.True(problem.GetProperty("errors").TryGetProperty("topicId", out _));
+        Assert.Empty(_ai.Jobs);
+        Assert.Empty(_ai.Enqueued);
+    }
+
     private sealed class InMemoryAi : IAiCatalogReader, IAiUsageReader, IAiJobStore, IAiJobReader, IAiJobQueue
     {
         // The only catalog entry: a grade-10 topic of SubjectId.
@@ -306,6 +319,7 @@ public sealed class AiEndpointsTests : IDisposable
         public Dictionary<Guid, AiJobView> Jobs { get; } = [];
 
         public List<Guid> Enqueued { get; } = [];
+        public bool CatalogChanged { get; set; }
 
         public AiUsage UserUsage { get; set; } = new(0, 0);
 
@@ -333,8 +347,11 @@ public sealed class AiEndpointsTests : IDisposable
 
         public Task<Guid?> TryCreateQueuedJobAsync(
             Guid userId, AiGenerateRequest request, DateOnly usageDate, int jobsLimit, int maxAttempts,
-            CancellationToken ct) =>
-            Task.FromResult<Guid?>(Add(userId, request).Id);
+            CancellationToken ct)
+        {
+            if (CatalogChanged) throw new AiCatalogChangedException();
+            return Task.FromResult<Guid?>(Add(userId, request).Id);
+        }
 
         public Task<AiJobView?> GetAsync(Guid jobId, CancellationToken ct) =>
             Task.FromResult(Jobs.GetValueOrDefault(jobId));

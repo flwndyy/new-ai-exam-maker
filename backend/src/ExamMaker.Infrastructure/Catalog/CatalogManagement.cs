@@ -63,6 +63,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var before = id is null ? null : await database.Subjects.AsNoTracking().SingleOrDefaultAsync(x => x.Id == target, cancellationToken)
                 ?? throw Missing();
             if (!await database.Departments.AnyAsync(x => x.Id == department, cancellationToken)) throw CatalogInputRules.Invalid();
+            if (before is not null && before.DepartmentId != department)
+                await EnsureNoActiveJobsAsync("Subject", target, cancellationToken);
             if (id is null) database.Subjects.Add(new Subject { Id = target, Name = name, DepartmentId = department });
             // ExecuteUpdate supports changes to alternate-key columns without EF tracking key mutations.
             else await database.Subjects.Where(x => x.Id == target).ExecuteUpdateAsync(x => x
@@ -87,6 +89,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var before = id is null ? null : await database.Topics.AsNoTracking().SingleOrDefaultAsync(x => x.Id == target, cancellationToken)
                 ?? throw Missing();
             if (!await database.Subjects.AnyAsync(x => x.Id == subject, cancellationToken)) throw CatalogInputRules.Invalid();
+            if (before is not null && (before.SubjectId != subject || before.Grade != grade))
+                await EnsureNoActiveJobsAsync("Topic", target, cancellationToken);
             if (id is null) database.Topics.Add(new Topic { Id = target, Name = name, SubjectId = subject, Grade = grade, SortOrder = order });
             else await database.Topics.Where(x => x.Id == target).ExecuteUpdateAsync(x => x.SetProperty(t => t.Name, name)
                 .SetProperty(t => t.SubjectId, subject).SetProperty(t => t.Grade, grade).SetProperty(t => t.SortOrder, order), cancellationToken);
@@ -112,6 +116,16 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
     private Task DeleteAsync<T>(Guid actorId, Guid id, IQueryable<T> source, string entityType, CancellationToken cancellationToken) where T : class =>
         WriteAsync(actorId, async () =>
         {
+            var before = entityType switch
+            {
+                "Department" => await database.Departments.AsNoTracking().Where(x => x.Id == id).Select(x => x.Name).SingleOrDefaultAsync(cancellationToken),
+                "Subject" => await database.Subjects.AsNoTracking().Where(x => x.Id == id)
+                    .Select(x => x.Name + "; department=" + x.DepartmentId).SingleOrDefaultAsync(cancellationToken),
+                _ => await database.Topics.AsNoTracking().Where(x => x.Id == id)
+                    .Select(x => x.Name + "; subject=" + x.SubjectId + "; grade=" + x.Grade + "; order=" + x.SortOrder).SingleOrDefaultAsync(cancellationToken)
+            };
+            if (before is null) throw Missing();
+            await EnsureNoActiveJobsAsync(entityType, id, cancellationToken);
             if (await source.ExecuteDeleteAsync(cancellationToken) == 0) throw Missing();
             database.AuditLogs.Add(new AuditLog
             {
@@ -120,7 +134,7 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
                 EntityType = entityType,
                 EntityId = id,
                 Action = "Delete" + entityType,
-                Note = "Deleted an unreferenced catalog entry."
+                Note = $"Deleted: {before}"
             });
             return true;
         }, cancellationToken);
@@ -136,6 +150,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)", cancellationToken);
             if (!await database.Users.AsNoTracking().AnyAsync(x => x.Id == actorId && x.IsActive && x.Role == Roles.Admin, cancellationToken))
                 throw new CatalogException(403, "Forbidden", "Tài khoản không còn quyền quản trị.");
+            // Exclude in-flight job creation until the active-job check and catalog change commit together.
+            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683402)", cancellationToken);
             var result = await operation();
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -150,6 +166,21 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
                 throw new CatalogException(409, "Conflict", "Danh mục đã tồn tại, đang được tham chiếu hoặc thao tác quản trị đang bận.");
             throw new CatalogException(500, "InternalError", "Không thể lưu danh mục. Hãy tải lại dữ liệu trước khi thử lại.");
         }
+    }
+
+    /// <summary>Protect JSON catalog references until queued/running jobs have finished generating questions.</summary>
+    private async Task EnsureNoActiveJobsAsync(string entityType, Guid id, CancellationToken cancellationToken)
+    {
+        if (entityType == "Department") return;
+        var key = entityType == "Subject" ? "subjectId" : "topicId";
+        var busy = await database.Database.SqlQuery<bool>($"""
+            SELECT EXISTS (
+                SELECT 1 FROM ai_generation_jobs
+                WHERE status IN ('Queued', 'Running')
+                AND lower(params ->> {key}) = {id.ToString()}
+            ) AS "Value"
+            """).SingleAsync(cancellationToken);
+        if (busy) throw new CatalogException(409, "Conflict", "Danh mục đang được job AI chờ hoặc đang chạy sử dụng.");
     }
 
     /// <summary>Record before/after catalog metadata without leaving successful audits for rolled-back changes.</summary>

@@ -1,23 +1,27 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace ExamMaker.Application.Catalog;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record DepartmentInput([Required, StringLength(200, MinimumLength = 1)] string Name);
+public sealed record DepartmentInput([Required] string Name);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record SubjectInput([Required, StringLength(200, MinimumLength = 1)] string Name,
+public sealed record SubjectInput([Required] string Name,
     [Required] Guid? DepartmentId);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record TopicInput([Required] Guid? SubjectId, [Required, Range(10, 12)] int? Grade,
-    [Required, StringLength(300, MinimumLength = 1)] string Name,
+    [Required] string Name,
     [Required, Range(0, int.MaxValue)] int? SortOrder);
 
 public sealed record DepartmentView(Guid Id, string Name);
 public sealed record SubjectView(Guid Id, string Name, Guid DepartmentId);
 public sealed record TopicView(Guid Id, Guid SubjectId, int Grade, string Name, int SortOrder);
+public sealed record DepartmentListQuery(int Page = 1, int PageSize = 20);
+public sealed record SubjectListQuery(int Page = 1, int PageSize = 20, Guid? DepartmentId = null);
+public sealed record TopicListQuery(int Page = 1, int PageSize = 20, Guid? SubjectId = null, int? Grade = null);
 public sealed record CatalogQuery(int Page = 1, int PageSize = 20, Guid? DepartmentId = null,
     Guid? SubjectId = null, int? Grade = null);
 public sealed record CatalogPage<T>(int Page, int PageSize, int TotalItems, int TotalPages, IReadOnlyList<T> Items);
@@ -47,8 +51,11 @@ public static class CatalogInputRules
     /// <summary>Trim labels and reject blank, oversized or PostgreSQL-incompatible names before persistence.</summary>
     public static string Name(string? value, int maximum)
     {
-        var name = value?.Trim() ?? "";
-        if (name.Length == 0 || name.Length > maximum || name.Contains('\0')) throw Invalid();
+        if (value is null || value.Any(char.IsControl)) throw Invalid();
+        string name;
+        try { name = value.Trim().Normalize(NormalizationForm.FormC); }
+        catch (ArgumentException) { throw Invalid(); }
+        if (name.Length == 0 || name.Length > maximum) throw Invalid();
         return name;
     }
 

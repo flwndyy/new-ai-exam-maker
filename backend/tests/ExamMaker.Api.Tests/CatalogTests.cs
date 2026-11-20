@@ -12,6 +12,46 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class CatalogTests
 {
+    [Fact]
+    // Normalize equivalent Unicode spellings and measure length only after trimming/normalization.
+    public void Names_use_NFC_and_reject_control_characters()
+    {
+        Assert.Equal("Toán", CatalogInputRules.Name(" Toa\u0301n ", 200));
+        Assert.Equal(new string('x', 200), CatalogInputRules.Name(new string('x', 200) + "  ", 200));
+        Assert.Equal(new string('x', 300), CatalogInputRules.Name(" " + new string('x', 300), 300));
+        foreach (var value in new[] { "A\nB", "A\tB", "A\rB", "A\0B", "A\u007fB", new string('x', 201) })
+            Assert.Equal(400, Assert.Throws<CatalogException>(() => CatalogInputRules.Name(value, 200)).StatusCode);
+    }
+
+    [Fact]
+    // MVC must not reject an otherwise valid maximum-length name before service normalization.
+    public async Task Whitespace_outside_the_name_limit_is_accepted_by_MVC()
+    {
+        using var app = new CatalogTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = "admin" };
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PostAsJsonAsync("/api/v1/admin/departments", new { name = new string('x', 200) + " " });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("departments?grade=invalid&departmentId=invalid&subjectId=invalid")]
+    [InlineData("subjects?grade=invalid&subjectId=invalid")]
+    [InlineData("topics?departmentId=invalid")]
+    // Unknown query keys are consistently ignored rather than accidentally bound by a shared query DTO.
+    public async Task List_endpoints_ignore_filters_outside_their_contract(string query)
+    {
+        using var app = new CatalogTestFactory();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.GetAsync("/api/v1/" + query);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(app.Management.Query!.DepartmentId);
+        Assert.Null(app.Management.Query.SubjectId);
+        Assert.Null(app.Management.Query.Grade);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("teacher")]

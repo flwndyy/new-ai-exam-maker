@@ -42,6 +42,16 @@ public sealed class AiGenerationServiceTests
         Note: note);
 
     [Fact]
+    // A catalog race is a validation failure, never a quota error or an enqueued orphan job.
+    public async Task Catalog_changed_during_submission_returns_validation_without_enqueue()
+    {
+        _jobs.CatalogChanged = true;
+        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), default);
+        Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Empty(_queue.Enqueued);
+    }
+
+    [Fact]
     public async Task GetQuota_ReturnsConfiguredLimitsAndUsageForUtcDay()
     {
         _usage.User = new AiUsage(JobsUsed: 3, TokensUsed: 12_000);
@@ -339,6 +349,7 @@ public sealed class AiGenerationServiceTests
     private sealed class FakeJobStore(FakeJobQueue timeline) : IAiJobStore
     {
         public bool ReserveSucceeds { get; set; } = true;
+        public bool CatalogChanged { get; set; }
 
         public Guid CreatedJobId { get; } = Guid.NewGuid();
 
@@ -359,6 +370,7 @@ public sealed class AiGenerationServiceTests
             CancellationToken ct)
         {
             CreateCalls++;
+            if (CatalogChanged) throw new AiCatalogChangedException();
             LastUserId = userId;
             LastRequest = request;
             LastUsageDate = usageDate;
