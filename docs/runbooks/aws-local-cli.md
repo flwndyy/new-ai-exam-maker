@@ -19,7 +19,7 @@ tiếp từ máy cá nhân (Windows, macOS, Linux) bằng AWS CLI, thay cho AWS 
 | Vai trò | Có cần AWS CLI? | Quyền IAM gợi ý |
 |---|---|---|
 | OPS (dựng hạ tầng, chạy script `infra/`) | **Có** | Quyền quản trị cho các dịch vụ dự án (giai đoạn dựng có thể dùng `AdministratorAccess`, thu hẹp sau) |
-| DEV backend/frontend (chỉ đọc cấu hình) | Không bắt buộc | `AmazonSSMReadOnlyAccess` hoặc policy chỉ đọc `/exammaker/*` |
+| DEV backend/frontend (chỉ đọc cấu hình) | Không bắt buộc | Policy tối thiểu chỉ đọc SSM Cognito: `/exammaker/*/Cognito/*` (tuyệt đối **không** dùng `AmazonSSMReadOnlyAccess` hay wildcard `/exammaker/*` để tránh lộ connection string/secret) |
 
 DEV không có AWS CLI vẫn làm được: OPS đọc tham số và gửi riêng các giá trị **không bí mật**
 (Region, UserPoolId, ClientId, Authority, HostedUiDomain) để DEV đặt biến môi trường local.
@@ -32,10 +32,41 @@ Backend validate JWT Cognito qua endpoint HTTPS công khai, không cần AWS cre
 Làm trên AWS Console, **mỗi thành viên một IAM User riêng** (không dùng chung key, không tạo
 Access Key cho tài khoản root).
 
+### 2.1 Tạo policy tối thiểu cho DEV (Chỉ đọc tham số Cognito)
+
+> ⚠️ **Cảnh báo bảo mật (Least Privilege):** Tuyệt đối **không** gán AWS Managed Policy `AmazonSSMReadOnlyAccess` hoặc cấp quyền đọc toàn bộ `/exammaker/*` cho DEV.
+> `AmazonSSMReadOnlyAccess` cho phép đọc toàn bộ Parameter Store trong account. Khi dùng KMS key mặc định `aws/ssm`, IAM User có thể đọc được cả giá trị `SecureString` nhạy cảm như connection string database (RDS), origin secret CloudFront, hoặc API keys.
+
+1. AWS Console → **IAM** → **Policies** → **Create policy**.
+2. Chọn tab **JSON** và dán policy sau:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "AllowReadCognitoParametersOnly",
+         "Effect": "Allow",
+         "Action": [
+           "ssm:GetParameter",
+           "ssm:GetParameters",
+           "ssm:GetParametersByPath"
+         ],
+         "Resource": "arn:aws:ssm:ap-southeast-1:*:parameter/exammaker/*/Cognito/*"
+       }
+     ]
+   }
+   ```
+3. Đặt tên policy: `ExamMakerDevCognitoReadOnly` → **Create policy**. Policy này chỉ cho phép đọc các tham số public của Cognito, hoàn toàn không cho đọc connection string hay giải mã secrets.
+
+### 2.2 Tạo IAM User và cấp Access Key
+
 1. AWS Console → **IAM** → **Users** → **Create user**.
 2. Đặt tên theo người dùng, ví dụ `ops-<ten>` hoặc `dev-<ten>`. Không cần bật Console access nếu
    người đó chỉ dùng CLI.
-3. **Permissions** → **Attach policies directly** → chọn policy theo bảng ở mục 1 → **Create user**.
+3. **Permissions** → **Attach policies directly**:
+   - Nếu là DEV: chọn policy `ExamMakerDevCognitoReadOnly` vừa tạo ở mục 2.1.
+   - Nếu là OPS: chọn quyền quản trị hạ tầng dự án.
+   → **Create user**.
 4. Mở user vừa tạo → tab **Security credentials** → mục **Access keys** → **Create access key**.
 5. Use case: **Command Line Interface (CLI)** → tick xác nhận → **Next** → **Create access key**.
 6. Gửi **Access key ID** và **Secret access key** cho đúng người đó qua kênh riêng. Secret chỉ
@@ -109,17 +140,19 @@ aws ssm get-parameters-by-path --region ap-southeast-1 \
   --query "Parameters[].{Name:Name,Value:Value}" --output table
 ```
 
-### Cách 1: Nạp tự động từ Parameter Store (Khi máy đã cài AWS CLI)
+### Cách 1: Nạp tự động từ Parameter Store (Khi máy đã cấu hình AWS CLI)
+
+> **Lưu ý về quyền:** IAM User của DEV được giới hạn chỉ đọc `/exammaker/*/Cognito/*`. Nếu cấu hình app đọc ở đường dẫn gốc `/exammaker/dev`, AWS SDK sẽ bị từ chối truy cập (`AccessDeniedException`). Vì vậy, DEV cần trỏ biến môi trường `ParameterStore__Path` đúng vào `/exammaker/dev/Cognito`:
 
 ```powershell
 # PowerShell
-$env:ParameterStore__Path = "/exammaker/dev"
+$env:ParameterStore__Path = "/exammaker/dev/Cognito"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
 ```bash
 # Bash
-export ParameterStore__Path="/exammaker/dev"
+export ParameterStore__Path="/exammaker/dev/Cognito"
 dotnet run --project backend/src/ExamMaker.Api --urls http://localhost:5080
 ```
 
