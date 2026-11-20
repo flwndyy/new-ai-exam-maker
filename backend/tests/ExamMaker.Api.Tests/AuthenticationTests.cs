@@ -27,6 +27,18 @@ namespace ExamMaker.Api.Tests;
 public sealed class AuthenticationTests
 {
     [Theory]
+    [InlineData(409, "Conflict")]
+    [InlineData(429, "RateLimited")]
+    // Verify the shared HTTP error pipeline against the OpenAPI error-code contract.
+    public async Task Status_code_pages_use_documented_conflict_and_rate_limit_codes(int status, string code)
+    {
+        using var app = new AuthTestFactory();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", app.Token());
+        await AssertProblemAsync(await client.GetAsync($"/_auth-tests/status/{status}"), (HttpStatusCode)status, code);
+    }
+
+    [Theory]
     [InlineData("head", true, true, "SelfReview")]
     [InlineData("admin", true, false, "SelfReview")]
     [InlineData("teacher", true, true, "Forbidden")]
@@ -286,6 +298,11 @@ public sealed class FakeUserDirectory : IUserDirectory
 [Route("_auth-tests")]
 public sealed class AuthenticationProbeController : ControllerBase
 {
+    [HttpGet("status/{status:int}")]
+    [Authorize]
+    // Test-only responses exercise status-code pages without adding production endpoints.
+    public IActionResult StatusProblem(int status) => StatusCode(status);
+
     [HttpGet("review")]
     [Authorize]
     // Test identifiers are synthesized here; production controllers must load them from the database.

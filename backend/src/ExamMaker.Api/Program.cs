@@ -24,6 +24,8 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "NotFound",
+        409 => "Conflict",
+        429 => "RateLimited",
         >= 500 => "InternalError",
         _ => "RequestFailed"
     });
