@@ -127,3 +127,59 @@ validation, restricted deletion and atomic audits. A5 reuses the existing
 catalog schema and seed; no additional migration or AWS permissions are needed.
 Run `dotnet test ExamMaker.slnx -c Release -m:1 --filter FullyQualifiedName~Catalog`
 with `A2_TEST_PG_ADMIN` configured to include the real PostgreSQL catalog tests.
+
+## AI generation API (B5)
+
+`POST /api/v1/ai/generate`, `GET /api/v1/ai/jobs`, `GET /api/v1/ai/jobs/{id}` and
+`GET /api/v1/ai/quota` follow `docs/api/openapi.yaml`. Generate checks the
+per-user rate limit and the daily quota, creates an `ai_generation_jobs` row in
+`Queued` state and then sends `{"jobId":"..."}` to SQS. If the send fails the job
+stays `Queued` and the request still returns 202; the worker recovery task (B6)
+re-sends stale `Queued` jobs.
+
+### Configuration
+
+Keys are .NET configuration keys. As environment variables replace `:` with `__`;
+in Parameter Store create them under `/exammaker/<env>/` with `/` in place of `:`
+(for example `/exammaker/dev/Sqs/AiJobsQueueUrl`). Quota and rate-limit values
+are read at startup, so restart the API after changing them.
+
+| Key | Default | Notes |
+|---|---|---|
+| `Sqs:AiJobsQueueUrl` | none | Main AI job queue URL. **Required outside Development** (see below). |
+| `AWS:Region` | SDK default chain | Optional SQS client region, e.g. `ap-southeast-1`. |
+| `AiQuota:JobsPerUserPerDay` | `10` | Jobs per user per UTC day. |
+| `AiQuota:MaxQuestionsPerJob` | `10` | Upper bound for `count`. |
+| `AiQuota:TokensPerUserPerDay` | `100000` | Per-user daily token budget. |
+| `AiQuota:SystemTokensPerDay` | `500000` | Daily token cap for the whole system. |
+| `AiQuota:MaxNoteLength` | `1000` | Maximum `note` length in characters. |
+| `AiQuota:MaxAttempts` | `3` | Stored as `max_attempts`; must equal the queue's redrive `maxReceiveCount`. |
+| `AiRateLimit:PermitLimit` | `5` | Generate requests per user per window. |
+| `AiRateLimit:Window` | `00:01:00` | Fixed window (`TimeSpan`). |
+
+Quota defaults match `docs/context.md` §14. Only override them deliberately.
+
+The API needs `sqs:SendMessage` on the main queue; the EC2 instance profile in
+`infra/iam/exammaker-ec2-policy.example.json` already grants it. Never put the
+queue URL or account ID in the repository.
+
+### Local development without SQS
+
+When `Sqs:AiJobsQueueUrl` is unset and `ASPNETCORE_ENVIRONMENT=Development`, the
+API uses a logging queue: nothing is sent, a warning with the job id is logged and
+the job stays `Queued`. In any other environment a missing URL makes every
+`/api/v1/ai/*` request fail with `Configuration value 'Sqs:AiJobsQueueUrl' is not set.`
+(the controller depends on the queue), so a misconfigured server is noticed
+immediately instead of silently dropping jobs. `dotnet run --no-launch-profile`
+defaults to Production, so set the environment explicitly:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet run --project src/ExamMaker.Api --no-launch-profile --urls http://localhost:5080
+```
+
+Calling the endpoints also requires the Cognito settings, a database user and an
+access token as described in `docs/a3-auth.md`. The automated tests in
+`AiEndpointsTests`, `EfAiJobStoreTests`, `EfAiJobReaderTests` and
+`EfAiUsageReaderTests` cover the endpoints, quota reservation under concurrency
+and job reads against PostgreSQL.

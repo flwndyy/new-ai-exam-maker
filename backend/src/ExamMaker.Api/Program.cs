@@ -1,8 +1,10 @@
+using ExamMaker.Api.Ai;
 using ExamMaker.Api.Authentication;
 using ExamMaker.Api.Catalog;
 using ExamMaker.Api.Users;
 using ExamMaker.Application.Catalog;
 using ExamMaker.Infrastructure;
+using ExamMaker.Infrastructure.Ai;
 using ExamMaker.Infrastructure.Catalog;
 using ExamMaker.Infrastructure.Persistence;
 using ExamMaker.Infrastructure.Users;
@@ -19,6 +21,9 @@ builder.Services.AddSerilog((services, logger) => logger
     .WriteTo.Console());
 
 builder.Services.AddExamMakerPersistence(builder.Configuration);
+builder.Services.AddExamMakerAi(builder.Configuration);
+builder.Services.AddAiRateLimiting(
+    builder.Configuration.GetSection("AiRateLimit").Get<AiRateLimitOptions>() ?? new AiRateLimitOptions());
 builder.Services.AddUserManagement(builder.Configuration);
 builder.Services.AddExceptionHandler<UserOperationExceptionHandler>();
 // Keep catalog persistence scoped to the request and translate its safe application errors.
@@ -51,6 +56,8 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 // Authenticate before evaluating endpoint authorization.
 app.UseAuthentication();
+// After authentication so the AI limiter can partition by the authenticated user, not the IP.
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapHealthChecks("/health").AllowAnonymous();
