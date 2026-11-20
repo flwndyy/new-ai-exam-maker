@@ -1,0 +1,66 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SqsJobQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:ReceiveMessage",
+        "sqs:SendMessage"
+      ],
+      "Resource": [
+        "${SQS_QUEUE_ARN}",
+        "${SQS_DLQ_ARN}"
+      ]
+    },
+    {
+      "Sid": "BedrockModelInvocation",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "${BEDROCK_MODEL_ARN}"
+    },
+    {
+      "Sid": "CognitoAdminForConfiguredPool",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminUserGlobalSignOut",
+        "cognito-idp:ListGroups",
+        "cognito-idp:ListUsers"
+      ],
+      "Resource": "${COGNITO_USER_POOL_ARN}"
+    },
+    {
+      "Sid": "ReadConfiguredParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "${PARAMETER_ARN_PREFIX}/*"
+    },
+    {
+      "Sid": "DecryptParameterStoreValues",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "${PARAMETER_KMS_KEY_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.ap-southeast-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
