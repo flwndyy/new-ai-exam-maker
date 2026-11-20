@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -42,6 +43,7 @@ public sealed class ForwardedHeadersTests
 
 [ApiController]
 [Route("_forwarded-tests")]
+[AllowAnonymous]
 public sealed class ForwardedHeadersProbeController : ControllerBase
 {
     [HttpGet("remote-ip")]
