@@ -128,7 +128,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 ## OPS-2 — Dữ liệu, danh tính, giám sát, chi phí (@TranGiaBao2005)
 
 - [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
-- [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
+- [x] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
+  - Hoàn thành 20/11/2026: Dựng PostgreSQL 16.13 (`db.t4g.micro`, Single-AZ, private subnet, gp3 20GB, KMS `alias/aws/rds`, backup 3 ngày, `rds.force_ssl=1`). Lưu ConnectionString dạng `SecureString` lên Parameter Store (`/exammaker/dev/ConnectionStrings/ExamMaker`) và metadata (`/exammaker/dev/Rds/*`).
+  - Kiểm thử: 15/15 tiêu chí pass trong `infra/rds/verify-rds.sh`; đã chạy thành công kịch bản Restore Drill trong `infra/rds/restore-drill.sh` (chụp snapshot, khôi phục instance test, kiểm tra guardrails và xoá dọn dẹp sạch sẽ). Xem `docs/runbooks/rds.md`.
 - [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
