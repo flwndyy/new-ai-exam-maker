@@ -17,7 +17,7 @@ Tất cả đường dẫn có tiền tố `/api/v1` và yêu cầu tài khoản
 | `POST /questions/{id}/withdraw` | Rút lại | Creator; Submitted |
 | `POST /questions/{id}/approve` | Duyệt; body note tùy chọn, có thể không gửi body | Head cùng tổ hoặc admin, cấm tự duyệt |
 | `POST /questions/{id}/reject` | Từ chối; body `{note}` bắt buộc | Cùng quyền approve |
-| `POST /questions/{id}/archive` | Approved → Archived, không khôi phục | Teacher sở hữu; head cùng tổ; admin |
+| `POST /questions/{id}/archive` | Approved → Archived, không khôi phục; chặn khi đề Draft/Rejected/Submitted tham chiếu | Teacher sở hữu; head sở hữu hoặc cùng tổ; admin |
 | `POST /questions/{id}/mark-reviewed` | Đặt aiReviewedByAuthor=true | Creator teacher/head; AI Draft/Rejected |
 | `GET /review/questions` | Submitted theo submittedAt tăng dần, loại câu của mình | Head trong tổ; admin tất cả |
 
@@ -31,6 +31,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 |---|---|
 | `QuestionRules.CanRead` | Kiểm quyền đọc theo role, trạng thái, tổ và người tạo; dùng cho GET chi tiết. |
 | `QuestionRules.RequireOwner` | Chặn thao tác lên nội dung của người khác và chặn admin tạo/sửa nội dung. |
+| `QuestionRules.RequireArchive` | Kiểm quyền và trạng thái archive trước khi tra tham chiếu đề; head vẫn có quyền với câu của mình sau chuyển tổ. |
 | `QuestionRules.Validate` | Kiểm input câu hỏi và gọi kiểm payload theo dạng trước khi lưu/gửi duyệt. |
 | `QuestionPayloadRules.Validate` | Kiểm schema đúng type; không đoán theo hình dạng JSON. |
 | `Object/Labels/Text/Array` | Chặn field lạ/trùng/thiếu, nhãn trùng, boolean sai kiểu, câu trả lời rỗng và rubric điểm không hợp lệ. |
@@ -41,7 +42,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 | `CatalogAsync` | Kiểm bộ topic/subject/grade và lấy department từ catalog, giữ department câu cố định khi sửa. |
 | `MutateAsync` | Mở transaction, lấy khóa, kiểm actor, thực hiện thay đổi, lưu audit và commit cùng nhau. |
 | `LockQuestionAsync` | Giữ FOR UPDATE và reload trước khi quyết định để hai reviewer không ghi đè kết quả. |
-| `EnsureSourceChangeAllowedAsync` | Khóa các phiên bản đề đang tham chiếu, bảo vệ nguồn Approved trong đề Draft/Rejected và phân loại nguồn trong đề Submitted. |
+| `EnsureSourceChangeAllowedAsync` | Khóa các phiên bản đề tham chiếu; chặn mở lại/archive nguồn và đổi phân loại khi còn đề Draft/Rejected/Submitted. |
 | `CreateAsync/UpdateAsync` | Tạo hoặc sửa câu theo quyền và ràng buộc danh mục; không cho client giả mạo source/creator/revision/status. |
 | `TransitionAsync` | Đọc câu có khóa, gọi state machine ở Application và ghi audit từ trạng thái cũ sang mới. |
 | `DeleteAsync` | Kiểm câu Draft/Rejected thuộc tác giả, kiểm liên kết đề, tự gỡ liên kết bộ, xóa bằng PostgreSQL và lưu lịch sử. |
@@ -65,7 +66,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 
 - Không có đường khôi phục Archived. Submitted phải withdraw trước khi sửa.
 - PUT cùng nội dung (so payload theo cấu trúc JSON) không tăng revision hoặc mở lại Approved.
-- Sửa nội dung thực sự của câu Approved bị chặn bằng 409 `QuestionReferenced` khi đề Draft/Rejected còn tham chiếu, kể cả đề của người khác. Phải gỡ câu khỏi các phiên bản có thể sửa trước khi mở lại câu; lưu không đổi nội dung vẫn thành công. Đổi môn/chương/khối còn bị chặn khi đề Submitted tham chiếu vì đề đó có thể withdraw/reject.
+- Sửa nội dung thực sự của câu Approved hoặc archive bị chặn bằng 409 `QuestionReferenced` khi đề Draft/Rejected/Submitted còn tham chiếu, kể cả đề của người khác. Submitted có thể withdraw/reject nên cần bảo vệ câu nguồn. Phải gỡ câu khỏi phiên bản có thể sửa trước khi mở lại/archive câu; PUT không đổi nội dung vẫn thành công. Cùng guard bảo vệ đổi môn/chương/khối. Chỉ còn đề Approved/Published/Archived thì cho sửa/archive nguồn, không thay snapshot.
 - AI chưa rà soát không submit được: 409 `AiReviewRequired`. Sửa nội dung AI reset aiReviewedByAuthor, aiVerification và aiVerificationNote, giữ nguyên job/ordinal/source.
 - Submit xóa quyết định cũ và đặt submittedAt mới. Withdraw xóa submittedAt và quyết định duyệt. Reject note không trắng, tối đa 2000; approve note tùy chọn, tối đa 2000. Reviewer và thời gian lưu UTC.
 - Actor không tồn tại hoặc bị khóa lúc kiểm lại DB trả 401 `Unauthorized` kèm `WWW-Authenticate: Bearer`, kể cả sau khi chờ khóa. Actor hợp lệ nhưng thiếu quyền trả 403 `Forbidden`; tự duyệt của head/admin trả 403 `SelfReview`. Sai trạng thái trả 409 `InvalidStateTransition`.
@@ -105,12 +106,12 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 
 ## Kết quả kiểm tra hiện tại
 
-- Kiểm tra local ngày 20/11/2026: toàn solution backend Release **448/448 test pass, 0 failed, 0 skipped** (285 API/quy tắc, 38 Application, 125 Infrastructure), gồm các integration test PostgreSQL thật.
-- Test xác nhận: sửa stem/payload/difficulty/explanation không làm hỏng đề Draft/Rejected của người khác; PUT không đổi nội dung vẫn thành công, gỡ liên kết rồi sửa được; tài khoản bị khóa lúc chờ hàng user trả 401; khóa quản trị A4 và cập nhật user khác không chặn ghi câu hỏi.
+- Kiểm tra local ngày 20/11/2026: toàn solution backend Release **451/451 test pass, 0 failed, 0 skipped** (286 API/quy tắc, 38 Application, 127 Infrastructure), gồm các integration test PostgreSQL thật.
+- Test xác nhận: sửa stem/payload/difficulty/explanation và archive bị chặn khi còn đề Draft/Rejected/Submitted của người khác; PUT không đổi nội dung vẫn thành công. Đề Approved/Published/Archived giữ nguyên snapshot khi nguồn bị archive. Head đã chuyển tổ vẫn archive được câu của mình. Các test quyền sau chờ khóa, audit rollback, payload và đồng thời tiếp tục pass.
 - Schema TypeScript đã sinh lại và kiểm đồng bộ OpenAPI đạt. Formatter whitespace và `git diff --check` đạt. Kết quả CI của commit mới cần xác nhận sau khi push.
 
 ## Kiểm tra trước merge
 
 PR #69 dùng nhánh `feat/a6-question-workflow`, đích `dev`. Giữ A6 chưa tick tới khi review/CI đạt và PR được merge.
 
-Thử thủ công bằng teacher/head/admin: tạo → submit → reject → sửa → submit → approve → sửa Approved không bị đề Draft/Rejected tham chiếu → kiểm revision → submit/approve → archive. Kiểm tự duyệt, head khác tổ, teacher vào review queue và xóa câu được đề tham chiếu; đối chiếu mã lỗi với OpenAPI.
+Thử thủ công bằng teacher/head/admin: tạo → submit → reject → sửa → submit → approve → sửa Approved không bị đề Draft/Rejected/Submitted tham chiếu → kiểm revision → submit/approve → archive. Kiểm tự duyệt, head khác tổ, head archive câu của mình sau chuyển tổ, teacher vào review queue và sửa/archive/xóa câu được đề tham chiếu; đối chiếu mã lỗi với OpenAPI.

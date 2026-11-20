@@ -81,7 +81,7 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 | Sửa/xóa câu hỏi `Draft`/`Rejected` của mình (xóa chỉ khi chưa được đề nào tham chiếu) | ✓                                  | ✓                                | –                       |
 | Gửi duyệt / rút lại câu hỏi của mình (`Draft`/`Rejected` → `Submitted`)               | ✓                                  | ✓                                | –                       |
 | Đánh dấu "Đã rà soát" câu AI của mình (`mark-reviewed`)                               | ✓                                  | ✓                                | –                       |
-| Archive câu hỏi `Approved`                                                            | của mình                           | cùng tổ                          | tất cả                  |
+| Archive câu hỏi `Approved`                                                            | của mình                           | của mình hoặc cùng tổ | tất cả                  |
 | Duyệt/từ chối câu hỏi                                                                 | –                                  | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
 | Xem câu hỏi `Approved`                                                                | cùng tổ                            | cùng tổ                          | tất cả                  |
 | Tạo đề, ghép câu (của mình hoặc `Approved` cùng tổ)                                   | ✓                                  | ✓                                | –                       |
@@ -200,29 +200,18 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 
 #### Chi tiết triển khai A6
 
-- Sửa nội dung thực sự làm câu Approved mở lại bị chặn bằng 409 QuestionReferenced nếu có phiên bản đề Draft/Rejected đang tham chiếu, kể cả đề của người khác; PUT không đổi nội dung vẫn thành công. Người tạo đề phải gỡ câu khỏi các phiên bản có thể sửa trước khi tác giả sửa câu. Submitted tiếp tục dùng snapshot và vẫn chỉ chặn đổi phân loại vì có thể được mở lại.
-- Ghi A6 giữ FOR SHARE trên hàng users của actor tới commit để tuần tự hóa với việc khóa/đổi quyền chính actor đó; không lấy khóa quản trị toàn cục 48683401 của A4. Vẫn giữ shared catalog lock 48683402 và lock_timeout 2 giây; xung đột catalog hoặc cập nhật cùng actor có thể trả 409 Conflict.
-
-- Rà soát bổ sung A6: actor không tồn tại hoặc bị khóa khi đọc lại sau khóa hàng actor trả 401 Unauthorized và WWW-Authenticate: Bearer; actor hợp lệ nhưng thiếu quyền vẫn trả 403. Xóa câu ghi audit QuestionSet cho từng bộ bị gỡ liên kết, cùng transaction với DeleteQuestion.
-- Approve/reject câu hỏi dùng QuestionApproveRequest/QuestionRejectRequest và từ chối field thừa; ApproveRequest/RejectRequest của exam-version giữ nguyên contract A7, không áp đặt additionalProperties: false.
-
-- Review lần 3: DELETE câu Draft/Rejected tự xóa question_set_items trong cùng transaction (kể cả bộ của người khác); chỉ exam_version_questions chặn xóa. Audit lỗi phải khôi phục cả câu và liên kết bộ.
-- Chặn đổi môn/chương/khối khi đề Draft/Rejected/Submitted tham chiếu câu vì Submitted còn có thể withdraw/reject. Approved/Published/Archived dùng snapshot vẫn cho đổi phân loại nguồn; không sửa snapshot. Các chỉnh sửa nội dung không đổi phân loại vẫn theo quy tắc revision hiện có.
-- Payload từ chối surrogate Unicode lẻ bằng 400 errors[payload]. Đáp án số dùng dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng hoặc số mũ; dấu trừ và phẩy/chấm thập phân được phép. Options phải đúng thứ tự A–D, statements a–d.
-- Mark-reviewed có tính idempotent khi cờ đã true: không đổi updatedAt, không thêm audit. Câu mới dùng cùng một thời điểm UTC cho createdAt/updatedAt.
-
-- Sửa review A6: ShortAnswer number chấp nhận dấu phẩy/chấm thập phân (giữ nguyên chuỗi đáp án), từ chối NaN/Infinity. Text payload tối đa 10000 ký tự; acceptedAnswers và rubric tối đa 20 phần tử, khớp OpenAPI.
-- Ghi A6 giữ FOR SHARE trên hàng user của actor; các actor khác nhau ghi song song. Không chờ khóa quản trị toàn cục A4; vẫn tuần tự hóa trên cùng câu bằng FOR UPDATE.
-- Sau khóa câu, kiểm CanRead trước quyền/trạng thái để endpoint ghi cũng che câu không nhìn thấy bằng 404. PUT kiểm trạng thái trước validation/catalog. Chặn đổi môn/chương/khối khi câu được đề Draft/Rejected/Submitted tham chiếu (409 QuestionReferenced); khóa các phiên bản tham chiếu đến commit để không race với withdraw/submit. Snapshot đã đóng băng vẫn cho sửa câu nguồn; deadlock/lock timeout trả Conflict để tải lại/thử sau.
-- A7 khi thêm item phải giữ FOR SHARE trên câu nguồn trước kiểm môn/khối và chèn liên kết trong cùng transaction để phối hợp với khóa FOR UPDATE của A6.
-- Audit chỉ lấy ReviewNote cho Approve/Reject. So nội dung sau cùng chuẩn hóa: trim stem cả hai bên; explanation trim, rỗng thành null. Lưu lại không đổi ngữ nghĩa giữ nguyên Approved/revision/cờ AI; không tự ghi lại whitespace của câu Approved nếu chỉ chuẩn hóa.
-
-- API ngân hàng câu hỏi và workflow dùng schema A2, không thêm migration. State machine và kiểm payload ở Application, transaction/khóa hàng câu hỏi ở Infrastructure. Chỉ creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
-- Teacher/head đọc câu của mình (kể cả Archived) hoặc Approved cùng tổ. Head được đọc Submitted cùng tổ để duyệt; admin đọc tất cả. GET chi tiết ngoài phạm vi trả 404. Hàng đợi chỉ head/admin, bỏ câu của chính người xem, Submitted theo submittedAt tăng dần.
-- Department câu cố định lúc tạo. Tạo câu phải thuộc môn của tổ người tạo; khi sửa chỉ chọn môn/chương cùng department cố định. Payload validate chặt theo cả bốn schema OpenAPI, không nhận giả mạo trạng thái, creator hoặc provenance AI.
-- Chỉ thay đổi nội dung thực sự mới đưa Approved về Draft và revision+1; PUT cùng nội dung không đổi revision/trạng thái. Sửa Draft/Rejected giữ trạng thái và revision. Nội dung AI đổi thì reset cờ rà soát, kết quả kiểm chứng và note; mark-reviewed bắt buộc trước submit.
-- Submit mới xóa quyết định duyệt cũ, đặt submittedAt; withdraw xóa submittedAt và quyết định duyệt. Reject bắt buộc note, approve có note tùy chọn; cả hai ghi reviewer và reviewedAt. Archived không được phục hồi. Admin cũng không tự duyệt (403 SelfReview).
-- Mọi ghi kiểm lại actor active/role/tổ dưới FOR SHARE trên hàng actor; giữ shared khóa catalog 48683402 và khóa hàng câu hỏi FOR UPDATE đến commit để tránh cập nhật/duyệt trùng. Audit và thay đổi cùng transaction, thời gian UTC; chỉ tham chiếu từ exam_version_questions chặn xóa bằng 409 QuestionReferenced; liên kết bộ câu hỏi được tự gỡ trong cùng transaction. Chờ khóa tối đa 2 giây, quá hạn trả Conflict.
+- API dùng schema A2, không thêm migration. State machine, quyền và payload ở Application; transaction và khóa ở Infrastructure. Creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
+- Teacher/head đọc câu của mình kể cả Archived, hoặc Approved cùng tổ; head còn đọc Submitted cùng tổ để duyệt. Admin đọc tất cả. GET và endpoint ghi che câu ngoài phạm vi bằng 404 trước kiểm quyền/trạng thái. Hàng đợi chỉ head/admin, loại câu của mình, sắp submittedAt tăng dần.
+- Department câu cố định theo môn lúc tạo, phải thuộc tổ tác giả. Sửa chỉ chọn môn/chương cùng department cố định và đúng khối. PUT kiểm trạng thái trước validation/catalog; Submitted phải withdraw, Archived không khôi phục.
+- So nội dung sau chuẩn hóa stem trim, explanation trim và blank thành null, payload theo cấu trúc JSON. PUT không đổi nội dung giữ nguyên trạng thái/revision/AI flags/updatedAt và không ghi audit. Sửa Approved mở Draft và revision+1; sửa Draft/Rejected giữ trạng thái/revision. Sửa nội dung AI reset rà soát, kiểm chứng và note.
+- Khi đề Draft/Rejected/Submitted tham chiếu câu, chặn đổi môn/chương/khối, sửa nội dung làm Approved mở lại và archive bằng 409 QuestionReferenced. Submitted có thể withdraw/reject nên cần bảo vệ nguồn như đề đang sửa. Khóa các phiên bản tham chiếu FOR SHARE tới commit. Chỉ có tham chiếu Approved/Published/Archived thì cho sửa/archive nguồn, giữ nguyên snapshot.
+- Archive chỉ từ Approved: teacher/head được archive câu của mình kể cả sau chuyển tổ; head còn được archive câu cùng tổ, admin tất cả. Kiểm quyền và trạng thái trước kiểm tham chiếu đề.
+- DELETE chỉ cho creator xóa Draft/Rejected khi không có exam_version_questions tham chiếu. Tự gỡ question_set_items kể cả bộ người khác; ghi audit QuestionSet cho từng bộ thực sự mất liên kết và DeleteQuestion trong cùng transaction. Lỗi phải rollback câu, liên kết và audit.
+- Mỗi ghi giữ FOR SHARE trên hàng user của actor, đọc lại active/role/tổ, sau đó shared catalog lock 48683402 và FOR UPDATE trên câu tới commit; không dùng khóa quản trị toàn cục A4. Actor mất/bị khóa trả 401 Unauthorized kèm WWW-Authenticate: Bearer; hợp lệ nhưng thiếu quyền trả 403. lock_timeout 2 giây, deadlock/lock timeout trả 409 Conflict.
+- A7 khi thêm item phải giữ FOR SHARE trên câu nguồn trong cùng transaction trước kiểm Approved/revision/môn/khối và chèn liên kết, phối hợp với FOR UPDATE của A6; không thả khóa trước khi chèn.
+- Payload đúng bốn dạng, không cho giả mạo creator/provenance/trạng thái hoặc field ngoài hợp đồng. Text tối đa 10000 ký tự; acceptedAnswers/rubric tối đa 20 phần tử; surrogate lẻ trả 400 errors[payload]. Số ShortAnswer chỉ dạng -?[0-9]+([.,][0-9]+)?, giữ nguyên chuỗi; không khoảng trắng, dấu cộng, số mũ, NaN/Infinity. Options theo A–D, statements a–d.
+- Submit xóa quyết định cũ và đặt submittedAt; withdraw xóa submittedAt và quyết định. Approve/reject ghi reviewer/reviewedAt, chỉ hai action này dùng ReviewNote trong audit; reject bắt buộc note. Admin/head không tự duyệt (403 SelfReview). Mọi thay đổi cùng audit dùng UTC; câu mới có createdAt = updatedAt.
+- AI phải mark-reviewed trước submit. Retry mark-reviewed đã true là no-op sau kiểm quyền/trạng thái, không đổi updatedAt hoặc ghi audit. Schema QuestionApproveRequest/QuestionRejectRequest từ chối field thừa, độc lập với contract exam-version A7; submit/approve khai báo cả response 400 ValidationFailed.
 
 ### 4.3 Đề thi: phiên bản & snapshot
 
@@ -598,6 +587,8 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ## Lịch sử thay đổi
 
 **0.9 — 20/11/2026**
+
+- Thống nhất A6: bảo vệ nguồn của đề Submitted cho cả sửa nội dung/archive; head giữ quyền archive câu của mình sau chuyển tổ. Gộp spec A6 thành một bộ quy tắc, bỏ nhật ký review trong phần spec.
 
 - A6 bảo vệ câu Approved đang được đề Draft/Rejected tham chiếu, dùng khóa hàng actor thay khóa quản trị chung, bổ sung response 400 submit/approve và thống nhất tài liệu kết quả hiện tại.
 

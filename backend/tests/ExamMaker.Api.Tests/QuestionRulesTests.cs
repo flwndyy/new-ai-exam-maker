@@ -99,7 +99,8 @@ public sealed class QuestionRulesTests
     [InlineData("teacher", false, true, false)]
     [InlineData("head", false, true, true)]
     [InlineData("head", false, false, false)]
-    [InlineData("head", true, false, false)]
+    [InlineData("head", true, false, true)]
+    [InlineData("teacher", true, false, true)]
     [InlineData("admin", false, false, true)]
     [InlineData("admin", true, false, true)]
     public void Archive_obeys_the_separate_role_and_department_matrix(string role, bool own, bool same, bool allowed)

@@ -131,7 +131,7 @@ export interface paths {
          * @description Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
          *     - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
          *     - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
-         *       Nếu còn đề Draft/Rejected tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
+         *       Nếu còn đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
          *     - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
          *     Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
          *     Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
@@ -243,7 +243,8 @@ export interface paths {
         put?: never;
         /**
          * Lưu trữ câu hỏi
-         * @description `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: cùng tổ; Admin: tất cả.
+         * @description `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: của mình hoặc cùng tổ; Admin: tất cả.
+         *     Còn phiên bản đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; snapshot Approved/Published/Archived không chặn archive nguồn.
          *     Các đề đã snapshot không bị ảnh hưởng.
          */
         post: operations["archiveQuestion"];

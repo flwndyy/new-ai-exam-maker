@@ -88,11 +88,7 @@ public static class QuestionRules
             if (access == ReviewAccess.SelfReview) throw new QuestionException(403, "SelfReview", "Không được tự duyệt câu hỏi.");
             if (access != ReviewAccess.Allowed) throw Forbidden();
         }
-        else if (action == QuestionAction.Archive)
-        {
-            if (!actor.IsActive || !(actor.Role == Roles.Admin || actor.Role == Roles.Head && actor.DepartmentId == question.DepartmentId
-                || actor.Role == Roles.Teacher && AccessRules.IsOwner(actor, Resource(question)))) throw Forbidden();
-        }
+        else if (action == QuestionAction.Archive) RequireArchive(actor, question);
         else RequireOwner(actor, question);
 
         switch (action)
@@ -126,7 +122,6 @@ public static class QuestionRules
                 question.ReviewNote = string.IsNullOrEmpty(note) ? null : note;
                 break;
             case QuestionAction.Archive:
-                if (question.Status != "Approved") throw InvalidState();
                 question.Status = "Archived";
                 break;
             case QuestionAction.MarkReviewed:
@@ -138,6 +133,14 @@ public static class QuestionRules
         }
         question.UpdatedAt = now;
         return true;
+    }
+
+    /// <summary>Allow teacher/head owners across department transfers, same-department heads, or administrators to archive approved content.</summary>
+    public static void RequireArchive(AuthenticatedUser actor, Question question)
+    {
+        if (!actor.IsActive || !(actor.Role == Roles.Admin || actor.Role == Roles.Head && actor.DepartmentId == question.DepartmentId
+            || actor.Role is Roles.Teacher or Roles.Head && AccessRules.IsOwner(actor, Resource(question)))) throw Forbidden();
+        if (question.Status != "Approved") throw InvalidState();
     }
 
     /// <summary>Reject editing a locked workflow state before catalog or content validation can obscure the required action.</summary>

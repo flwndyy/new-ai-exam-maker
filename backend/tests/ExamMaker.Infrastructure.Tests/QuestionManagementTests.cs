@@ -203,8 +203,8 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    // Submitted exam snapshots retain their old text and revision after the source is reopened and edited.
-    public async Task Editing_approved_source_does_not_change_submitted_exam_snapshots()
+    // Submitted references block reopening; finalized snapshots remain unchanged when editing is allowed again.
+    public async Task Submitted_exams_preserve_sources_until_the_version_is_finalized()
     {
         await SeedAsync();
         var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit); await ActAsync(head, q.Id, QuestionAction.Approve);
@@ -230,8 +230,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             await db.ExamVersions.Where(x => x.Id == versionId).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Submitted").SetProperty(v => v.SubmittedAt, DateTime.UtcNow));
         }
         await using var edit = fixture.CreateContext();
-        var changed = await Service(edit).UpdateAsync(owner, q.Id, Input("New source"), default);
-        Assert.Equal(2, changed.Revision);
+        Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(edit).UpdateAsync(owner, q.Id, Input("New source"), default))).Code);
         var snapshot = await edit.ExamVersionQuestions.SingleAsync(x => x.ExamVersionId == versionId);
         Assert.Equal(q.Stem, snapshot.StemSnapshot); Assert.Equal(1, snapshot.SourceRevision);
         var movedInput = Input("New source") with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000011"), Grade = 11 };
@@ -239,7 +238,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         await edit.ExamVersions.Where(x => x.Id == versionId).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Approved")
             .SetProperty(v => v.ReviewedBy, head).SetProperty(v => v.ReviewedAt, DateTime.UtcNow));
         var reclassified = await Service(edit).UpdateAsync(owner, q.Id, movedInput, default);
-        Assert.Equal(11, reclassified.Grade);
+        Assert.Equal(11, reclassified.Grade); Assert.Equal(2, reclassified.Revision);
         Assert.Equal(q.Stem, (await edit.ExamVersionQuestions.AsNoTracking().SingleAsync(x => x.ExamVersionId == versionId)).StemSnapshot);
     }
 
@@ -574,7 +573,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     public async Task Approved_content_edits_preserve_other_authors_editable_exam_sources()
     {
         await SeedAsync();
-        foreach (var state in new[] { "Draft", "Rejected" })
+        foreach (var state in new[] { "Draft", "Rejected", "Submitted" })
         {
             var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit);
             q = await ActAsync(head, q.Id, QuestionAction.Approve);
@@ -593,7 +592,8 @@ public sealed class QuestionManagementTests : IAsyncLifetime
                 VersionNo = 1,
                 DurationMinutes = 45,
                 TotalPoints = 10,
-                Status = state,
+                Status = state == "Submitted" ? "Draft" : state,
+                ContentHash = state == "Submitted" ? new string('a', 64) : null,
                 ReviewNote = state == "Rejected" ? "Reason" : null,
                 ReviewedBy = state == "Rejected" ? head : null,
                 ReviewedAt = state == "Rejected" ? DateTime.UtcNow : null
@@ -602,8 +602,21 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             {
                 setup.ExamVersions.Add(version); await setup.SaveChangesAsync();
                 setup.ExamVersionQuestions.Add(new ExamVersionQuestion
-                { ExamVersionId = version.Id, SourceQuestionId = q.Id, SourceRevision = 1, SortOrder = 1, Points = 10 });
+                {
+                    ExamVersionId = version.Id,
+                    SourceQuestionId = q.Id,
+                    SourceRevision = 1,
+                    SortOrder = 1,
+                    Points = 10,
+                    Type = q.Type,
+                    Difficulty = q.Difficulty,
+                    StemSnapshot = q.Stem,
+                    PayloadSnapshot = Payload
+                });
                 await setup.SaveChangesAsync();
+                if (state == "Submitted")
+                    await setup.ExamVersions.Where(x => x.Id == version.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Submitted")
+                        .SetProperty(v => v.SubmittedAt, DateTime.UtcNow));
             }
             await using (var noop = fixture.CreateContext())
             {
@@ -620,11 +633,89 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             }
             await using var verify = fixture.CreateContext();
             var visible = await Service(verify).GetAsync(otherHead, q.Id, default);
+            foreach (var actor in new[] { owner, head, admin })
+            {
+                var error = await Assert.ThrowsAsync<QuestionException>(() => ActAsync(actor, q.Id, QuestionAction.Archive));
+                Assert.Equal(409, error.StatusCode); Assert.Equal("QuestionReferenced", error.Code);
+            }
             Assert.Equal("Approved", visible.Status); Assert.Equal(1, visible.Revision); Assert.Equal(q.Stem, visible.Stem);
             Assert.Equal(3, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id));
+            if (state == "Submitted")
+                await verify.ExamVersions.Where(x => x.Id == version.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Draft"));
             await verify.ExamVersionQuestions.Where(x => x.ExamVersionId == version.Id).ExecuteDeleteAsync();
             Assert.Equal("Draft", (await Service(verify).UpdateAsync(owner, q.Id, Input("Now editable"), default)).Status);
         }
+    }
+
+    [PostgresFact]
+    // Finalized versions use immutable snapshots and must not permanently prevent retiring their source questions.
+    public async Task Finalized_exam_snapshots_survive_source_archival()
+    {
+        await SeedAsync();
+        foreach (var state in new[] { "Approved", "Published", "Archived" })
+        {
+            var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit);
+            q = await ActAsync(head, q.Id, QuestionAction.Approve);
+            await using var db = fixture.CreateContext();
+            var version = new ExamVersion
+            {
+                Id = Guid.NewGuid(),
+                VersionNo = 1,
+                DurationMinutes = 45,
+                TotalPoints = 10,
+                ContentHash = new string('a', 64),
+                Exam = new Exam
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Synthetic snapshot",
+                    SubjectId = Subject,
+                    DepartmentId = Department,
+                    Grade = 10,
+                    CreatedBy = otherHead
+                }
+            };
+            db.ExamVersions.Add(version); await db.SaveChangesAsync();
+            db.ExamVersionQuestions.Add(new ExamVersionQuestion
+            {
+                ExamVersionId = version.Id,
+                SourceQuestionId = q.Id,
+                SourceRevision = 1,
+                SortOrder = 1,
+                Points = 10,
+                Type = q.Type,
+                Difficulty = q.Difficulty,
+                StemSnapshot = q.Stem,
+                PayloadSnapshot = Payload
+            });
+            await db.SaveChangesAsync();
+            await db.ExamVersions.Where(x => x.Id == version.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Submitted")
+                .SetProperty(v => v.SubmittedAt, DateTime.UtcNow));
+            await db.ExamVersions.Where(x => x.Id == version.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Approved")
+                .SetProperty(v => v.ReviewedBy, head).SetProperty(v => v.ReviewedAt, DateTime.UtcNow));
+            if (state != "Approved")
+                await db.ExamVersions.Where(x => x.Id == version.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, state)
+                    .SetProperty(v => v.PublishedBy, state == "Published" ? (Guid?)admin : null)
+                    .SetProperty(v => v.PublishedAt, state == "Published" ? (DateTime?)DateTime.UtcNow : null));
+            Assert.Equal("Archived", (await ActAsync(owner, q.Id, QuestionAction.Archive)).Status);
+            var snapshot = await db.ExamVersionQuestions.AsNoTracking().SingleAsync(x => x.ExamVersionId == version.Id);
+            Assert.Equal(q.Stem, snapshot.StemSnapshot);
+            Assert.True(JsonElement.DeepEquals(JsonSerializer.Deserialize<JsonElement>(Payload),
+                JsonSerializer.Deserialize<JsonElement>(snapshot.PayloadSnapshot!)));
+            Assert.Equal(1, snapshot.SourceRevision);
+        }
+    }
+
+    [PostgresFact]
+    // A transferred head retains the same ownership privileges as a teacher for previously authored content.
+    public async Task Transferred_heads_can_archive_their_own_approved_questions()
+    {
+        await SeedAsync(); var q = await CreateAsync(head);
+        await ActAsync(head, q.Id, QuestionAction.Submit); await ActAsync(otherHead, q.Id, QuestionAction.Approve);
+        await using var db = fixture.CreateContext();
+        await db.Users.Where(x => x.Id == head).ExecuteUpdateAsync(x => x.SetProperty(v => v.DepartmentId,
+            Guid.Parse("10000000-0000-0000-0000-000000000002")));
+        Assert.Equal("Archived", (await ActAsync(head, q.Id, QuestionAction.Archive)).Status);
+        Assert.Equal(1, await db.AuditLogs.CountAsync(x => x.EntityId == q.Id && x.Action == "ArchiveQuestion" && x.ActorId == head));
     }
 
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor

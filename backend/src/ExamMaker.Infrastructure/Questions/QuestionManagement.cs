@@ -88,7 +88,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             if (await CatalogAsync(input, cancellationToken) != question.DepartmentId) throw QuestionRules.Invalid("subjectId");
             var classificationChanged = question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade;
             if (classificationChanged || question.Status == "Approved" && QuestionRules.HasContentChanges(question, input))
-                await EnsureSourceChangeAllowedAsync(id, classificationChanged, cancellationToken);
+                await EnsureSourceChangeAllowedAsync(id, cancellationToken);
             var before = question.Status;
             var revision = question.Revision;
             if (QuestionRules.Edit(actor, question, input, DateTime.UtcNow))
@@ -103,6 +103,12 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         {
             var question = await LockQuestionAsync(actor, id, cancellationToken);
             var before = question.Status;
+            if (action == QuestionAction.Archive)
+            {
+                // Preserve the same permission/state error precedence before inspecting exam membership.
+                QuestionRules.RequireArchive(actor, question);
+                await EnsureSourceChangeAllowedAsync(id, cancellationToken);
+            }
             if (QuestionRules.Transition(actor, question, action, note, DateTime.UtcNow))
                 Audit(actor.Id, question, action + "Question", before,
                     action is QuestionAction.Approve or QuestionAction.Reject ? question.ReviewNote : null);
@@ -182,8 +188,8 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         return question;
     }
 
-    /// <summary>Preserve approved sources in editable exams and classification in submitted exams until references are removed.</summary>
-    private async Task EnsureSourceChangeAllowedAsync(Guid id, bool classificationChanged, CancellationToken cancellationToken)
+    /// <summary>Protect sources used by editable or submitted exams before reopening, reclassifying or archiving them.</summary>
+    private async Task EnsureSourceChangeAllowedAsync(Guid id, CancellationToken cancellationToken)
     {
         // Lock all referencing versions, including frozen ones that could be withdrawn into an editable state.
         // A competing submit locks the version before its source questions; a deadlock is safely retried as Conflict.
@@ -193,7 +199,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 WHERE i.exam_version_id = v.id AND i.source_question_id = {id})
             ORDER BY v.id FOR SHARE OF v
             """).ToListAsync(cancellationToken);
-        if (states.Any(x => x is "Draft" or "Rejected" || classificationChanged && x == "Submitted"))
+        if (states.Any(x => x is "Draft" or "Rejected" or "Submitted"))
             throw new QuestionException(409, "QuestionReferenced", "Không thể sửa câu đang được đề tham chiếu; hãy gỡ liên kết trước.");
     }
 
