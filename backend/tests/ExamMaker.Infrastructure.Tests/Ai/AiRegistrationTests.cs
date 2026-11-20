@@ -79,9 +79,9 @@ public sealed class AiRegistrationTests
         using var provider = BuildProvider(BaseSettings());
         using var scope = provider.CreateScope();
 
-        var service = scope.ServiceProvider.GetRequiredService<AiGenerationService>();
-
-        Assert.NotNull(service);
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AiGenerationService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AiJobQueries>());
+        Assert.IsType<EfAiJobReader>(scope.ServiceProvider.GetRequiredService<IAiJobReader>());
     }
 
     [Fact]

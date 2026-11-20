@@ -16,4 +16,10 @@ internal static class AiMessages
     public static string CountOutOfRange(int max) => $"Số câu phải từ 1 đến {max}.";
 
     public static string NoteTooLong(int max) => $"Ghi chú tối đa {max} ký tự.";
+
+    public const string PageInvalid = "Trang phải lớn hơn hoặc bằng 1.";
+
+    public static string PageSizeInvalid(int max) => $"Số phần tử mỗi trang phải từ 1 đến {max}.";
+
+    public const string JobStatusInvalid = "Trạng thái job không hợp lệ.";
 }
