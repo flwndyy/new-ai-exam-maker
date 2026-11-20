@@ -42,12 +42,18 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         View(await database.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken) ?? throw Missing());
 
     /// <summary>Create a user with an invitation, managed group and durable local profile.</summary>
-    public Task<AdminUser> CreateAsync(Guid actorId, CreateUserInput input, CancellationToken cancellationToken) =>
-        CreateCoreAsync(actorId, input, false, cancellationToken);
+    public async Task<AdminUser> CreateAsync(Guid actorId, CreateUserInput input, CancellationToken cancellationToken)
+    {
+        using var budget = UserManagementDeadlines.Start(cancellationToken);
+        return await CreateCoreAsync(actorId, input, false, budget.Token);
+    }
 
     /// <summary>Provision the first administrator through a private CLI, under the same mutation lock.</summary>
-    public Task<AdminUser> BootstrapAsync(string email, string fullName, CancellationToken cancellationToken) =>
-        CreateCoreAsync(null, new(email, fullName, Roles.Admin, null), true, cancellationToken);
+    internal async Task<AdminUser> ProvisionFirstAdminAsync(string email, string fullName, CancellationToken cancellationToken)
+    {
+        using var budget = UserManagementDeadlines.Start(cancellationToken);
+        return await CreateCoreAsync(null, new(email, fullName, Roles.Admin, null), true, budget.Token);
+    }
 
     /// <summary>Share the provisioning transaction between authenticated administration and private bootstrap.</summary>
     private async Task<AdminUser> CreateCoreAsync(Guid? actorId, CreateUserInput input, bool bootstrap, CancellationToken cancellationToken)
@@ -66,7 +72,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         try
         {
             created = await cognito.CreateAsync(input.Email, input.FullName, cancellationToken);
-            await cognito.SetProfileAsync(created with { Groups = [input.Role] }, cancellationToken);
+            await cognito.AssignRoleAsync(created.Subject, input.Role, cancellationToken);
             var user = new User
             {
                 Id = Guid.NewGuid(),
@@ -98,6 +104,8 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
     /// <summary>Update local and remote profiles, keeping disable requests fail-closed on partial failure.</summary>
     public async Task<AdminUser> UpdateAsync(Guid actorId, Guid id, UpdateUserInput input, CancellationToken cancellationToken)
     {
+        using var budget = UserManagementDeadlines.Start(cancellationToken);
+        cancellationToken = budget.Token;
         if (input.IsActive is null) throw Invalid();
         var normalized = UserInputRules.Normalize(new(input.Email, input.FullName, input.Role, input.DepartmentId));
         UserInputRules.EnsureNotSelfLockout(actorId, id, normalized.Role, input.IsActive.Value);
@@ -109,6 +117,8 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
     /// <summary>Soft-delete by denying local access first, then disabling Cognito and revoking sessions.</summary>
     public async Task DeactivateAsync(Guid actorId, Guid id, CancellationToken cancellationToken)
     {
+        using var budget = UserManagementDeadlines.Start(cancellationToken);
+        cancellationToken = budget.Token;
         UserInputRules.EnsureNotSelfLockout(actorId, id, Roles.Admin, false);
         await PersistDisabledAsync(actorId, id, null, cancellationToken);
         await using var transaction = await LockAsync(cancellationToken);
@@ -158,7 +168,12 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
             { Email = input.Email, FullName = input.FullName, EmailVerified = true, Groups = [input.Role] }, cancellationToken);
             await cognito.SetEnabledAsync(user.CognitoSub, active, cancellationToken);
             if (!active) await cognito.GlobalSignOutAsync(user.CognitoSub, cancellationToken);
-            Audit(actorId, user.Id, "UpdateUser", user.IsActive ? "Active" : "Inactive", active ? "Active" : "Inactive", "User profile and managed role synchronized.");
+            var permissionChanges = new List<string>();
+            if (user.Role != input.Role) permissionChanges.Add($"role {user.Role}->{input.Role}");
+            if (user.DepartmentId != input.DepartmentId)
+                permissionChanges.Add($"department {user.DepartmentId?.ToString() ?? "none"}->{input.DepartmentId?.ToString() ?? "none"}");
+            var auditNote = permissionChanges.Count == 0 ? "User profile and managed role synchronized." : string.Join("; ", permissionChanges);
+            Audit(actorId, user.Id, "UpdateUser", user.IsActive ? "Active" : "Inactive", active ? "Active" : "Inactive", auditNote);
             user.Email = input.Email;
             user.FullName = input.FullName;
             user.Role = input.Role;
@@ -189,6 +204,8 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
     /// <summary>Report drift in both directions without changing either store.</summary>
     public async Task<ReconcileReport> ReconcileAsync(CancellationToken cancellationToken)
     {
+        using var budget = UserManagementDeadlines.Start(cancellationToken);
+        cancellationToken = budget.Token;
         var local = await database.Users.AsNoTracking().OrderBy(x => x.Id).ToListAsync(cancellationToken);
         IReadOnlyList<CognitoAccount> remote;
         try { remote = await cognito.ListAsync(cancellationToken); }
@@ -220,8 +237,15 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         try
         {
+            await database.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '2s'", cancellationToken);
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)", cancellationToken);
             return transaction;
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.LockNotAvailable)
+        {
+            await transaction.DisposeAsync();
+            UserFailureDiagnostics.Log(logger, exception, "Lock", false);
+            throw new UserOperationException(409, "Conflict", "Thao tác quản lý user đang bận. Hãy tải lại và thử sau.");
         }
         catch { await transaction.DisposeAsync(); throw; }
     }
@@ -245,11 +269,11 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
     /// <summary>Attempt bounded cleanup even if the HTTP request was cancelled.</summary>
     private async Task<bool> CompensateAsync(Func<CancellationToken, Task> cleanup)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(UserManagementDeadlines.Compensation);
         try { await cleanup(timeout.Token); return true; }
-        catch
+        catch (Exception exception)
         {
-            logger.LogError("User synchronization compensation failed; run read-only reconciliation before manual recovery.");
+            UserFailureDiagnostics.Log(logger, exception, "Compensation", true);
             return false;
         }
     }
@@ -260,8 +284,9 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         if (!ambiguousCommit && exception is UserOperationException known) return known;
         if (!ambiguousCommit && exception is DbUpdateException { InnerException: PostgresException { SqlState: "23505" } })
             return new(409, "Conflict", "Email hoặc tài khoản đã tồn tại.");
-        logger.LogError("User synchronization failed. Ambiguous commit or failed compensation: {RecoveryRequired}. Reconciliation may be required.", ambiguousCommit);
-        return new(500, "InternalError", "Không thể đồng bộ tài khoản. Kiểm tra đối soát trước khi thử lại; tài khoản bị khóa vẫn giữ khóa trong DB.");
+        UserFailureDiagnostics.Log(logger, exception, "Synchronization", ambiguousCommit);
+        var diagnostic = UserFailureDiagnostics.Describe(exception);
+        return new(500, "InternalError", "Không thể đồng bộ tài khoản. Kiểm tra đối soát trước khi thử lại; tài khoản bị khóa vẫn giữ khóa trong DB.", diagnostic.ExceptionType, diagnostic.ServiceCode);
     }
 
     private static AdminUser View(User user) => new(user.Id, user.CognitoSub, user.Email, user.FullName,

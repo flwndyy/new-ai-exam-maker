@@ -70,12 +70,41 @@ public sealed class UserManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    public async Task Busy_global_lock_fails_before_any_aws_mutation()
+    {
+        await SeedAdminAsync();
+        await using var holder = fixture.CreateContext();
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)");
+        await using var database = fixture.CreateContext();
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var error = await Assert.ThrowsAsync<UserOperationException>(() => Service(database).CreateAsync(actorId,
+            new("busy@example.invalid", "Busy", "admin", null), watchdog.Token));
+        Assert.Equal(409, error.StatusCode);
+        Assert.Equal(0, cognito.Creates);
+    }
+
+    [PostgresFact(Timeout = 45000)]
+    public async Task Operation_deadline_compensates_a_stalled_provisioning_without_caller_cancellation()
+    {
+        await SeedAdminAsync();
+        cognito.StallRoleAssignment = true;
+        await using var database = fixture.CreateContext();
+        var error = await Assert.ThrowsAsync<UserOperationException>(() => Service(database).CreateAsync(actorId,
+            new("timeout@example.invalid", "Timeout", "admin", null), CancellationToken.None));
+        Assert.Equal(500, error.StatusCode);
+        Assert.Equal(1, cognito.Deletes);
+        Assert.False(cognito.CleanupWasCancelled);
+        Assert.False(await database.Users.AnyAsync(x => x.Email == "timeout@example.invalid"));
+    }
+
+    [PostgresFact]
     // Delete only the account created by this failed operation, even after request cancellation.
     public async Task Provisioning_failure_compensates_with_an_independent_cancellation_token()
     {
         await SeedAdminAsync();
         using var request = new CancellationTokenSource();
-        cognito.FailNextProfile = () => { request.Cancel(); throw new OperationCanceledException(request.Token); };
+        cognito.FailNextMutation = () => { request.Cancel(); throw new OperationCanceledException(request.Token); };
         await using var database = fixture.CreateContext();
         await Assert.ThrowsAsync<UserOperationException>(() => Service(database).CreateAsync(actorId,
             new("teacher@example.invalid", "Teacher", "teacher", DepartmentId), request.Token));
@@ -106,7 +135,7 @@ public sealed class UserManagementTests : IAsyncLifetime
     {
         await SeedAdminAsync();
         cognito.FailDelete = true;
-        cognito.FailNextProfile = () => throw new InvalidOperationException("Synthetic profile failure.");
+        cognito.FailNextMutation = () => throw new InvalidOperationException("Synthetic profile failure.");
         await using var database = fixture.CreateContext();
         Assert.Equal(500, (await Assert.ThrowsAsync<UserOperationException>(() => Service(database).CreateAsync(actorId,
             new("orphan@example.invalid", "Orphan", "admin", null), default))).StatusCode);
@@ -147,11 +176,15 @@ public sealed class UserManagementTests : IAsyncLifetime
         await using (var database = fixture.CreateContext())
         {
             var changed = await Service(database).UpdateAsync(actorId, user.Id,
-                new("head@example.invalid", "Head", "head", DepartmentId, true), default);
+                new("head@example.invalid", "Head", "head", Guid.Parse("10000000-0000-0000-0000-000000000002"), true), default);
             Assert.Equal("head", changed.Role);
             Assert.Equal(new[] { "head" }, cognito.Accounts[user.CognitoSub].Groups);
+            var audit = await database.AuditLogs.SingleAsync(x => x.EntityId == user.Id && x.Action == "UpdateUser");
+            Assert.Contains("role teacher->head", audit.Note);
+            Assert.Contains($"department {DepartmentId}->10000000-0000-0000-0000-000000000002", audit.Note);
+            Assert.DoesNotContain("@", audit.Note);
         }
-        cognito.FailNextProfile = () => throw new InvalidOperationException("Synthetic AWS failure after a partial change.");
+        cognito.FailNextMutation = () => throw new InvalidOperationException("Synthetic AWS failure after a partial change.");
         await using (var database = fixture.CreateContext())
             await Assert.ThrowsAsync<UserOperationException>(() => Service(database).UpdateAsync(actorId, user.Id,
                 new("admin2@example.invalid", "Changed", "admin", null, true), default));
@@ -190,7 +223,7 @@ public sealed class UserManagementTests : IAsyncLifetime
     {
         await SeedAdminAsync();
         var user = await CreateTeacherAsync();
-        cognito.FailNextProfile = () => throw new InvalidOperationException("Synthetic failure.");
+        cognito.FailNextMutation = () => throw new InvalidOperationException("Synthetic failure.");
         await using (var database = fixture.CreateContext())
             await Assert.ThrowsAsync<UserOperationException>(() => Service(database).UpdateAsync(actorId, user.Id,
                 new(user.Email, "Changed", "head", DepartmentId, false), default));
@@ -204,13 +237,13 @@ public sealed class UserManagementTests : IAsyncLifetime
     {
         await using (var database = fixture.CreateContext())
         {
-            var admin = await Service(database).BootstrapAsync("admin@example.invalid", "Admin", default);
+            var admin = await new AdminBootstrapper(Service(database)).BootstrapAsync("admin@example.invalid", "Admin", default);
             Assert.Equal("admin", admin.Role);
             Assert.Null(admin.DepartmentId);
             Assert.Equal(409, (await Assert.ThrowsAsync<UserOperationException>(() => Service(database).DeactivateAsync(admin.Id, admin.Id, default))).StatusCode);
         }
         await using (var database = fixture.CreateContext())
-            Assert.Equal(409, (await Assert.ThrowsAsync<UserOperationException>(() => Service(database).BootstrapAsync("other@example.invalid", "Other", default))).StatusCode);
+            Assert.Equal(409, (await Assert.ThrowsAsync<UserOperationException>(() => new AdminBootstrapper(Service(database)).BootstrapAsync("other@example.invalid", "Other", default))).StatusCode);
         Assert.Equal(1, cognito.Creates);
     }
 
@@ -256,8 +289,10 @@ public sealed class FakeCognitoUserAdmin : ICognitoUserAdmin
     public Dictionary<string, CognitoAccount> Accounts { get; } = [];
     public int Creates { get; private set; }
     public int Deletes { get; private set; }
+    public int RoleAssignments { get; private set; }
+    public bool StallRoleAssignment { get; set; }
     public int SignOuts { get; private set; }
-    public Action? FailNextProfile { get; set; }
+    public Action? FailNextMutation { get; set; }
     public bool FailSignOut { get; set; }
     public bool FailDelete { get; set; }
     public bool CleanupWasCancelled { get; private set; }
@@ -272,11 +307,20 @@ public sealed class FakeCognitoUserAdmin : ICognitoUserAdmin
     }
     public Task<CognitoAccount?> FindAsync(string subject, CancellationToken cancellationToken) => Task.FromResult(Accounts.GetValueOrDefault(subject));
     public Task<IReadOnlyList<CognitoAccount>> ListAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<CognitoAccount>>(Accounts.Values.ToArray());
+    public async Task AssignRoleAsync(string subject, string role, CancellationToken cancellationToken)
+    {
+        RoleAssignments++;
+        if (StallRoleAssignment) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        Accounts[subject] = Accounts[subject] with { Groups = [role] };
+        var fault = FailNextMutation;
+        FailNextMutation = null;
+        fault?.Invoke();
+    }
     public Task SetProfileAsync(CognitoAccount profile, CancellationToken cancellationToken)
     {
         Accounts[profile.Subject] = profile with { Enabled = Accounts[profile.Subject].Enabled };
-        var fault = FailNextProfile;
-        FailNextProfile = null;
+        var fault = FailNextMutation;
+        FailNextMutation = null;
         fault?.Invoke();
         return Task.CompletedTask;
     }

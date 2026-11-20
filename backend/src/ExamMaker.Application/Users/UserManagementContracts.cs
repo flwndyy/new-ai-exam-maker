@@ -25,10 +25,14 @@ public sealed record UserMismatch(Guid? UserId, string Email, string? DbRole,
     IReadOnlyList<string> CognitoGroups, string Issue);
 public sealed record ReconcileReport(DateTimeOffset CheckedAt, int TotalUsers, IReadOnlyList<UserMismatch> Mismatches);
 
-public sealed class UserOperationException(int statusCode, string code, string message) : Exception(message)
+public sealed class UserOperationException(int statusCode, string code, string message,
+    string? diagnosticType = null, string? diagnosticCode = null) : Exception(message)
 {
     public int StatusCode { get; } = statusCode;
     public string Code { get; } = code;
+    // Safe server diagnostics are not serialized into API responses.
+    public string? DiagnosticType { get; } = diagnosticType;
+    public string? DiagnosticCode { get; } = diagnosticCode;
 }
 
 public interface IUserManagement
@@ -39,6 +43,11 @@ public interface IUserManagement
     Task<AdminUser> UpdateAsync(Guid actorId, Guid id, UpdateUserInput input, CancellationToken cancellationToken);
     Task DeactivateAsync(Guid actorId, Guid id, CancellationToken cancellationToken);
     Task<ReconcileReport> ReconcileAsync(CancellationToken cancellationToken);
+}
+
+// Only the private deployment tool registers an implementation of this interface.
+public interface IAdminBootstrapper
+{
     Task<AdminUser> BootstrapAsync(string email, string fullName, CancellationToken cancellationToken);
 }
 
@@ -49,6 +58,7 @@ public sealed record CognitoAccount(string Subject, string Email, string FullNam
 public interface ICognitoUserAdmin
 {
     Task<CognitoAccount> CreateAsync(string email, string fullName, CancellationToken cancellationToken);
+    Task AssignRoleAsync(string subject, string role, CancellationToken cancellationToken);
     Task<CognitoAccount?> FindAsync(string subject, CancellationToken cancellationToken);
     Task<IReadOnlyList<CognitoAccount>> ListAsync(CancellationToken cancellationToken);
     Task SetProfileAsync(CognitoAccount profile, CancellationToken cancellationToken);

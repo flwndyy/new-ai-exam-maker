@@ -13,16 +13,21 @@ public static class UserManagementRegistration
     public static IServiceCollection AddUserManagement(this IServiceCollection services, IConfiguration configuration)
     {
         services.TryAddSingleton<IConfiguration>(configuration);
-        services.AddScoped<IAmazonCognitoIdentityProvider>(_ =>
+        services.AddSingleton<IAmazonCognitoIdentityProvider>(_ =>
         {
             var region = configuration["Cognito:Region"];
             if (string.IsNullOrWhiteSpace(region)) throw new InvalidOperationException("Cognito:Region is required.");
             return new AmazonCognitoIdentityProviderClient(new AmazonCognitoIdentityProviderConfig
-            { RegionEndpoint = RegionEndpoint.GetBySystemName(region), Timeout = TimeSpan.FromSeconds(15), MaxErrorRetry = 1 });
+            { RegionEndpoint = RegionEndpoint.GetBySystemName(region), Timeout = UserManagementDeadlines.AwsCall, MaxErrorRetry = 0 });
         });
         services.AddScoped<ICognitoUserAdmin>(provider =>
             new CognitoUserAdmin(() => provider.GetRequiredService<IAmazonCognitoIdentityProvider>(), configuration));
-        services.AddScoped<IUserManagement, UserManagementService>();
+        services.AddScoped<UserManagementService>();
+        services.AddScoped<IUserManagement>(provider => provider.GetRequiredService<UserManagementService>());
         return services;
     }
+
+    /// <summary>Opt into bootstrap capability only in the private deployment tool.</summary>
+    public static IServiceCollection AddAdminBootstrapper(this IServiceCollection services) =>
+        services.AddScoped<IAdminBootstrapper, AdminBootstrapper>();
 }

@@ -32,10 +32,13 @@ Comment kỹ thuật trong code bằng tiếng Anh theo quy tắc chung; bảng 
 | `DeactivateAsync` | Khóa Cognito và thu hồi phiên; lỗi AWS không mở khóa DB lại |
 | `Audit` | Ghi thao tác tạo/sửa/khóa user cùng transaction DB; bootstrap có actor NULL và note |
 | `LockAsync` | Khóa transaction PostgreSQL dùng chung giữa các process để tuần tự hóa thao tác ghi |
-| `CompensateAsync` | Khôi phục bằng cancellation token độc lập, timeout 30 giây, kể cả HTTP request đã hủy |
+| `CompensateAsync` | Khôi phục bằng cancellation token độc lập, timeout 5 giây, kể cả HTTP request đã hủy |
 | `ReconcileAsync` | Báo RoleMismatch, DisabledMismatch, MissingInCognito, MissingInDb; không tự sửa |
-| `BootstrapAsync` | Tạo admin đầu tiên khi DB chưa có bất kỳ admin nào, dùng qua CLI riêng |
+| `IAdminBootstrapper.BootstrapAsync` | Tạo admin đầu tiên khi DB chưa có bất kỳ admin nào, dùng qua CLI riêng |
 | `CognitoUserAdmin.FindAsync` | Tìm theo sub bất biến và kiểm sub trả về khớp; không dùng email làm định danh cập nhật |
+| `AssignRoleAsync` | Gán group trực tiếp cho tài khoản vừa tạo, không đọc/cập nhật lại profile |
+| `AwsAsync` | Giới hạn từng lệnh SDK async bằng cancellation token 5 giây |
+| `UserFailureDiagnostics` | Ghi loại lỗi, mã AWS/SQL và stack; không log raw message chứa PII/secret |
 | `CognitoUserAdmin.SetProfileAsync` | Đồng bộ thuộc tính và đúng group ứng dụng; giữ group ngoài teacher/head/admin |
 | `CognitoUserAdmin.ListAsync/GroupsAsync` | Đọc đầy đủ phân trang user/group của AWS |
 | `UserOperationExceptionHandler` | Trả ProblemDetails với code/traceId, không lộ nội dung lỗi AWS/DB |
@@ -64,7 +67,7 @@ Công cụ bootstrap không tự migrate và không in connection string.
 
 ## An toàn đồng bộ
 
-DB là nguồn quyền thật. Tạo/sửa/khóa user ghi audit log cùng transaction với thay đổi DB; bootstrap là tác vụ hệ thống có note. Mỗi thao tác ghi kiểm lại actor còn active/admin sau khi giữ khóa. Chỉ xóa tài khoản Cognito do chính lần tạo thất bại đó tạo ra; UsernameExists không được xóa user cũ. Lời mời có thể đã gửi trước khi đền bù, khi đó tài khoản không còn đăng nhập được và cần cấp lời mời mới sau khi xử lý lỗi.
+DB là nguồn quyền thật. Tạo/sửa/khóa user ghi audit log cùng transaction với thay đổi DB; UpdateUser ghi role trước-sau và ID tổ trước-sau khi thay đổi quyền, không ghi email vào note; bootstrap là tác vụ hệ thống có note. Mỗi thao tác ghi kiểm lại actor còn active/admin sau khi giữ khóa. Chỉ xóa tài khoản Cognito do chính lần tạo thất bại đó tạo ra; UsernameExists không được xóa user cũ. Lời mời có thể đã gửi trước khi đền bù, khi đó tài khoản không còn đăng nhập được và cần cấp lời mời mới sau khi xử lý lỗi.
 
 Khi sửa lỗi trước commit, khôi phục email/tên/email_verified và group cũ. Group ngoài ba role ứng dụng được giữ nguyên. Nếu commit DB mất kết nối và chưa rõ thành công hay thất bại, không tự xóa/đảo Cognito: chạy reconcile và kiểm tra cả DB/AWS trước khi quản trị viên xử lý. Lỗi cleanup được log thông điệp an toàn, trả InternalError; không nuốt lỗi thành kết quả thành công.
 
@@ -73,6 +76,19 @@ Khóa user commit DB trước rồi gọi AWS. Nếu AWS hoặc GlobalSignOut l�
 Admin phải xác nhận email mới là hợp lệ và thuộc người nhận trước khi đổi. API quản trị đánh dấu email_verified=true để cập nhật ngay theo quy định user pool, không để DB đổi email trong khi Cognito giữ email cũ chờ xác minh. Đây không phải luồng tự đổi email của giáo viên.
 
 Reconcile không phải snapshot transaction xuyên AWS/DB: nếu đang có thao tác thay đổi đồng thời, chạy lại khi hệ thống yên. Sửa lệch phải xác minh theo sub, không nối hai tài khoản chỉ vì email giống nhau. Không thay role DB dựa vào group Cognito.
+
+## Giới hạn thời gian và chẩn đoán
+
+- Một thao tác ghi/reconcile có budget hợp tác **20 giây**, tính cả thời gian chờ DB. Mỗi lệnh AWS async dùng CancellationToken riêng tối đa **5 giây**, liên kết với deadline của thao tác. MaxErrorRetry=0 để tránh cộng thêm retry không rõ ràng. ClientConfig.Timeout cũng đặt 5 giây, nhưng AWS SDK không dùng thuộc tính đó để giới hạn lệnh async.
+- Chờ khóa PostgreSQL tối đa **2 giây** qua SET LOCAL lock_timeout, quá thời gian trả 409 Conflict. Cleanup dùng token độc lập tối đa **5 giây** để không vô hiệu hóa cơ chế đền bù khi request bị hủy. Mục tiêu khoảng 20+5 giây dưới read timeout CloudFront mặc định; đây không phải SLA cứng nếu mạng/driver không phản hồi cancellation. Trước khi bấm lại sau timeout, kiểm tra user trong DB và chạy đối soát.
+- Create/bootstrap bình thường chỉ gọi **AdminCreateUser + AdminAddUserToGroup**, không Get/ListGroups/Update lại profile vừa tạo. AWS client là singleton được DI tạo lazy, dùng lại connection qua các request. Đọc danh sách/chi tiết user từ DB không tạo AWS client hoặc tải credential.
+- Log server ghi ExceptionType, mã lỗi AWS/SQL, stack trace và cờ cần recovery. Không ghi raw Exception.Message, token, mật khẩu, email hoặc toàn bộ AWS response. CLI in loại lỗi/mã dịch vụ an toàn; API response vẫn chỉ có code/title/traceId.
+
+## Các điểm để theo dõi tiếp
+
+- Reconcile hiện đọc group theo từng user (có phân trang, có budget 20 giây). Tối ưu bằng ListUsersInGroup cho ba group để giảm N+1 cần cập nhật IAM và test ở thay đổi riêng; chưa bổ sung quyền AWS mới trong PR này.
+- Phân tầng exception/use case hiện giữ pattern A4: service Infrastructure dùng EF/SDK, validation và self-lockout ở Application; thống nhất lại trước các use case tiếp theo nếu team muốn tách HTTP status khỏi exception.
+- Hợp đồng hiện có bốn loại mismatch, **chưa có EmailMismatch**. Báo cáo không có lệch role/trạng thái không chứng minh email đã đồng bộ. Khi lỗi liên quan email, đối chiếu AdminGetUser và DB theo sub trước khi xử lý thủ công; thêm EmailMismatch cần sửa OpenAPI và client trong PR riêng.
 
 ## Quyền AWS và cấu hình
 
@@ -85,7 +101,7 @@ AWS client dùng default credential chain: máy local dùng profile/phiên đư�
 - `cognito-idp:AdminUpdateUserAttributes`, `AdminEnableUser`, `AdminDisableUser`, `AdminUserGlobalSignOut`.
 - `cognito-idp:ListUsers`.
 
-Bảo phải tạo sẵn ba group teacher/head/admin. Tài khoản Cognito teacher để đăng nhập ứng dụng khác với IAM principal gọi AWS Admin API; không lấy token teacher thay IAM credential. Không chạy test AWS thật với địa chỉ `.local` vì không thể nhận lời mời/khôi phục mật khẩu.
+Phải tạo sẵn ba group teacher/head/admin. Tài khoản Cognito teacher để đăng nhập ứng dụng khác với IAM principal gọi AWS Admin API; không lấy token teacher thay IAM credential. Không chạy test AWS thật với địa chỉ `.local` vì không thể nhận lời mời/khôi phục mật khẩu.
 
 ## Bootstrap admin đầu tiên
 
@@ -100,12 +116,11 @@ dotnet run --project tools/ExamMaker.Bootstrap
 Remove-Item Env:Bootstrap__Email, Env:Bootstrap__FullName -ErrorAction SilentlyContinue
 ```
 
-Cognito sinh mật khẩu tạm và gửi thư mời. Admin đăng nhập Managed Login và bắt buộc đổi mật khẩu trước khi dùng API. Không có endpoint bootstrap công khai, không đưa mật khẩu tạm hoặc token vào chat/log/Git. Không chạy bootstrap trong CI.
+Cognito sinh mật khẩu tạm và gửi thư mời. Admin đăng nhập Managed Login và bắt buộc đổi mật khẩu trước khi dùng API. API không đăng ký IAdminBootstrapper và IUserManagement không có phương thức bootstrap. Chỉ công cụ CLI đăng ký AddAdminBootstrapper. Không có endpoint bootstrap công khai, không đưa mật khẩu tạm hoặc token vào chat/log/Git. Không chạy bootstrap trong CI.
 
 ## Kiểm thử
 
-Kết quả local 20/11/2026: **128/128 test Release pass, không skip** — 78 API và 50 Infrastructure, gồm 28 test PostgreSQL thật và 6 test adapter AWS dùng stub. Đã kiểm migration mới/nâng cấp/rollback/reapply và script idempotent qua bộ test PostgreSQL. Migration đã áp dụng thành công vào PostgreSQL phát triển local. Build toàn solution Release (gồm công cụ bootstrap) đạt 0 warning, 0 error; kiểm whitespace và git diff --check đạt. Full dotnet format theo solution bị môi trường chặn named pipe; cần xác nhận lại bằng CI hoặc terminal của người triển khai.
-
+Kết quả local 20/11/2026: **135/135 test Release pass, không skip** — 79 API và 56 Infrastructure, gồm 30 test PostgreSQL thật và 9 test adapter AWS dùng stub và 1 test log chẩn đoán an toàn. Đã kiểm migration mới/nâng cấp/rollback/reapply và script idempotent qua bộ test PostgreSQL. Migration đã áp dụng thành công vào PostgreSQL phát triển local. Build toàn solution Release (gồm công cụ bootstrap) đạt 0 warning, 0 error; kiểm whitespace và git diff --check đạt. Full dotnet format theo solution bị môi trường chặn named pipe; cần xác nhận lại bằng CI hoặc terminal của người triển khai.
 
 Test API ký JWT tạm để kiểm admin/teacher/head/anonymous, DTO, phân trang, actor lấy từ request scope và mã lỗi. Test adapter AWS dùng stub SDK để kiểm request, phân trang, group ngoài ứng dụng và sub mismatch. Test PostgreSQL dùng DB tạm để kiểm transaction, timestamp, unique email, tạo trùng đồng thời, bootstrap, đền bù/hủy request, fail-closed, đối soát và retry.
 

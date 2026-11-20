@@ -47,6 +47,7 @@ public sealed class AdminUsersTests
         app.Directory.User = AuthTestFactory.Teacher with { Role = "admin" };
         using var client = app.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", app.Token());
+        Assert.Null(app.Services.GetService<IAdminBootstrapper>());
         using var created = await client.PostAsJsonAsync("/api/v1/admin/users", new
         { email = "new@example.invalid", fullName = "New User", role = "teacher", departmentId = AuthTestFactory.DepartmentId });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -86,7 +87,7 @@ public sealed class AdminUsersTests
 
     [Fact]
     // A missing activation flag must not silently disable a user.
-    public async Task Update_requires_an_explicit_activation_flag_and_returns_safe_conflicts()
+    public async Task Update_requires_an_explicit_activation_flag()
     {
         using var app = new AdminTestFactory();
         app.Directory.User = AuthTestFactory.Teacher with { Role = "admin" };
@@ -95,12 +96,25 @@ public sealed class AdminUsersTests
         using var response = await client.PutAsJsonAsync($"/api/v1/admin/users/{Guid.NewGuid()}", new
         { email = "test@example.invalid", fullName = "Name", role = "admin" });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, app.Management.Calls);
+    }
+
+    [Fact]
+    // Verify that a service conflict is returned safely by the actual GET route.
+    public async Task Get_returns_safe_conflict_problem()
+    {
+        using var app = new AdminTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = "admin" };
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", app.Token());
         app.Management.ThrowConflict = true;
         using var conflict = await client.GetAsync($"/api/v1/admin/users/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
         var problem = await conflict.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("Conflict", problem.GetProperty("code").GetString());
         Assert.True(problem.TryGetProperty("traceId", out _));
+        Assert.False(problem.TryGetProperty("diagnosticType", out _));
+        Assert.False(problem.TryGetProperty("diagnosticCode", out _));
     }
 }
 
@@ -129,7 +143,7 @@ public sealed class FakeUserManagement : IUserManagement
     public Task<AdminUserPage> ListAsync(UserListQuery query, CancellationToken cancellationToken)
     { Calls++; Query = query; return Task.FromResult(new AdminUserPage(query.Page, query.PageSize, 1, 1, [Profile])); }
     public Task<AdminUser> GetAsync(Guid id, CancellationToken cancellationToken)
-    { Calls++; if (ThrowConflict) throw new UserOperationException(409, "Conflict", "Xung đột dữ liệu."); return Task.FromResult(Profile); }
+    { Calls++; if (ThrowConflict) throw new UserOperationException(409, "Conflict", "Xung đột dữ liệu.", "SyntheticException", "SyntheticCode"); return Task.FromResult(Profile); }
     public Task<AdminUser> CreateAsync(Guid actorId, CreateUserInput input, CancellationToken cancellationToken)
     { Calls++; LastActor = actorId; return Task.FromResult(Profile); }
     public Task<AdminUser> UpdateAsync(Guid actorId, Guid id, UpdateUserInput input, CancellationToken cancellationToken)
@@ -138,6 +152,4 @@ public sealed class FakeUserManagement : IUserManagement
     { Calls++; LastActor = actorId; return Task.CompletedTask; }
     public Task<ReconcileReport> ReconcileAsync(CancellationToken cancellationToken)
     { Calls++; return Task.FromResult(new ReconcileReport(DateTimeOffset.UtcNow, 1, [])); }
-    public Task<AdminUser> BootstrapAsync(string email, string fullName, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Bootstrap is not exposed by the API.");
 }

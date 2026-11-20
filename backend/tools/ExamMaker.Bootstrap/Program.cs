@@ -11,12 +11,13 @@ try
 }
 catch (UserOperationException exception)
 {
-    Console.Error.WriteLine($"Bootstrap failed ({exception.Code}). Check configuration and run read-only reconciliation before recovery.");
+    Console.Error.WriteLine($"Bootstrap failed ({exception.Code}); type={exception.DiagnosticType ?? exception.GetType().Name}; serviceCode={exception.DiagnosticCode ?? "None"}. Check configuration and reconciliation before recovery.");
     return 1;
 }
-catch
+catch (Exception exception)
 {
-    Console.Error.WriteLine("Bootstrap failed. Check AWS permissions, configuration and database connectivity.");
+    var diagnostic = UserFailureDiagnostics.Describe(exception);
+    Console.Error.WriteLine($"Bootstrap failed; type={diagnostic.ExceptionType}; serviceCode={diagnostic.ServiceCode}. Check AWS permissions, configuration and database connectivity.");
     return 1;
 }
 
@@ -38,10 +39,11 @@ static async Task<int> BootstrapAsync()
     services.AddLogging();
     services.AddExamMakerPersistence(configuration);
     services.AddUserManagement(configuration);
+    services.AddAdminBootstrapper();
     using var provider = services.BuildServiceProvider();
     await using var scope = provider.CreateAsyncScope();
     using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-    await scope.ServiceProvider.GetRequiredService<IUserManagement>().BootstrapAsync(email, fullName, timeout.Token);
+    await scope.ServiceProvider.GetRequiredService<IAdminBootstrapper>().BootstrapAsync(email, fullName, timeout.Token);
     Console.WriteLine("Administrator provisioned. Use the Cognito invitation to change the temporary password.");
     return 0;
 }

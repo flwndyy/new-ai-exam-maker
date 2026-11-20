@@ -11,6 +11,43 @@ namespace ExamMaker.Infrastructure.Tests;
 
 public sealed class CognitoUserAdminTests
 {
+    [Fact]
+    public void Api_registration_excludes_bootstrap_and_reuses_a_lazy_singleton_client()
+    {
+        var services = new ServiceCollection();
+        services.AddUserManagement(new ConfigurationBuilder().Build());
+        Assert.Equal(ServiceLifetime.Singleton, Assert.Single(services, x => x.ServiceType == typeof(IAmazonCognitoIdentityProvider)).Lifetime);
+        var creations = 0;
+        services.AddSingleton<IAmazonCognitoIdentityProvider>(_ => { creations++; return new StubCognitoClient(); });
+        using var provider = services.BuildServiceProvider();
+        using var first = provider.CreateScope();
+        using var second = provider.CreateScope();
+        Assert.Null(first.ServiceProvider.GetService<IAdminBootstrapper>());
+        Assert.NotNull(first.ServiceProvider.GetRequiredService<ICognitoUserAdmin>());
+        Assert.Equal(0, creations);
+        Assert.Same(first.ServiceProvider.GetRequiredService<IAmazonCognitoIdentityProvider>(), second.ServiceProvider.GetRequiredService<IAmazonCognitoIdentityProvider>());
+        Assert.Equal(1, creations);
+        Assert.DoesNotContain(typeof(IUserManagement).GetMethods(), x => x.Name.Contains("Bootstrap"));
+    }
+
+    [Fact]
+    public async Task Initial_role_assignment_only_calls_add_group()
+    {
+        using var client = new StubCognitoClient();
+        await Gateway(client).AssignRoleAsync("subject-1", "teacher", default);
+        Assert.Equal(new[] { "teacher" }, client.Added);
+        Assert.Equal(0, client.GroupPages);
+        Assert.Null(client.Updated);
+        Assert.Equal(0, client.GetUserCalls);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Stalled_async_sdk_call_is_cancelled_without_a_caller_deadline()
+    {
+        using var client = new StubCognitoClient { StallAddGroup = true };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Gateway(client).AssignRoleAsync("subject-1", "teacher", CancellationToken.None));
+    }
+
     private static CognitoUserAdmin Gateway(StubCognitoClient client) => new(() => client,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["Cognito:UserPoolId"] = "ap-southeast-1_EXAMPLE" }).Build());
@@ -98,6 +135,8 @@ public sealed class StubCognitoClient() : AmazonCognitoIdentityProviderClient(ne
     public int UserPages { get; private set; }
     public int GroupPages { get; private set; }
     public bool MismatchedSubject { get; set; }
+    public bool StallAddGroup { get; set; }
+    public int GetUserCalls { get; private set; }
     private static List<AttributeType> Attributes(string subject) =>
         [new() { Name = "sub", Value = subject }, new() { Name = "email", Value = "test@example.invalid" },
             new() { Name = "name", Value = "Test" }, new() { Name = "email_verified", Value = "true" }];
@@ -107,8 +146,11 @@ public sealed class StubCognitoClient() : AmazonCognitoIdentityProviderClient(ne
         Created = request;
         return Task.FromResult(new AdminCreateUserResponse { User = new UserType { Attributes = Attributes("subject-1"), Enabled = true } });
     }
-    public override Task<AdminGetUserResponse> AdminGetUserAsync(AdminGetUserRequest request, CancellationToken cancellationToken = default) =>
-        Task.FromResult(new AdminGetUserResponse { UserAttributes = Attributes(MismatchedSubject ? "other-subject" : request.Username), Enabled = true });
+    public override Task<AdminGetUserResponse> AdminGetUserAsync(AdminGetUserRequest request, CancellationToken cancellationToken = default)
+    {
+        GetUserCalls++;
+        return Task.FromResult(new AdminGetUserResponse { UserAttributes = Attributes(MismatchedSubject ? "other-subject" : request.Username), Enabled = true });
+    }
     public override Task<AdminListGroupsForUserResponse> AdminListGroupsForUserAsync(AdminListGroupsForUserRequest request, CancellationToken cancellationToken = default)
     {
         GroupPages++;
@@ -131,6 +173,10 @@ public sealed class StubCognitoClient() : AmazonCognitoIdentityProviderClient(ne
     { Updated = request; Updates.Add(request); return Task.FromResult(new AdminUpdateUserAttributesResponse()); }
     public override Task<AdminRemoveUserFromGroupResponse> AdminRemoveUserFromGroupAsync(AdminRemoveUserFromGroupRequest request, CancellationToken cancellationToken = default)
     { Removed.Add(request.GroupName); return Task.FromResult(new AdminRemoveUserFromGroupResponse()); }
-    public override Task<AdminAddUserToGroupResponse> AdminAddUserToGroupAsync(AdminAddUserToGroupRequest request, CancellationToken cancellationToken = default)
-    { Added.Add(request.GroupName); return Task.FromResult(new AdminAddUserToGroupResponse()); }
+    public override async Task<AdminAddUserToGroupResponse> AdminAddUserToGroupAsync(AdminAddUserToGroupRequest request, CancellationToken cancellationToken = default)
+    {
+        if (StallAddGroup) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        Added.Add(request.GroupName);
+        return new AdminAddUserToGroupResponse();
+    }
 }

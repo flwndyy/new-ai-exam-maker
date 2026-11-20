@@ -107,6 +107,16 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 - **Admin đầu tiên (bootstrap)**: vì self sign-up tắt, admin đầu tiên được tạo bằng script/lệnh chạy một lần bởi người triển khai (tạo user Cognito + group `admin` + dòng `users`), không qua API công khai. Ghi quy trình vào `docs/`.
 - **Đăng nhập lần đầu / mật khẩu**: admin tạo user với mật khẩu tạm → user phải đổi mật khẩu ở lần đăng nhập đầu (dùng giao diện đăng nhập của Cognito, Managed Login); có luồng quên mật khẩu. Đổi email phải cập nhật cả Cognito và `users.email`.
 
+#### Chi tiết triển khai A3
+
+- API chỉ nhận Cognito **access token**: kiểm chữ ký RS256/JWKS, issuer, exp/nbf, `token_use=access`, `client_id` đúng App Client và `sub` không rỗng. Access token Cognito dùng `client_id` để kiểm client; không nhầm với `aud` của ID token. ID token không dùng gọi API.
+- Sau khi xác thực token, tải `users` bằng unique `cognito_sub`; user không tồn tại, bị khóa hoặc hồ sơ role/tổ không hợp lệ trả 401. Không tự tạo user. Principal ứng dụng được tạo lại từ DB, loại bỏ role/group tùy ý trong token.
+- Cache 1 phút chỉ dành cho email/họ tên/tên tổ hiển thị. `id`, role, department_id, is_active luôn đọc DB trong mỗi request để đổi quyền/khóa tài khoản có hiệu lực ở request kế tiếp. Không cache kết quả user không tồn tại. Principal/current user chỉ sống trong request.
+- Policy dùng chung: Admin (quản trị), ContentAuthor (teacher/head), SameDepartment (cùng tổ hoặc admin), Owner (teacher/head sở hữu), Reviewer (head cùng tổ hoặc admin, luôn cấm tự duyệt). Resource policy yêu cầu đối tượng có creator/department từ DB; không nhận dữ liệu quyền từ body client. Các use case sau A3 phải kiểm tra trạng thái/quyền cụ thể theo ma trận 3.2.
+- Quy tắc quyền thuần nằm ở Application để use case và API dùng chung. Tự duyệt trả 403 `SelfReview`; các lỗi quyền khác trả `Forbidden`. Controller kiểm resource policy phải chuyển kết quả qua `ToForbiddenProblem(HttpContext)` để giữ mã lỗi.
+- Mặc định endpoint yêu cầu user nội bộ hợp lệ; `/health` công khai. `GET /api/v1/me` trả đúng schema Me trong OpenAPI. 401/403 trả ProblemDetails với code/traceId; 401 có WWW-Authenticate: Bearer.
+- Cấu hình Cognito lấy từ môi trường/Parameter Store. Nếu chưa cấu hình thì health vẫn chạy, mọi Bearer token bị từ chối; cấu hình một phần hoặc sai định dạng làm startup thất bại. Triển khai thật phải cung cấp đủ Region/UserPoolId/ClientId. Test dùng khóa RSA tạm và discovery giả trong test host, không có chế độ giả xác thực ở production.
+
 #### Chi tiết triển khai A4
 
 - API quản lý user chỉ dành cho admin. Kiểm lại quyền admin trong DB khi giữ khóa ghi, không cho admin tự hạ vai trò hoặc tự khóa. Các thao tác ghi/bootstrap dùng khóa advisory transaction PostgreSQL chung để tránh trùng email và ghi đè đồng bộ giữa nhiều process.
@@ -118,15 +128,8 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 - Reconcile chỉ đọc và báo lệch role/trạng thái/thiếu user hai phía, có phân trang AWS; không tự sửa. Bootstrap admin chạy qua công cụ CLI riêng, chỉ cho phép khi chưa có admin trong DB, không có API bootstrap công khai.
 - Admin chịu trách nhiệm xác nhận quyền sở hữu email mới trước khi cập nhật; thao tác quản trị đặt email_verified=true để email được cập nhật ngay, tránh DB/Cognito dùng hai email khác nhau. Không sử dụng cơ chế này cho tự sửa hồ sơ của người dùng.
 
-#### Chi tiết triển khai A3
-
-- API chỉ nhận Cognito **access token**: kiểm chữ ký RS256/JWKS, issuer, exp/nbf, `token_use=access`, `client_id` đúng App Client và `sub` không rỗng. Access token Cognito dùng `client_id` để kiểm client; không nhầm với `aud` của ID token. ID token không dùng gọi API.
-- Sau khi xác thực token, tải `users` bằng unique `cognito_sub`; user không tồn tại, bị khóa hoặc hồ sơ role/tổ không hợp lệ trả 401. Không tự tạo user. Principal ứng dụng được tạo lại từ DB, loại bỏ role/group tùy ý trong token.
-- Cache 1 phút chỉ dành cho email/họ tên/tên tổ hiển thị. `id`, role, department_id, is_active luôn đọc DB trong mỗi request để đổi quyền/khóa tài khoản có hiệu lực ở request kế tiếp. Không cache kết quả user không tồn tại. Principal/current user chỉ sống trong request.
-- Policy dùng chung: Admin (quản trị), ContentAuthor (teacher/head), SameDepartment (cùng tổ hoặc admin), Owner (teacher/head sở hữu), Reviewer (head cùng tổ hoặc admin, luôn cấm tự duyệt). Resource policy yêu cầu đối tượng có creator/department từ DB; không nhận dữ liệu quyền từ body client. Các use case sau A3 phải kiểm tra trạng thái/quyền cụ thể theo ma trận 3.2.
-- Quy tắc quyền thuần nằm ở Application để use case và API dùng chung. Tự duyệt trả 403 `SelfReview`; các lỗi quyền khác trả `Forbidden`. Controller kiểm resource policy phải chuyển kết quả qua `ToForbiddenProblem(HttpContext)` để giữ mã lỗi.
-- Mặc định endpoint yêu cầu user nội bộ hợp lệ; `/health` công khai. `GET /api/v1/me` trả đúng schema Me trong OpenAPI. 401/403 trả ProblemDetails với code/traceId; 401 có WWW-Authenticate: Bearer.
-- Cấu hình Cognito lấy từ môi trường/Parameter Store. Nếu chưa cấu hình thì health vẫn chạy, mọi Bearer token bị từ chối; cấu hình một phần hoặc sai định dạng làm startup thất bại. Triển khai thật phải cung cấp đủ Region/UserPoolId/ClientId. Test dùng khóa RSA tạm và discovery giả trong test host, không có chế độ giả xác thực ở production.
+- Giới hạn A4: mỗi lệnh AWS async tối đa 5 giây bằng CancellationToken, không tự retry SDK; toàn thao tác tối đa 20 giây, cleanup độc lập tối đa 5 giây; chờ lock DB tối đa 2 giây và trả Conflict khi bận. Đây là giới hạn hợp tác theo cancellation, không bảo đảm cứng khi mạng/driver không phản hồi hủy. Client phải kiểm tra lại DB/reconcile trước khi retry sau timeout.
+- AWS client singleton được tạo lazy. Create gọi AdminCreateUser rồi AdminAddUserToGroup, không cập nhật lại profile vừa tạo. Bootstrap tách IAdminBootstrapper và chỉ đăng ký trong CLI. Audit sửa user ghi role/tổ trước-sau, không ghi email. Log lỗi chứa loại lỗi/mã AWS hoặc SQL/stack, bỏ raw message để tránh lộ dữ liệu nhạy cảm.
 
 ---
 
@@ -558,8 +561,8 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ## Lịch sử thay đổi
 
 **0.7 — 20/11/2026**
+- Sửa review PR #64: log chẩn đoán an toàn, timeout async/lock có giới hạn, audit đổi quyền, client AWS dùng chung, tối giản Create và tách bootstrap khỏi service API.
 - Triển khai quản lý user A4, đồng bộ Cognito có đền bù/fail-closed, đối soát chỉ đọc và bootstrap admin CLI. Bổ sung created_at và unique email cho users theo hợp đồng API.
-
 
 **0.6 — 20/11/2026**
 - Hoàn thiện xác thực A3: access token Cognito, hồ sơ/quyền DB theo request và policy mặc định. Quy tắc quyền dùng chung ở Application; tự duyệt trả 403 `SelfReview`, các lỗi quyền khác trả `Forbidden`.
