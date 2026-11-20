@@ -136,7 +136,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
 - [ ] O15. CI/CD **backend** (E8): build/publish theo kiến trúc đã chọn, giải nén vào `/opt/exammaker/releases/<id>`, đổi symlink, restart systemd (API + Worker), kiểm tra health, giữ N bản để rollback; **EF migration bundle** chạy trước, tương thích ngược, snapshot RDS thủ công trước migration lớn. *Cần A1.*
-- [ ] O16. Dọn tài nguyên sau demo: snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng.
+- [ ] O16. **Thử khôi phục RDS + kiểm tra dữ liệu** (đếm 4/4/82 departments/subjects/topics, `users`, `__EFMigrationsHistory` qua EC2 SSM) trước demo; dọn tài nguyên sau demo (snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng).
 
 ---
 

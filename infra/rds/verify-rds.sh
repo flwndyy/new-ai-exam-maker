@@ -142,10 +142,10 @@ fi
 STORAGE_TYPE="$(jq -r '.DBInstances[0].StorageType // empty' <<<"$DB_JSON")"
 ALLOCATED_STORAGE="$(jq -r '.DBInstances[0].AllocatedStorage // 0' <<<"$DB_JSON")"
 MAX_ALLOCATED_STORAGE="$(jq -r '.DBInstances[0].MaxAllocatedStorage // 0' <<<"$DB_JSON")"
-if [ "$STORAGE_TYPE" = "gp3" ] && [ "$ALLOCATED_STORAGE" -le 40 ]; then
+if [ "$STORAGE_TYPE" = "gp3" ] && [ "$ALLOCATED_STORAGE" -le 40 ] && [ "$MAX_ALLOCATED_STORAGE" -le 40 ]; then
   pass "Storage is gp3 (allocated=${ALLOCATED_STORAGE} GB, max=${MAX_ALLOCATED_STORAGE} GB <= 40 GB budget ceiling)"
 else
-  fail "Expected gp3 <= 40 GB, got '${STORAGE_TYPE} ${ALLOCATED_STORAGE} GB (max=${MAX_ALLOCATED_STORAGE})'"
+  fail "Expected gp3 with allocated and max storage <= 40 GB, got '${STORAGE_TYPE} allocated=${ALLOCATED_STORAGE} GB max=${MAX_ALLOCATED_STORAGE} GB'"
 fi
 
 # 8. Automated backup retention is short (1..7 days)
@@ -257,7 +257,9 @@ if [ "${#SG_IDS_ARR[@]}" -gt 0 ]; then
     SG_ERR="Contains ports/protocols other than TCP 5432"
   elif [ -z "$SOURCE_SG_IDS" ]; then
     SG_ERR="No Security Group ingress source found for TCP 5432"
-  elif [ -n "$EC2_SG_ID" ] && [ "$SOURCE_SG_IDS" != "$EC2_SG_ID" ]; then
+  elif [ -z "$EC2_SG_ID" ]; then
+    SG_ERR="Expected EC2 Security Group '${EC2_SG_NAME}' was not found in VPC '${VPC_ID}'"
+  elif [ "$SOURCE_SG_IDS" != "$EC2_SG_ID" ]; then
     SG_ERR="Ingress source '${SOURCE_SG_IDS}' does not match expected EC2 SG '${EC2_SG_NAME}' (${EC2_SG_ID})"
   else
     SG_OK="true"

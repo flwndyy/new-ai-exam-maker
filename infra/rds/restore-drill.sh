@@ -67,23 +67,45 @@ cleanup() {
   echo "==> [CLEANUP TRAP] Ensuring temporary drill resources are purged..."
   if [ "$RESTORE_INITIATED" = "true" ]; then
     echo "    Deleting temporary instance '${RESTORE_INSTANCE_ID}'..."
-    aws rds delete-db-instance \
+    local del_inst_err=""
+    local del_inst_rc=0
+    del_inst_err="$(aws rds delete-db-instance \
       --region "$AWS_REGION" \
       --db-instance-identifier "$RESTORE_INSTANCE_ID" \
       --skip-final-snapshot \
-      --delete-automated-backups >/dev/null 2>&1 || echo "    (Instance already deleted or deleting)"
+      --delete-automated-backups 2>&1)" || del_inst_rc=$?
 
-    echo "    Waiting for temporary instance '${RESTORE_INSTANCE_ID}' to finish deleting..."
-    aws rds wait db-instance-deleted \
-      --region "$AWS_REGION" \
-      --db-instance-identifier "$RESTORE_INSTANCE_ID" 2>/dev/null || true
+    if [ "$del_inst_rc" -eq 0 ]; then
+      echo "    Waiting for temporary instance '${RESTORE_INSTANCE_ID}' to finish deleting..."
+      aws rds wait db-instance-deleted \
+        --region "$AWS_REGION" \
+        --db-instance-identifier "$RESTORE_INSTANCE_ID" 2>/dev/null || true
+    elif grep -q "DBInstanceNotFound" <<<"$del_inst_err"; then
+      echo "    (Instance already deleted)"
+    else
+      echo "    [ERROR] Failed to delete instance: ${del_inst_err}" >&2
+      echo "    [ATTENTION] You MUST manually delete temporary instance '${RESTORE_INSTANCE_ID}' to avoid costs!" >&2
+      echo "    Run: aws rds delete-db-instance --region ${AWS_REGION} --db-instance-identifier ${RESTORE_INSTANCE_ID} --skip-final-snapshot --delete-automated-backups" >&2
+    fi
   fi
 
   if [ "$SNAPSHOT_CREATED" = "true" ]; then
     echo "    Deleting drill snapshot '${SNAPSHOT_ID}'..."
-    aws rds delete-db-snapshot \
+    local del_snap_err=""
+    local del_snap_rc=0
+    del_snap_err="$(aws rds delete-db-snapshot \
       --region "$AWS_REGION" \
-      --db-snapshot-identifier "$SNAPSHOT_ID" >/dev/null 2>&1 || echo "    (Snapshot already deleted or deleting)"
+      --db-snapshot-identifier "$SNAPSHOT_ID" 2>&1)" || del_snap_rc=$?
+
+    if [ "$del_snap_rc" -eq 0 ]; then
+      echo "    Drill snapshot '${SNAPSHOT_ID}' deleted."
+    elif grep -q "DBSnapshotNotFound" <<<"$del_snap_err"; then
+      echo "    (Snapshot already deleted)"
+    else
+      echo "    [ERROR] Failed to delete snapshot: ${del_snap_err}" >&2
+      echo "    [ATTENTION] You MUST manually delete snapshot '${SNAPSHOT_ID}'!" >&2
+      echo "    Run: aws rds delete-db-snapshot --region ${AWS_REGION} --db-snapshot-identifier ${SNAPSHOT_ID}" >&2
+    fi
   fi
 
   CLEANUP_COMPLETED=true
@@ -98,7 +120,7 @@ cleanup() {
   exit "$exit_code"
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP
 
 # 1. Inspect source DB instance to borrow its Subnet Group and SG
 echo "==> Step 1: Inspecting source database '${DB_INSTANCE_ID}'..."
@@ -199,8 +221,8 @@ if [ "$KEEP_FOR_MANUAL_CHECK" = "1" ]; then
   echo ""
   echo "==> KEEP_FOR_MANUAL_CHECK=1 is set. Pausing for manual inspection..."
   echo "    Connect to endpoint: ${R_ENDPOINT}:5432"
-  echo "    Press [ENTER] to proceed with cleanup and teardown (protecting budget)..."
-  read -r _
+  echo "    Waiting up to 20 minutes (1200 seconds) for manual inspection, or press [ENTER] to proceed with cleanup..."
+  read -r -t 1200 _ || true
 fi
 
 # 5. Cleanup temporary test instance and snapshot immediately to save budget

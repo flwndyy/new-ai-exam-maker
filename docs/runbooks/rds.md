@@ -44,11 +44,18 @@ Trước khi chạy script hoặc dựng trên Console, tài khoản AWS ở reg
 **Yêu cầu công cụ:** `aws` (CLI v2), `jq`, `openssl` — cả 3 đều **được cài sẵn trong AWS CloudShell** (`ap-southeast-1`). Script cũng đã tích hợp `MSYS_NO_PATHCONV=1` cho Git Bash trên Windows.
 
 ```bash
-# Môi trường chuẩn (Single-instance, DeletionProtection=false)
+# Môi trường chuẩn (Single-instance, DeletionProtection=false khi tạo mới)
 ./infra/rds/setup-rds.sh
 
-# Bật DeletionProtection để bảo vệ trước buổi demo:
-DELETION_PROTECTION=true ./infra/rds/setup-rds.sh
+# Bật DeletionProtection trên instance đang chạy để bảo vệ trước buổi demo:
+aws rds modify-db-instance \
+  --region ap-southeast-1 \
+  --db-instance-identifier exammaker-dev-pg \
+  --deletion-protection \
+  --apply-immediately
+
+# Xác minh lại chính sách DeletionProtection:
+EXPECT_DELETION_PROTECTION=true ./infra/rds/verify-rds.sh
 ```
 
 > [!WARNING]
@@ -169,7 +176,6 @@ psql "host=${DB_HOST} port=5432 dbname=exammaker user=${DB_USER} sslmode=require
       UNION ALL SELECT 'subjects', COUNT(*) FROM subjects
       UNION ALL SELECT 'topics', COUNT(*) FROM topics;"
 ```
-```
 
 ---
 
@@ -191,9 +197,12 @@ Theo `docs/context.md` §11–§12 và yêu cầu Issue #22:
 # Chạy toàn bộ quy trình drill và tự động dọn dẹp sạch sẽ
 ./infra/rds/restore-drill.sh
 
-# Hoặc tạm dừng trước khi dọn dẹp để kết nối kiểm tra thủ công qua EC2
+# Hoặc tạm dừng trước khi dọn dẹp để kết nối kiểm tra thủ công qua EC2 (tối đa 20 phút trước khi tự dọn):
 KEEP_FOR_MANUAL_CHECK=1 ./infra/rds/restore-drill.sh
 ```
+
+> [!TIP]
+> Khi chạy với `KEEP_FOR_MANUAL_CHECK=1`, nên chạy trong một phiên `tmux` trên EC2 để tránh bị mất tiến trình nếu phiên SSM Session Manager bị ngắt. Script đã cài sẵn giới hạn chờ tối đa 20 phút (`read -t 1200`). Sau khi kết thúc, luôn có thể kiểm tra lại qua lệnh `aws rds describe-db-instances --region ap-southeast-1 --db-instance-identifier exammaker-dev-pg-restore-test` để chắc chắn instance tạm đã bị xoá.
 
 ### Các bước thao tác chi tiết (tham chiếu):
 

@@ -64,6 +64,29 @@ if [ -n "$DELETION_PROTECTION" ] && [ "$DELETION_PROTECTION" != "true" ] && [ "$
   exit 1
 fi
 
+get_ssm_param_safe() {
+  local pname="$1"
+  local with_decryption="${2:-false}"
+  local decrypt_flag=""
+  [ "$with_decryption" = "true" ] && decrypt_flag="--with-decryption"
+
+  local out=""
+  local rc=0
+  out="$(aws ssm get-parameter --region "$AWS_REGION" --name "$pname" $decrypt_flag --output json 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    jq -r '.Parameter.Value // empty' <<<"$out" | tr -d '\r\n'
+    return 0
+  fi
+
+  if grep -q "ParameterNotFound" <<<"$out"; then
+    echo ""
+    return 0
+  fi
+
+  echo "ERROR: Failed to read SSM parameter '${pname}': ${out}" >&2
+  return 1
+}
+
 echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | DB Instance: ${DB_INSTANCE_ID} | SSM Prefix: ${SSM_PREFIX}"
 
 # 1. Resolve VPC, private subnets, and RDS Security Group created in O2
@@ -200,13 +223,8 @@ if [ "$INSTANCE_EXISTS" = "false" ]; then
   PASSWORD_PARAM_NAME="${SSM_PREFIX}/Rds/MasterPassword"
   if [ -z "$DB_PASSWORD" ]; then
     # Check if MasterPassword already exists in SSM (e.g. from an earlier interrupted run)
-    EXISTING_SSM_PASS="$(aws ssm get-parameter \
-      --region "$AWS_REGION" \
-      --name "$PASSWORD_PARAM_NAME" \
-      --with-decryption \
-      --query "Parameter.Value" \
-      --output text 2>/dev/null || echo "")"
-    if [ -n "$EXISTING_SSM_PASS" ] && [ "$EXISTING_SSM_PASS" != "None" ]; then
+    EXISTING_SSM_PASS="$(get_ssm_param_safe "$PASSWORD_PARAM_NAME" "true")"
+    if [ -n "$EXISTING_SSM_PASS" ]; then
       DB_PASSWORD="$EXISTING_SSM_PASS"
       echo "==> Reusing existing master password from SSM '${PASSWORD_PARAM_NAME}'."
     else
@@ -325,17 +343,19 @@ put_string_param "${SSM_PREFIX}/Rds/Username" "${ACTUAL_USERNAME:-$DB_USERNAME}"
 
 CONN_PARAM_NAME="${SSM_PREFIX}/ConnectionStrings/ExamMaker"
 PASSWORD_PARAM_NAME="${SSM_PREFIX}/Rds/MasterPassword"
-if [ -z "$DB_PASSWORD" ]; then
-  # Try to read master password from SSM to construct connection string
-  DB_PASSWORD="$(aws ssm get-parameter \
+
+if [ -n "$DB_PASSWORD" ]; then
+  # Explicit DB_PASSWORD provided (new instance OR password update/rotation on existing instance)
+  # Update BOTH MasterPassword and ConnectionStrings so they stay 100% in sync!
+  aws ssm put-parameter \
     --region "$AWS_REGION" \
     --name "$PASSWORD_PARAM_NAME" \
-    --with-decryption \
-    --query "Parameter.Value" \
-    --output text 2>/dev/null || echo "")"
-fi
+    --type SecureString \
+    --value "$DB_PASSWORD" \
+    --description "RDS PostgreSQL master password for AI Exam Maker (AWS-managed aws/ssm)" \
+    --overwrite >/dev/null
+  echo "    Stored SSM SecureString parameter: ${PASSWORD_PARAM_NAME} (value hidden)"
 
-if [ -n "$DB_PASSWORD" ] && [ "$DB_PASSWORD" != "None" ]; then
   CONN_STRING="Host=${DB_ENDPOINT};Port=${DB_PORT};Database=${ACTUAL_DB_NAME:-$DB_NAME};Username=${ACTUAL_USERNAME:-$DB_USERNAME};Password=${DB_PASSWORD};SSL Mode=Require"
   aws ssm put-parameter \
     --region "$AWS_REGION" \
@@ -347,12 +367,29 @@ if [ -n "$DB_PASSWORD" ] && [ "$DB_PASSWORD" != "None" ]; then
   unset DB_PASSWORD CONN_STRING
   echo "    Stored SSM SecureString parameter: ${CONN_PARAM_NAME} (value hidden)"
 else
-  # Existing instance reused without password available: verify SSM connection string already exists
-  if aws ssm get-parameter --region "$AWS_REGION" --name "$CONN_PARAM_NAME" >/dev/null 2>&1; then
+  # No DB_PASSWORD provided:
+  # Check if connection string already exists
+  EXISTING_CONN="$(get_ssm_param_safe "$CONN_PARAM_NAME" "true")"
+  if [ -n "$EXISTING_CONN" ]; then
     echo "    Kept existing SSM SecureString parameter: ${CONN_PARAM_NAME}"
   else
-    echo "WARNING: Existing RDS instance reused, but neither '${PASSWORD_PARAM_NAME}' nor '${CONN_PARAM_NAME}' was found in SSM." >&2
-    echo "         Re-run with DB_PASSWORD='<existing-password>' ./infra/rds/setup-rds.sh to populate it." >&2
+    # Connection string does NOT exist, try to construct it from MasterPassword if available
+    SAVED_PASSWORD="$(get_ssm_param_safe "$PASSWORD_PARAM_NAME" "true")"
+    if [ -n "$SAVED_PASSWORD" ]; then
+      CONN_STRING="Host=${DB_ENDPOINT};Port=${DB_PORT};Database=${ACTUAL_DB_NAME:-$DB_NAME};Username=${ACTUAL_USERNAME:-$DB_USERNAME};Password=${SAVED_PASSWORD};SSL Mode=Require"
+      aws ssm put-parameter \
+        --region "$AWS_REGION" \
+        --name "$CONN_PARAM_NAME" \
+        --type SecureString \
+        --value "$CONN_STRING" \
+        --description "Npgsql PostgreSQL connection string for AI Exam Maker (AWS-managed aws/ssm)" \
+        --overwrite >/dev/null
+      unset SAVED_PASSWORD CONN_STRING
+      echo "    Stored SSM SecureString parameter: ${CONN_PARAM_NAME} from ${PASSWORD_PARAM_NAME} (value hidden)"
+    else
+      echo "WARNING: Existing RDS instance reused, but neither '${CONN_PARAM_NAME}' nor '${PASSWORD_PARAM_NAME}' was found in SSM." >&2
+      echo "         Re-run with DB_PASSWORD='<existing-password>' ./infra/rds/setup-rds.sh to populate them." >&2
+    fi
   fi
 fi
 
