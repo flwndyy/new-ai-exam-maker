@@ -5,6 +5,8 @@ using ExamMaker.Infrastructure;
 using ExamMaker.Infrastructure.Ai;
 using ExamMaker.Infrastructure.Persistence;
 using ExamMaker.Infrastructure.Users;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -42,9 +44,16 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
 });
 builder.Services.AddHealthChecks();
 builder.Services.AddExamMakerAuthentication(builder.Configuration);
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Add(IPAddress.Loopback);
+});
 
 var app = builder.Build();
 
+// Only the local Nginx reverse proxy is trusted to supply forwarded headers.
+app.UseForwardedHeaders();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();

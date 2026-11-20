@@ -87,6 +87,8 @@ Hướng dẫn thao tác Console và checklist chi tiết: [aws-o3-ec2-ssm.md](a
 
 ### O4 — Domain, DNS, Nginx và TLS
 
+Hướng dẫn thao tác Console/SSM và checklist chi tiết: [aws-o4-domain-https.md](aws-o4-domain-https.md).
+
 1. Tạo DNS record:
    - `origin.<domain>` → Elastic IP của EC2;
    - `app.<domain>` → CloudFront alias sau khi O5 tạo distribution.
