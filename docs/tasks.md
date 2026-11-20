@@ -79,6 +79,10 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [x] A2. EF Core + Npgsql, migration đầu (toàn bộ bảng mục 8), unique/partial index, CHECK, FK `RESTRICT`; **seed** `departments/subjects/topics` (mục 8.4).
   - Kiểm tra local 19/11/2026: đủ 13 bảng; seed 4 tổ, 4 môn, 82 chương; 30 test pass (13 integration test PostgreSQL trong repo, không skip); migration từ DB mới, nâng cấp DB hiện có, rollback/reapply và SQL idempotent đều pass. PR #55 đã merge vào dev, CI commit cuối f6c1e23 xanh; issue #8 đã đóng (Completed).
 - [ ] A3. Auth: validate JWT (issuer/audience/hạn) → tải user từ DB theo `sub` (cache 1–5 phút) → policy theo role + tổ + ownership; `GET /me`. Từ chối `sub` chưa có trong `users`.
+  - Kiểm tra local 19/11/2026: code JWT Cognito, lookup DB + cache hiển thị 1 phút, policy role/tổ/ownership và GET /me; 74 test Release pass, không skip (15 test PostgreSQL). Comment kỹ thuật bằng tiếng Anh; tài liệu giải thích tiếng Việt. Smoke test Cognito thật đã đạt ngày 20/11/2026; xem docs/a3-auth.md. Chờ PR merge vào dev và CI xanh trước khi tick hoàn tất.
+  - Kiểm tra sửa review 20/11/2026: 61 test API Release pass (gồm SelfReview qua HTTP và quy tắc Application), 16 test model pass; 15 test PostgreSQL skip do Docker local chưa chạy. Cần CI chạy lại trên commit sửa trước khi merge.
+  - Smoke test Cognito thật 20/11/2026 do DEV-A thực hiện: Authorization Code + PKCE thành công; GET /api/v1/me trả 200 và hồ sơ teacher đúng tổ. Khóa user trong PostgreSQL local: cùng access token nhận 401; mở khóa: cùng token nhận lại 200. Không lưu token, thông tin đăng nhập hoặc định danh tài nguyên thật trong repo.
+
 - [ ] A4. Quản lý user + đồng bộ Cognito (`AdminCreateUser`/`AddUserToGroup`/`Disable`/`GlobalSignOut`, đền bù khi lỗi); `POST /admin/users/reconcile`; **script tạo admin đầu tiên** (mục 3.3). *Cần Cognito của OPS-2.*
 - [ ] A5. Danh mục: `GET /departments|subjects|topics` + CRUD `/admin/*`.
 
