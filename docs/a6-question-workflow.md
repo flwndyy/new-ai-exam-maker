@@ -12,7 +12,7 @@ Tất cả đường dẫn có tiền tố `/api/v1` và yêu cầu tài khoản
 | `GET /questions/{id}` | Chi tiết, trả 404 nếu ngoài phạm vi | Như ngân hàng; head còn đọc Submitted cùng tổ để duyệt |
 | `POST /questions` | Tạo Manual, Draft, revision 1; trả 201 + Location | Teacher/head, môn thuộc tổ hiện tại |
 | `PUT /questions/{id}` | Sửa nội dung | Creator teacher/head; Draft/Rejected/Approved |
-| `DELETE /questions/{id}` | Xóa câu chưa có liên kết đề/bộ câu | Creator teacher/head; Draft/Rejected |
+| `DELETE /questions/{id}` | Xóa câu chưa có liên kết đề; liên kết bộ được gỡ cùng transaction | Creator teacher/head; Draft/Rejected |
 | `POST /questions/{id}/submit` | Gửi duyệt | Creator; Draft/Rejected |
 | `POST /questions/{id}/withdraw` | Rút lại | Creator; Submitted |
 | `POST /questions/{id}/approve` | Duyệt; body note tùy chọn, có thể không gửi body | Head cùng tổ hoặc admin, cấm tự duyệt |
@@ -42,7 +42,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 | `LockQuestionAsync` | Giữ FOR UPDATE và reload trước khi quyết định để hai reviewer không ghi đè kết quả. |
 | `CreateAsync/UpdateAsync` | Tạo hoặc sửa câu theo quyền và ràng buộc danh mục; không cho client giả mạo source/creator/revision/status. |
 | `TransitionAsync` | Đọc câu có khóa, gọi state machine ở Application và ghi audit từ trạng thái cũ sang mới. |
-| `DeleteAsync` | Kiểm câu Draft/Rejected thuộc tác giả, kiểm liên kết, xóa bằng PostgreSQL và lưu lịch sử. |
+| `DeleteAsync` | Kiểm câu Draft/Rejected thuộc tác giả, kiểm liên kết đề, tự gỡ liên kết bộ, xóa bằng PostgreSQL và lưu lịch sử. |
 | `ListAsync/ReviewQueueAsync/GetAsync` | Áp phạm vi nhìn thấy trong DB trước phân trang; GET ngoài phạm vi trả 404. |
 | `View` | Đổi entity thành DTO đúng OpenAPI, payload là object JSON, createdBy/reviewedBy là UserRef. |
 | `QuestionExceptionHandler.TryHandleAsync` | Trả ProblemDetails code/traceId; validation thêm errors[field], không trả SQL/stack cho client. |
@@ -66,7 +66,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 - AI chưa rà soát không submit được: 409 `AiReviewRequired`. Sửa nội dung AI reset aiReviewedByAuthor, aiVerification và aiVerificationNote, giữ nguyên job/ordinal/source.
 - Submit xóa quyết định cũ và đặt submittedAt mới. Withdraw xóa submittedAt và quyết định duyệt. Reject note không trắng, tối đa 2000; approve note tùy chọn, tối đa 2000. Reviewer và thời gian lưu UTC.
 - 403 `SelfReview` riêng cho tự duyệt của head/admin; các lỗi quyền khác `Forbidden`. Sai trạng thái trả 409 `InvalidStateTransition`.
-- Câu bị exam_version_questions hoặc question_set_items tham chiếu trả 409 `QuestionReferenced`; không tự xóa liên kết hoặc snapshot. Khi dùng bộ câu, phải gỡ liên kết trước như quy tắc A2.
+- Câu bị exam_version_questions tham chiếu trả 409 `QuestionReferenced`. Liên kết question_set_items được tự xóa trong cùng transaction trước khi xóa câu đủ điều kiện, kể cả thuộc bộ của người khác; không xóa bộ và không sửa snapshot.
 - Validation trả 400 `ValidationFailed` với errors[field]; body không cho field ngoài hợp đồng. Bốn dạng payload đều kiểm: MC đúng 4 nhãn A–D/1 correctLabel; TrueFalse 4 nhãn a–d và boolean; ShortAnswer có đáp án, tolerance chỉ cho number; Essay có rubric điểm dương. Tổng rubric bằng điểm câu kiểm khi ghép đề ở A7.
 
 ## Transaction và đồng thời
@@ -101,10 +101,19 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 - ShortAnswer number chấp nhận `12,0` và `12.0`, giữ nguyên chuỗi acceptedAnswers. Chỉ dùng dấu phẩy/chấm làm dấu thập phân, không phân cách hàng nghìn; vẫn từ chối NaN/Infinity và chuỗi số sai.
 - Payload text (options/statements/acceptedAnswers/unit/modelAnswer/criterion) tối đa 10000 ký tự; acceptedAnswers/rubric tối đa 20 phần tử. Các giới hạn được cập nhật trong OpenAPI và sinh lại client schema.
 - Ghi các câu khác nhau dùng shared management lock, không phải xếp hàng sau nhau. Ghi cùng câu vẫn tuần tự qua FOR UPDATE. Shared lock vẫn chờ các thao tác A4/A5 giữ khóa độc quyền; quá 2 giây có thể nhận Conflict.
-- Đổi subjectId/topicId/grade bị chặn với 409 QuestionReferenced nếu câu nằm trong đề Draft/Rejected. Đọc trạng thái phiên bản dưới FOR SHARE để không race với withdraw/submit. Có thể đổi phân loại câu chỉ có snapshot đã đóng băng; snapshot không bị sửa. Deadlock do thứ tự khóa với submit được rollback và trả Conflict.
+- Đổi subjectId/topicId/grade bị chặn với 409 QuestionReferenced nếu câu nằm trong đề Draft/Rejected. Đọc trạng thái phiên bản dưới FOR SHARE để không race với withdraw/submit. Có thể đổi phân loại câu chỉ được phiên bản Approved/Published/Archived tham chiếu; snapshot không bị sửa. Deadlock do thứ tự khóa với submit được rollback và trả Conflict.
 - Khi thêm item ở A7, phải giữ FOR SHARE trên câu nguồn trong cùng transaction trước kiểm môn/khối và chèn liên kết; không kiểm catalog rồi thả khóa trước khi chèn.
 - Các endpoint ghi kiểm CanRead ngay sau khóa câu để che ID ngoài phạm vi bằng 404. PUT kiểm trạng thái trước validation nghiệp vụ/catalog; lỗi bind HTTP vẫn được MVC trả 400 trước action.
 - Audit chỉ ghi ReviewNote cho Approve/Reject; archive/mark-reviewed không mượn lại note cũ. So sánh nội dung chuẩn hóa trim stem cả hai bên, explanation trim và blank→null. PUT không đổi ngữ nghĩa giữ nguyên Approved/revision/AI flags; không sửa whitespace của bản Approved khi chỉ chuẩn hóa.
+
+## Review lần 3
+
+- Xóa câu Draft/Rejected tự gỡ question_set_items trong cùng transaction, giữ nguyên bộ của người khác. Chỉ tham chiếu từ đề mới chặn xóa. Audit lỗi khôi phục cả câu và liên kết bộ.
+- Submitted cũng chặn đổi subject/topic/grade vì còn đường withdraw/reject mở lại nội dung. Approved/Published/Archived chỉ giữ snapshot nên cho đổi phân loại nguồn; sửa stem/lời giải không đổi phân loại vẫn theo rule revision.
+- GetString/đọc tên property trong payload bắt surrogate lẻ thành 400 ValidationFailed ở errors[payload]. Có test raw HTTP cho cả high và low surrogate.
+- ShortAnswer number chỉ nhận dạng -?[0-9]+([.,][0-9]+)?: không khoảng trắng, dấu cộng hay số mũ. Options/statements bắt buộc theo thứ tự A–D/a–d. OpenAPI và schema frontend được sinh lại cùng thay đổi.
+- Mark-reviewed trên AI Draft/Rejected đã rà soát là no-op thành công, không đổi updatedAt hoặc thêm audit. Các kiểm tra quyền/trạng thái vẫn áp dụng trước khi trả no-op.
+- Tạo câu lấy một mốc UTC duy nhất cho createdAt và updatedAt.
 
 ## Kết quả sửa review 20/11/2026
 

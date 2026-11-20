@@ -53,6 +53,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             if (actor.Role is not (Roles.Teacher or Roles.Head)) throw QuestionRules.Forbidden();
             var department = await CatalogAsync(input, cancellationToken);
             if (actor.DepartmentId != department) throw QuestionRules.Forbidden();
+            var now = DateTime.UtcNow;
             var question = new Question
             {
                 Id = Guid.NewGuid(),
@@ -66,8 +67,8 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 Payload = input.Payload.GetRawText(),
                 Explanation = input.Explanation,
                 CreatedBy = actor.Id,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                CreatedAt = now,
+                UpdatedAt = now
             };
             database.Questions.Add(question);
             Audit(actor.Id, question, "CreateQuestion", null, "Manual question; revision=1");
@@ -101,13 +102,13 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         {
             var question = await LockQuestionAsync(actor, id, cancellationToken);
             var before = question.Status;
-            QuestionRules.Transition(actor, question, action, note, DateTime.UtcNow);
-            Audit(actor.Id, question, action + "Question", before,
-                action is QuestionAction.Approve or QuestionAction.Reject ? question.ReviewNote : null);
+            if (QuestionRules.Transition(actor, question, action, note, DateTime.UtcNow))
+                Audit(actor.Id, question, action + "Question", before,
+                    action is QuestionAction.Approve or QuestionAction.Reject ? question.ReviewNote : null);
             return question;
         }, false, cancellationToken))!;
 
-    /// <summary>Delete only an owned editable question with no exam or question-set references; keep its audit history.</summary>
+    /// <summary>Delete an owned editable question without exam references, unlinking collection membership in the same transaction.</summary>
     public async Task DeleteAsync(Guid actorId, Guid id, CancellationToken cancellationToken)
     {
         await MutateAsync(actorId, async actor =>
@@ -115,9 +116,11 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             var question = await LockQuestionAsync(actor, id, cancellationToken);
             QuestionRules.RequireOwner(actor, question);
             if (question.Status is not ("Draft" or "Rejected")) throw QuestionRules.InvalidState();
-            if (await database.ExamVersionQuestions.AnyAsync(x => x.SourceQuestionId == id, cancellationToken)
-                || await database.QuestionSetItems.AnyAsync(x => x.QuestionId == id, cancellationToken)) throw Referenced();
-            Audit(actor.Id, question, "DeleteQuestion", question.Status, $"revision={question.Revision}; subject={question.SubjectId}; topic={question.TopicId}");
+            if (await database.ExamVersionQuestions.AnyAsync(x => x.SourceQuestionId == id, cancellationToken)) throw Referenced();
+            // Collection ownership does not prevent the author deleting an eligible bank question (context section 8.1).
+            var unlinked = await database.QuestionSetItems.Where(x => x.QuestionId == id).ExecuteDeleteAsync(cancellationToken);
+            Audit(actor.Id, question, "DeleteQuestion", question.Status,
+                $"revision={question.Revision}; subject={question.SubjectId}; topic={question.TopicId}; removedCollectionLinks={unlinked}");
             // Execute the restricted delete in PostgreSQL; tracked collection links must not trigger client-side cascades.
             await database.Questions.Where(x => x.Id == id).ExecuteDeleteAsync(cancellationToken);
             return null;
@@ -174,7 +177,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 WHERE i.exam_version_id = v.id AND i.source_question_id = {id})
             ORDER BY v.id FOR SHARE OF v
             """).ToListAsync(cancellationToken);
-        if (states.Any(x => x is "Draft" or "Rejected"))
+        if (states.Any(x => x is "Draft" or "Rejected" or "Submitted"))
             throw new QuestionException(409, "QuestionReferenced", "Không thể đổi môn, chương hoặc khối của câu trong đề đang soạn.");
     }
 
@@ -238,5 +241,5 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     });
 
     private static QuestionException Missing() => new(404, "NotFound", "Không tìm thấy câu hỏi.");
-    private static QuestionException Referenced() => new(409, "QuestionReferenced", "Câu hỏi đang được đề hoặc bộ câu hỏi tham chiếu.");
+    private static QuestionException Referenced() => new(409, "QuestionReferenced", "Câu hỏi đang được đề tham chiếu.");
 }

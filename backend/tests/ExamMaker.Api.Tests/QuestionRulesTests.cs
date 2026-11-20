@@ -52,7 +52,7 @@ public sealed class QuestionRulesTests
     {
         var q = Question(state);
         q.Source = "AI";
-        q.AiReviewedByAuthor = true;
+        q.AiReviewedByAuthor = action != QuestionAction.MarkReviewed;
         var actor = action is QuestionAction.Approve or QuestionAction.Reject ? Actor("head") : Actor("teacher", true);
         var now = DateTime.UtcNow;
         if (!valid)
@@ -203,7 +203,7 @@ public sealed class QuestionRulesTests
         var payload = JsonSerializer.Deserialize<JsonElement>("""{"answerType":"number","acceptedAnswers":["12","12,0","12.0"],"tolerance":0}""");
         QuestionPayloadRules.Validate("ShortAnswer", payload);
         Assert.Equal("12,0", payload.GetProperty("acceptedAnswers")[1].GetString());
-        foreach (var value in new[] { "NaN", "Infinity", "12,0.1", "12,,0" })
+        foreach (var value in new[] { "NaN", "Infinity", "12,0.1", "12,,0", " 12 ", "+12", "1e3", "12\n" })
             Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("ShortAnswer",
                 JsonSerializer.SerializeToElement(new { answerType = "number", acceptedAnswers = new[] { value } })));
     }
@@ -268,6 +268,66 @@ public sealed class QuestionRulesTests
             if (count == 20) QuestionPayloadRules.Validate(type, payload);
             else Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type, payload)).Field);
         }
+    }
+
+    [Theory]
+    [InlineData("options/0/text")]
+    [InlineData("options/0/label")]
+    [InlineData("correctLabel")]
+    // JsonElement binding accepts raw escapes; every string extraction must convert a lone surrogate into a payload error.
+    public void Unpaired_surrogate_values_are_payload_validation_failures(string path)
+    {
+        var json = path switch
+        {
+            "options/0/text" => ValidPayload.Replace("One", @"\ud800"),
+            "options/0/label" => ValidPayload.Replace("\"A\",\"text\":\"One\"", "\"" + @"\ud800" + "\",\"text\":\"One\""),
+            _ => ValidPayload.Replace("\"correctLabel\":\"A\"", "\"correctLabel\":\"" + @"\ud800" + "\"")
+        };
+        var error = Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("MultipleChoice", JsonSerializer.Deserialize<JsonElement>(json)));
+        Assert.Equal(400, error.StatusCode); Assert.Equal("payload", error.Field);
+    }
+
+    [Fact]
+    public void Malformed_unicode_property_names_are_payload_errors()
+    {
+        var json = ValidPayload.Replace("correctLabel", @"\ud800");
+        Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("MultipleChoice",
+            JsonSerializer.Deserialize<JsonElement>(json))).Field);
+    }
+
+    [Theory]
+    [InlineData("12")]
+    [InlineData("-12")]
+    [InlineData("-12,50")]
+    [InlineData("0.5")]
+    public void Finite_decimal_answer_grammar_allows_negative_numbers_and_both_separators(string answer) =>
+        QuestionPayloadRules.Validate("ShortAnswer", JsonSerializer.SerializeToElement(new { answerType = "number", acceptedAnswers = new[] { answer } }));
+
+    [Theory]
+    [InlineData("MultipleChoice")]
+    [InlineData("TrueFalse")]
+    // Reject valid-but-shuffled label sets instead of persisting an unexpected print order.
+    public void Option_labels_must_follow_the_canonical_display_order(string type)
+    {
+        var payload = type == "MultipleChoice"
+            ? JsonNode.Parse(ValidPayload)!
+            : JsonNode.Parse("""{"statements":[{"label":"a","text":"A","isTrue":true},{"label":"b","text":"B","isTrue":false},{"label":"c","text":"C","isTrue":true},{"label":"d","text":"D","isTrue":false}]}""")!;
+        var name = type == "MultipleChoice" ? "options" : "statements";
+        var array = payload[name]!.AsArray();
+        var first = array[0]!.DeepClone(); array[0] = array[3]!.DeepClone(); array[3] = first;
+        Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type,
+            JsonSerializer.SerializeToElement(payload))).Field);
+    }
+
+    [Fact]
+    // A retry is still authorized and state-checked, but must not look like another review operation.
+    public void Mark_reviewed_is_idempotent_without_changing_updated_at()
+    {
+        var q = Question(); q.Source = "AI";
+        var first = DateTime.UtcNow;
+        Assert.True(QuestionRules.Transition(Actor("teacher", true), q, QuestionAction.MarkReviewed, null, first));
+        Assert.False(QuestionRules.Transition(Actor("teacher", true), q, QuestionAction.MarkReviewed, null, first.AddMinutes(1)));
+        Assert.Equal(first, q.UpdatedAt);
     }
 
 }

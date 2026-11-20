@@ -66,6 +66,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         var question = await CreateAsync();
         Assert.Equal("Draft", question.Status); Assert.Equal("Manual", question.Source); Assert.Equal(1, question.Revision);
         Assert.Equal(Department, question.DepartmentId); Assert.Equal(owner, question.CreatedBy.Id);
+        Assert.Equal(question.CreatedAt, question.UpdatedAt);
         await ActAsync(owner, question.Id, QuestionAction.Submit);
         Assert.Equal(400, (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Reject, " "))).StatusCode);
         question = await ActAsync(head, question.Id, QuestionAction.Reject, "Correct the reasoning");
@@ -177,8 +178,8 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    // Keep every source reference intact and permit deletion only after editable links have been removed.
-    public async Task Deletion_rejects_exam_and_collection_references_and_preserves_audit_history()
+    // Exam links block deletion; collection membership is removed atomically with the eligible source question.
+    public async Task Deletion_preserves_exam_references_but_unlinks_collection_membership()
     {
         await SeedAsync();
         var q = await CreateAsync();
@@ -191,12 +192,12 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         await db.SaveChangesAsync();
         Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).DeleteAsync(owner, q.Id, default))).Code);
         await db.ExamVersionQuestions.Where(x => x.SourceQuestionId == q.Id).ExecuteDeleteAsync();
-        var set = new QuestionSet { Id = Guid.NewGuid(), Name = "Synthetic", CreatedBy = owner };
+        var set = new QuestionSet { Id = Guid.NewGuid(), Name = "Synthetic", CreatedBy = head };
         db.QuestionSets.Add(set); db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = set.Id, QuestionId = q.Id });
         await db.SaveChangesAsync();
-        Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).DeleteAsync(owner, q.Id, default))).Code);
-        await db.QuestionSetItems.Where(x => x.QuestionId == q.Id).ExecuteDeleteAsync();
         await Service(db).DeleteAsync(owner, q.Id, default);
+        Assert.False(await db.QuestionSetItems.AnyAsync(x => x.QuestionId == q.Id));
+        Assert.True(await db.QuestionSets.AnyAsync(x => x.Id == set.Id && x.CreatedBy == head));
         Assert.False(await db.Questions.AnyAsync(x => x.Id == q.Id));
         Assert.True(await db.AuditLogs.AnyAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion"));
     }
@@ -233,8 +234,11 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.Equal(2, changed.Revision);
         var snapshot = await edit.ExamVersionQuestions.SingleAsync(x => x.ExamVersionId == versionId);
         Assert.Equal(q.Stem, snapshot.StemSnapshot); Assert.Equal(1, snapshot.SourceRevision);
-        var reclassified = await Service(edit).UpdateAsync(owner, q.Id,
-            Input("New source") with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000011"), Grade = 11 }, default);
+        var movedInput = Input("New source") with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000011"), Grade = 11 };
+        Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(edit).UpdateAsync(owner, q.Id, movedInput, default))).Code);
+        await edit.ExamVersions.Where(x => x.Id == versionId).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Approved")
+            .SetProperty(v => v.ReviewedBy, head).SetProperty(v => v.ReviewedAt, DateTime.UtcNow));
+        var reclassified = await Service(edit).UpdateAsync(owner, q.Id, movedInput, default);
         Assert.Equal(11, reclassified.Grade);
         Assert.Equal(q.Stem, (await edit.ExamVersionQuestions.AsNoTracking().SingleAsync(x => x.ExamVersionId == versionId)).StemSnapshot);
     }
@@ -468,6 +472,75 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.Equal("Old rejection", audit.Single(x => x.Action == "RejectQuestion").Note);
         Assert.Null(audit.Single(x => x.Action == "ArchiveQuestion").Note);
         Assert.All(audit.Where(x => x.Action == "MarkReviewedQuestion" || x.Action == "SubmitQuestion"), x => Assert.Null(x.Note));
+    }
+
+    [PostgresFact]
+    // An author's eligible source deletion must not depend on permission to edit another teacher's collection.
+    public async Task Deleting_reopened_or_rejected_questions_unlinks_other_users_collections()
+    {
+        await SeedAsync();
+        foreach (var reject in new[] { false, true })
+        {
+            var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit); await ActAsync(head, q.Id, QuestionAction.Approve);
+            var setId = Guid.NewGuid();
+            await using (var db = fixture.CreateContext())
+            {
+                db.QuestionSets.Add(new QuestionSet { Id = setId, Name = "Other user's collection", CreatedBy = otherHead });
+                db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = setId, QuestionId = q.Id });
+                await db.SaveChangesAsync();
+                q = await Service(db).UpdateAsync(owner, q.Id, Input("Reopened"), default);
+                Assert.Equal(2, q.Revision);
+            }
+            if (reject) { await ActAsync(owner, q.Id, QuestionAction.Submit); await ActAsync(head, q.Id, QuestionAction.Reject, "Reason"); }
+            await using var deletion = fixture.CreateContext();
+            await Service(deletion).DeleteAsync(owner, q.Id, default);
+            Assert.False(await deletion.Questions.AnyAsync(x => x.Id == q.Id));
+            Assert.False(await deletion.QuestionSetItems.AnyAsync(x => x.QuestionId == q.Id));
+            Assert.True(await deletion.QuestionSets.AnyAsync(x => x.Id == setId && x.CreatedBy == otherHead));
+            Assert.Contains("removedCollectionLinks=1", (await deletion.AuditLogs.SingleAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion")).Note);
+        }
+    }
+
+    [PostgresFact]
+    // Unlinking collections must roll back when the enclosing question deletion/audit does not commit.
+    public async Task Failed_deletion_restores_collection_membership_and_the_question()
+    {
+        await SeedAsync(); var q = await CreateAsync(); var setId = Guid.NewGuid();
+        await using (var db = fixture.CreateContext())
+        {
+            db.QuestionSets.Add(new QuestionSet { Id = setId, Name = "Other user's collection", CreatedBy = head });
+            db.QuestionSetItems.Add(new QuestionSetItem { QuestionSetId = setId, QuestionId = q.Id });
+            await db.SaveChangesAsync();
+        }
+        var options = new DbContextOptionsBuilder<ExamMakerDbContext>().UseNpgsql(fixture.ConnectionString).AddInterceptors(new FailAudit()).Options;
+        await using (var db = new ExamMakerDbContext(options))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Service(db).DeleteAsync(owner, q.Id, default));
+        await using var verify = fixture.CreateContext();
+        Assert.True(await verify.Questions.AnyAsync(x => x.Id == q.Id));
+        Assert.True(await verify.QuestionSetItems.AnyAsync(x => x.QuestionSetId == setId && x.QuestionId == q.Id));
+        Assert.False(await verify.AuditLogs.AnyAsync(x => x.EntityId == q.Id && x.Action == "DeleteQuestion"));
+    }
+
+    [PostgresFact]
+    // Repeated author-review requests remain successful without duplicating audit history or modifying timestamps.
+    public async Task Retrying_mark_reviewed_keeps_one_audit_and_the_first_updated_at()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using (var db = fixture.CreateContext())
+        {
+            var job = new AiGenerationJob { Id = Guid.NewGuid(), RequestedBy = owner };
+            db.AiGenerationJobs.Add(job); await db.SaveChangesAsync();
+            await db.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Source, "AI")
+                .SetProperty(v => v.AiJobId, job.Id).SetProperty(v => v.AiOrdinal, 1));
+        }
+        var first = await ActAsync(owner, q.Id, QuestionAction.MarkReviewed);
+        for (var retry = 0; retry < 3; retry++)
+        {
+            var result = await ActAsync(owner, q.Id, QuestionAction.MarkReviewed);
+            Assert.True(result.AiReviewedByAuthor); Assert.Equal(first.UpdatedAt, result.UpdatedAt);
+        }
+        await using var verify = fixture.CreateContext();
+        Assert.Equal(1, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id && x.Action == "MarkReviewedQuestion"));
     }
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {

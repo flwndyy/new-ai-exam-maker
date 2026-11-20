@@ -76,8 +76,8 @@ public static class QuestionRules
         return true;
     }
 
-    /// <summary>Authorize and apply one workflow transition; persistence and audit belong to the enclosing transaction.</summary>
-    public static void Transition(AuthenticatedUser actor, Question question, QuestionAction action, string? note, DateTime now)
+    /// <summary>Authorize and apply one transition, returning false for an already-completed author review so retries leave no audit or timestamp changes.</summary>
+    public static bool Transition(AuthenticatedUser actor, Question question, QuestionAction action, string? note, DateTime now)
     {
         if (action is QuestionAction.Approve or QuestionAction.Reject)
         {
@@ -128,11 +128,13 @@ public static class QuestionRules
                 break;
             case QuestionAction.MarkReviewed:
                 if (question.Source != "AI" || question.Status is not ("Draft" or "Rejected")) throw InvalidState();
+                if (question.AiReviewedByAuthor) return false;
                 question.AiReviewedByAuthor = true;
                 break;
             default: throw InvalidState();
         }
         question.UpdatedAt = now;
+        return true;
     }
 
     /// <summary>Reject editing a locked workflow state before catalog or content validation can obscure the required action.</summary>

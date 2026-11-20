@@ -132,6 +132,7 @@ export interface paths {
          *     - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
          *     - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
          *     - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
+         *     Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
          *     Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
          */
         put: operations["updateQuestion"];
@@ -139,7 +140,8 @@ export interface paths {
         /**
          * Xóa câu hỏi
          * @description Chỉ người tạo, chỉ câu `Draft`/`Rejected` và **chưa được đề nào tham chiếu**
-         *     (`409 QuestionReferenced`). Câu đã `Approved` dùng `archive`.
+         *     (`409 QuestionReferenced`). Liên kết question_set_items được xóa trong cùng transaction trước khi xóa câu,
+         *     kể cả bộ của người khác. Câu đã `Approved` dùng `archive`.
          */
         delete: operations["deleteQuestion"];
         options?: never;
@@ -262,6 +264,7 @@ export interface paths {
         /**
          * Đánh dấu "Đã rà soát" câu do AI sinh
          * @description Đặt `aiReviewedByAuthor=true`. Chỉ người tạo, chỉ câu `source=AI` đang `Draft`/`Rejected`.
+         *     Nếu cờ đã true thì trả nguyên dữ liệu, không thêm audit hoặc đổi updatedAt.
          *     Điều kiện bắt buộc trước khi `submit` (context 4.1.2).
          */
         post: operations["markQuestionReviewed"];
@@ -1164,7 +1167,7 @@ export interface components {
         TopicPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["Topic"][];
         };
-        /** @description Đúng 4 phương án A–D, đúng 1 đáp án đúng. */
+        /** @description Đúng 4 phương án theo thứ tự A, B, C, D; đúng 1 đáp án đúng. */
         MultipleChoicePayload: {
             options: {
                 /** @enum {string} */
@@ -1174,7 +1177,7 @@ export interface components {
             /** @enum {string} */
             correctLabel: "A" | "B" | "C" | "D";
         };
-        /** @description Đúng 4 ý a–d, mỗi ý có đúng/sai. */
+        /** @description Đúng 4 ý theo thứ tự a, b, c, d; mỗi ý có đúng/sai. */
         TrueFalsePayload: {
             statements: {
                 /** @enum {string} */
@@ -1183,7 +1186,7 @@ export interface components {
                 isTrue: boolean;
             }[];
         };
-        /** @description 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi số hữu hạn, chấp nhận dấu phẩy/chấm thập phân, không dùng phân cách hàng nghìn. */
+        /** @description 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi thập phân hữu hạn theo dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng, số mũ hoặc phân cách hàng nghìn. */
         ShortAnswerPayload: {
             /** @enum {string} */
             answerType: "number" | "text";

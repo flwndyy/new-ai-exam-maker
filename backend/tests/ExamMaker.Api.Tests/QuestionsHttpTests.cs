@@ -116,6 +116,24 @@ public sealed class QuestionsHttpTests
         using var response = await client.PostAsync("/api/v1/questions", new StringContent(body, Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode); Assert.Equal(0, app.Management.Calls);
     }
+    [Theory]
+    [InlineData(@"\ud800")]
+    [InlineData(@"\udc00")]
+    // Exercise raw HTTP JSON through MVC binding, the real payload validator and ProblemDetails handling.
+    public async Task Malformed_surrogate_payload_returns_400_instead_of_500(string escape)
+    {
+        using var app = new QuestionsTestFactory();
+        app.Management.ValidateInputs = true;
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        var json = JsonSerializer.Serialize(app.Management.Input, JsonSerializerOptions.Web).Replace("One", escape);
+        using var response = await client.PostAsync("/api/v1/questions", new StringContent(json, Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ValidationFailed", problem.GetProperty("code").GetString());
+        Assert.True(problem.GetProperty("errors").TryGetProperty("payload", out _));
+    }
+
 }
 
 public sealed class QuestionsTestFactory : AuthTestFactory
@@ -140,13 +158,15 @@ public sealed class FakeQuestions : IQuestionManagement
     public string? Note { get; private set; }
     public QuestionQuery? Query { get; private set; }
     public QuestionException? Failure { get; set; }
+    public bool ValidateInputs { get; set; }
     private void Capture(Guid actor) { Calls++; Actor = actor; if (Failure is not null) throw Failure; }
     public Task<QuestionPage> ListAsync(Guid actorId, QuestionQuery query, CancellationToken cancellationToken)
     { Capture(actorId); Query = query; return Task.FromResult(new QuestionPage(query.Page, query.PageSize, 1, 1, [View])); }
     public Task<QuestionPage> ReviewQueueAsync(Guid actorId, QuestionReviewQuery query, CancellationToken cancellationToken)
     { Capture(actorId); return Task.FromResult(new QuestionPage(query.Page, query.PageSize, 1, 1, [View])); }
     public Task<QuestionView> GetAsync(Guid actorId, Guid id, CancellationToken cancellationToken) { Capture(actorId); return Task.FromResult(View); }
-    public Task<QuestionView> CreateAsync(Guid actorId, QuestionInput input, CancellationToken cancellationToken) { Capture(actorId); return Task.FromResult(View); }
+    public Task<QuestionView> CreateAsync(Guid actorId, QuestionInput input, CancellationToken cancellationToken)
+    { Capture(actorId); if (ValidateInputs) QuestionRules.Validate(input); return Task.FromResult(View); }
     public Task<QuestionView> UpdateAsync(Guid actorId, Guid id, QuestionInput input, CancellationToken cancellationToken) { Capture(actorId); return Task.FromResult(View); }
     public Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken)
     { Capture(actorId); Note = note; return Task.FromResult(View); }

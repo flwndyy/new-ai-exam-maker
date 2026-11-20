@@ -200,9 +200,14 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 
 #### Chi tiết triển khai A6
 
+- Review lần 3: DELETE câu Draft/Rejected tự xóa question_set_items trong cùng transaction (kể cả bộ của người khác); chỉ exam_version_questions chặn xóa. Audit lỗi phải khôi phục cả câu và liên kết bộ.
+- Chặn đổi môn/chương/khối khi đề Draft/Rejected/Submitted tham chiếu câu vì Submitted còn có thể withdraw/reject. Approved/Published/Archived dùng snapshot vẫn cho đổi phân loại nguồn; không sửa snapshot. Các chỉnh sửa nội dung không đổi phân loại vẫn theo quy tắc revision hiện có.
+- Payload từ chối surrogate Unicode lẻ bằng 400 errors[payload]. Đáp án số dùng dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng hoặc số mũ; dấu trừ và phẩy/chấm thập phân được phép. Options phải đúng thứ tự A–D, statements a–d.
+- Mark-reviewed có tính idempotent khi cờ đã true: không đổi updatedAt, không thêm audit. Câu mới dùng cùng một thời điểm UTC cho createdAt/updatedAt.
+
 - Sửa review A6: ShortAnswer number chấp nhận dấu phẩy/chấm thập phân (giữ nguyên chuỗi đáp án), từ chối NaN/Infinity. Text payload tối đa 10000 ký tự; acceptedAnswers và rubric tối đa 20 phần tử, khớp OpenAPI.
 - Ghi câu hỏi giữ shared lock 48683401: các câu khác nhau ghi song song; vẫn loại trừ ghi user/catalog độc quyền, chờ quá 2 giây trả Conflict. Khóa hàng câu hỏi vẫn tuần tự hóa thao tác trên cùng câu.
-- Sau khóa câu, kiểm CanRead trước quyền/trạng thái để endpoint ghi cũng che câu không nhìn thấy bằng 404. PUT kiểm trạng thái trước validation/catalog. Chặn đổi môn/chương/khối khi câu được đề Draft/Rejected tham chiếu (409 QuestionReferenced); khóa các phiên bản tham chiếu đến commit để không race với withdraw/submit. Snapshot đã đóng băng vẫn cho sửa câu nguồn; deadlock/lock timeout trả Conflict để tải lại/thử sau.
+- Sau khóa câu, kiểm CanRead trước quyền/trạng thái để endpoint ghi cũng che câu không nhìn thấy bằng 404. PUT kiểm trạng thái trước validation/catalog. Chặn đổi môn/chương/khối khi câu được đề Draft/Rejected/Submitted tham chiếu (409 QuestionReferenced); khóa các phiên bản tham chiếu đến commit để không race với withdraw/submit. Snapshot đã đóng băng vẫn cho sửa câu nguồn; deadlock/lock timeout trả Conflict để tải lại/thử sau.
 - A7 khi thêm item phải giữ FOR SHARE trên câu nguồn trước kiểm môn/khối và chèn liên kết trong cùng transaction để phối hợp với khóa FOR UPDATE của A6.
 - Audit chỉ lấy ReviewNote cho Approve/Reject. So nội dung sau cùng chuẩn hóa: trim stem cả hai bên; explanation trim, rỗng thành null. Lưu lại không đổi ngữ nghĩa giữ nguyên Approved/revision/cờ AI; không tự ghi lại whitespace của câu Approved nếu chỉ chuẩn hóa.
 
@@ -587,6 +592,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ## Lịch sử thay đổi
 
 **0.9 — 20/11/2026**
+- Review lần 3: tự gỡ liên kết bộ khi xóa câu, bảo vệ phân loại khi đề Submitted, từ chối surrogate lỗi, đáp án số/nhãn chặt, mark-reviewed idempotent và timestamp tạo bằng nhau.
 - Sửa review A6: dấu phẩy thập phân, shared lock, bảo vệ phân loại trong đề editable, che ID ngoài phạm vi, audit đúng hành động, chuẩn hóa nội dung và giới hạn payload.
 - Triển khai A6: ngân hàng câu hỏi, state machine ở Application, payload validation, review queue, audit và khóa chống chuyển trạng thái đồng thời.
 

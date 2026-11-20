@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ExamMaker.Application.Questions;
 
@@ -32,8 +33,10 @@ public static class QuestionPayloadRules
                 {
                     var value = Text(answer);
                     // Accept Vietnamese decimal commas without treating punctuation as a thousands separator or rewriting stored answers.
-                    if (answerType == "number" && (!double.TryParse(value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
-                        || !double.IsFinite(number))) Fail();
+                    if (answerType == "number" && (value != value.Trim()
+                        || !Regex.IsMatch(value, @"^-?[0-9]+([.,][0-9]+)?$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)
+                        || !double.TryParse(value.Replace(',', '.'), NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                            CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number))) Fail();
                 }
                 if (payload.TryGetProperty("unit", out var unit) && unit.ValueKind != JsonValueKind.Null) Text(unit, true);
                 if (payload.TryGetProperty("tolerance", out var tolerance) && tolerance.ValueKind != JsonValueKind.Null)
@@ -62,22 +65,23 @@ public static class QuestionPayloadRules
     private static void Object(JsonElement value, string[] required, string[]? optional = null)
     {
         if (value.ValueKind != JsonValueKind.Object) Fail();
-        var keys = value.EnumerateObject().Select(x => x.Name).ToArray();
+        string[] keys;
+        try { keys = value.EnumerateObject().Select(x => x.Name).ToArray(); }
+        catch (InvalidOperationException) { Fail(); return; }
         if (keys.Distinct().Count() != keys.Length || required.Any(x => !keys.Contains(x))
             || keys.Any(x => !required.Contains(x) && !(optional?.Contains(x) ?? false))) Fail();
     }
 
-    /// <summary>Require four distinct labelled options/statements and explicit boolean answers for true/false items.</summary>
+    /// <summary>Require canonical A-D/a-d display order and explicit boolean answers for true/false items.</summary>
     private static void Labels(JsonElement value, string[] labels, bool truth)
     {
         Array(value, 4, 4);
-        if (value.GetArrayLength() != 4) Fail();
-        var seen = new HashSet<string>();
+        var index = 0;
         foreach (var item in value.EnumerateArray())
         {
             Object(item, truth ? ["label", "text", "isTrue"] : ["label", "text"]);
             var label = Text(item.GetProperty("label"));
-            if (!labels.Contains(label) || !seen.Add(label)) Fail();
+            if (label != labels[index++]) Fail();
             Text(item.GetProperty("text"));
             if (truth && item.GetProperty("isTrue").ValueKind is not (JsonValueKind.True or JsonValueKind.False)) Fail();
         }
@@ -87,7 +91,9 @@ public static class QuestionPayloadRules
     private static string Text(JsonElement value, bool allowEmpty = false)
     {
         if (value.ValueKind != JsonValueKind.String) Fail();
-        var text = value.GetString()!;
+        string text;
+        try { text = value.GetString()!; }
+        catch (InvalidOperationException) { Fail(); return string.Empty; }
         if ((!allowEmpty && string.IsNullOrWhiteSpace(text)) || text.Length > MaxTextLength || text.Contains('\0')) Fail();
         return text;
     }
