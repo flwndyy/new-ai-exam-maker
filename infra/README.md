@@ -11,6 +11,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `systemd/`: mẫu service cho API, Worker và timer gia hạn Certbot.
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
+- `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
 
 ## Quy tắc placeholder
 

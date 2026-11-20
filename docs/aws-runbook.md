@@ -58,6 +58,8 @@ Hướng dẫn thao tác Console và checklist chi tiết: [aws-o2-vpc-security-
 
 ### O3 — EC2, EBS, Elastic IP, SSM và IAM
 
+Hướng dẫn thao tác Console và checklist chi tiết: [aws-o3-ec2-ssm.md](aws-o3-ec2-ssm.md).
+
 1. Launch Amazon Linux 2023 ARM64 `t4g.small` trong `aem-public-a`, gắn `aem-ec2-sg`,
    root EBS `gp3` **30 GB**.
 2. Gắn Elastic IP và ghi lại trong ghi chú riêng của team, không commit vào Git.
