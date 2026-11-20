@@ -61,8 +61,17 @@ public sealed class AiGenerationService(
             return new AiSubmitResult.QuotaExceeded(AiQuotaReason.SystemTokens, retryAfter);
         }
 
-        var jobId = await jobs.TryCreateQueuedJobAsync(
-            userId, request, date, options.JobsPerUserPerDay, options.MaxAttempts, ct);
+        Guid? jobId;
+        try
+        {
+            jobId = await jobs.TryCreateQueuedJobAsync(
+                userId, request, date, options.JobsPerUserPerDay, options.MaxAttempts, ct);
+        }
+        catch (AiCatalogChangedException)
+        {
+            return new AiSubmitResult.ValidationFailed(new Dictionary<string, string[]>
+            { ["topicId"] = ["Danh mục đã thay đổi. Hãy chọn lại môn, chương và khối."] });
+        }
         if (jobId is null)
         {
             return new AiSubmitResult.QuotaExceeded(AiQuotaReason.UserJobs, retryAfter);

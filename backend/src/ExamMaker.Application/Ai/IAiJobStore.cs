@@ -8,6 +8,7 @@ public interface IAiJobStore
     /// ai_generation_jobs row with status Queued.
     /// Returns the new job id, or null when the daily job limit is already reached.
     /// </summary>
+    /// <exception cref="AiCatalogChangedException">The catalog no longer matches the validated request; no quota is reserved.</exception>
     Task<Guid?> TryCreateQueuedJobAsync(
         Guid userId,
         AiGenerateRequest request,

@@ -120,6 +120,14 @@ A4 review hardening: shared lazy Cognito client, bounded async/operation/lock
 waits, permission-change audit details and sanitized server diagnostics.
 Bootstrap capability is registered only by the private CLI.
 
+## Catalog administration (A5)
+
+See `docs/a5-catalog.md` for catalog endpoints, administrator permissions,
+validation, restricted deletion and atomic audits. A5 reuses the existing
+catalog schema and seed; no additional migration or AWS permissions are needed.
+Run `dotnet test ExamMaker.slnx -c Release -m:1 --filter FullyQualifiedName~Catalog`
+with `A2_TEST_PG_ADMIN` configured to include the real PostgreSQL catalog tests.
+
 ## AI generation API (B5)
 
 `POST /api/v1/ai/generate`, `GET /api/v1/ai/jobs`, `GET /api/v1/ai/jobs/{id}` and

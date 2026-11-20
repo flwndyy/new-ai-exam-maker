@@ -24,6 +24,12 @@ public sealed class EfAiJobStore(ExamMakerDbContext db) : IAiJobStore
 
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
+        // Shared with concurrent submissions, exclusive against A5 mutations until the job is committed.
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683402)", ct);
+        if (!await db.Topics.AsNoTracking().AnyAsync(t => t.Id == request.TopicId
+            && t.SubjectId == request.SubjectId && t.Grade == request.Grade, ct))
+            throw new AiCatalogChangedException();
+
         // Atomic reservation: a concurrent request waits on the row lock, then re-checks the WHERE
         // against the updated row, so the counter can never pass the limit. Zero rows affected
         // means the limit was already reached.

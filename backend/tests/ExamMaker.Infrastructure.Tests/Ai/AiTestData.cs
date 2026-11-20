@@ -32,8 +32,8 @@ internal static class AiTestData
         new DateOnly(2100, 1, 1).AddDays(Random.Shared.Next(0, 36_000));
 
     public static AiGenerateRequest Request() => new(
-        SubjectId: Guid.NewGuid(),
-        TopicId: Guid.NewGuid(),
+        SubjectId: Guid.Parse("20000000-0000-0000-0000-000000000001"),
+        TopicId: Guid.Parse("30000000-0000-0000-0000-000000000011"),
         Grade: 11,
         Type: "MultipleChoice",
         Difficulty: "Application",

@@ -89,6 +89,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
   - Sửa review PR #64: log loại lỗi/mã AWS hoặc SQL/stack không chứa raw message; deadline async 5 giây, toàn thao tác 20 giây, cleanup 5 giây, lock DB 2 giây; audit role/tổ trước-sau; AWS client singleton lazy, Create còn 2 lệnh AWS; bootstrap chỉ đăng ký trong CLI. Các mục tối ưu reconcile/phân tầng/EmailMismatch ghi ở tài liệu để theo dõi riêng.
 
 - [ ] A5. Danh mục: `GET /departments|subjects|topics` + CRUD `/admin/*`.
+  - Sửa review sau khi tích hợp B5 (20/11/2026): job Queued/Running bảo vệ danh mục bằng shared/exclusive transaction lock; audit xóa có metadata; tên NFC/không control character; DTO query riêng và test pg_locks. API 120/120 và Infrastructure 102/102 pass, gồm 66 PostgreSQL, không skip. Project Application.Tests chưa chạy local do package TimeProvider.Testing chưa restore được; cần CI xác nhận toàn bộ test và formatter. Chi tiết trong docs/a5-catalog.md.
+  - Triển khai local 20/11/2026: đủ GET danh mục và POST/PUT/DELETE admin; phân trang/lọc, validate input, unique/FK RESTRICT, kiểm lại quyền admin sau khóa chung với A4 và audit cùng transaction. Comment kỹ thuật tiếng Anh, giải thích hàm tiếng Việt trong `docs/a5-catalog.md`.
+  - Kiểm thử Release: 162/162 pass, không skip (96 API, 66 Infrastructure; gồm 40 test PostgreSQL). A5 bổ sung 27 test, trong đó 10 test PostgreSQL. Whitespace và `git diff --check` đạt; formatter toàn solution chưa chạy được trong môi trường agent do quyền named pipe, cần xác nhận bằng terminal/CI. Chờ PR, CI và merge vào dev trước khi tick hoàn tất.
 
 **Chặng 2 (25–29/11) — Quy trình**
 - [ ] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
