@@ -1692,7 +1692,7 @@ components:
             additionalProperties: false
             properties:
               label: { type: string, enum: [A, B, C, D] }
-              text: { type: string, minLength: 1 }
+              text: { type: string, minLength: 1, maxLength: 10000 }
         correctLabel: { type: string, enum: [A, B, C, D] }
     TrueFalsePayload:
       type: object
@@ -1710,11 +1710,11 @@ components:
             additionalProperties: false
             properties:
               label: { type: string, enum: [a, b, c, d] }
-              text: { type: string, minLength: 1 }
+              text: { type: string, minLength: 1, maxLength: 10000 }
               isTrue: { type: boolean }
     ShortAnswerPayload:
       type: object
-      description: ≥ 1 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`.
+      description: 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi số hữu hạn, chấp nhận dấu phẩy/chấm thập phân, không dùng phân cách hàng nghìn.
       required: [answerType, acceptedAnswers]
       additionalProperties: false
       properties:
@@ -1722,8 +1722,9 @@ components:
         acceptedAnswers:
           type: array
           minItems: 1
-          items: { type: string, minLength: 1 }
-        unit: { type: [string, 'null'] }
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 10000 }
+        unit: { type: [string, 'null'], maxLength: 10000 }
         tolerance: { type: [number, 'null'], minimum: 0 }
     EssayPayload:
       type: object
@@ -1731,16 +1732,17 @@ components:
       required: [modelAnswer, rubric]
       additionalProperties: false
       properties:
-        modelAnswer: { type: string }
+        modelAnswer: { type: string, maxLength: 10000 }
         rubric:
           type: array
           minItems: 1
+          maxItems: 20
           items:
             type: object
             required: [criterion, points]
             additionalProperties: false
             properties:
-              criterion: { type: string, minLength: 1 }
+              criterion: { type: string, minLength: 1, maxLength: 10000 }
               points: { type: number, exclusiveMinimum: 0 }
     QuestionPayload:
       description: |

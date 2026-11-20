@@ -71,7 +71,7 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 
 ## Transaction và đồng thời
 
-Mỗi ghi giữ advisory lock quản trị `48683401`, sau đó đọc actor live, giữ shared catalog lock `48683402` rồi khóa hàng câu hỏi. Thứ tự này phối hợp với A4/A5; A4 đồng bộ Cognito có thể khiến A6 trả Conflict sau 2 giây chờ khóa. Mức khóa chung phù hợp demo, chưa tối ưu thông lượng lớn. Role/tổ bị thay đổi trong lúc chờ khóa sẽ được kiểm lại sau khi có khóa.
+Mỗi ghi giữ shared advisory lock quản trị `48683401`, sau đó đọc actor live, giữ shared catalog lock `48683402` rồi khóa hàng câu hỏi. Thứ tự này phối hợp với A4/A5; A4 đồng bộ Cognito có thể khiến A6 trả Conflict sau 2 giây chờ khóa. Mức khóa chung phù hợp demo, chưa tối ưu thông lượng lớn. Role/tổ bị thay đổi trong lúc chờ khóa sẽ được kiểm lại sau khi có khóa.
 
 Duyệt đồng thời: người thắng commit quyết định; người còn lại đọc trạng thái mới rồi nhận InvalidStateTransition. SQLSTATE lock/deadlock/FK/unique được chuyển thành lỗi an toàn. Audit lỗi làm rollback cả trạng thái, nội dung hoặc lệnh DELETE đã chạy. Log server chỉ ghi loại exception, SQLSTATE và stack, bỏ raw message.
 
@@ -96,12 +96,28 @@ dotnet format backend/ExamMaker.slnx --verify-no-changes --no-restore
 
 Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc/duyệt/archive, payload, HTTP/JWT/ProblemDetails, review queue, revision, AI review flags, xóa có tham chiếu, snapshot không đổi, hai quyết định đồng thời, thu hồi quyền khi chờ pg_locks và audit rollback.
 
-## Kết quả local 20/11/2026
+## Sửa review A6
+
+- ShortAnswer number chấp nhận `12,0` và `12.0`, giữ nguyên chuỗi acceptedAnswers. Chỉ dùng dấu phẩy/chấm làm dấu thập phân, không phân cách hàng nghìn; vẫn từ chối NaN/Infinity và chuỗi số sai.
+- Payload text (options/statements/acceptedAnswers/unit/modelAnswer/criterion) tối đa 10000 ký tự; acceptedAnswers/rubric tối đa 20 phần tử. Các giới hạn được cập nhật trong OpenAPI và sinh lại client schema.
+- Ghi các câu khác nhau dùng shared management lock, không phải xếp hàng sau nhau. Ghi cùng câu vẫn tuần tự qua FOR UPDATE. Shared lock vẫn chờ các thao tác A4/A5 giữ khóa độc quyền; quá 2 giây có thể nhận Conflict.
+- Đổi subjectId/topicId/grade bị chặn với 409 QuestionReferenced nếu câu nằm trong đề Draft/Rejected. Đọc trạng thái phiên bản dưới FOR SHARE để không race với withdraw/submit. Có thể đổi phân loại câu chỉ có snapshot đã đóng băng; snapshot không bị sửa. Deadlock do thứ tự khóa với submit được rollback và trả Conflict.
+- Khi thêm item ở A7, phải giữ FOR SHARE trên câu nguồn trong cùng transaction trước kiểm môn/khối và chèn liên kết; không kiểm catalog rồi thả khóa trước khi chèn.
+- Các endpoint ghi kiểm CanRead ngay sau khóa câu để che ID ngoài phạm vi bằng 404. PUT kiểm trạng thái trước validation nghiệp vụ/catalog; lỗi bind HTTP vẫn được MVC trả 400 trước action.
+- Audit chỉ ghi ReviewNote cho Approve/Reject; archive/mark-reviewed không mượn lại note cũ. So sánh nội dung chuẩn hóa trim stem cả hai bên, explanation trim và blank→null. PUT không đổi ngữ nghĩa giữ nguyên Approved/revision/AI flags; không sửa whitespace của bản Approved khi chỉ chuẩn hóa.
+
+## Kết quả sửa review 20/11/2026
+
+- Toàn solution backend Release: **426/426 test pass, 0 failed, 0 skipped** — 269 API/quy tắc, 38 Application và 119 Infrastructure, gồm 83 test PostgreSQL thật.
+- Thêm 16 test hồi quy (10 API/quy tắc và 6 PostgreSQL) cho số thập phân dấu phẩy, shared lock, phân loại nguồn trong đề editable, audit note, che ID ngoài phạm vi, no-op chuẩn hóa, giới hạn text/array và ưu tiên lỗi trạng thái. Các test snapshot/race/thu hồi quyền cũ tiếp tục pass.
+- Client schema đã được sinh lại từ OpenAPI; kiểm đồng bộ schema đạt. Formatter đầy đủ và CI cần xác nhận trên bản commit mới.
+
+## Kết quả local ban đầu 20/11/2026
 
 - **259/259 API/quy tắc** và **113/113 Infrastructure** pass, không skip; gồm **77 PostgreSQL** thật.
 - A6 thêm **150 test**: 125 ca quy tắc/payload, 14 HTTP và 11 PostgreSQL. Các test quy tắc thuần nằm trong project API.Tests cùng nhóm policy A3 hiện có, không cần AWS hoặc DB.
 - Build API Release đạt, không warning/error. Whitespace và `git diff --check` đạt.
-- Chưa chạy lại được project Application.Tests hiện có của B5 vì thiếu `Microsoft.Extensions.TimeProvider.Testing` và NuGet bị chặn trong môi trường local này. Không coi hai project đã pass là toàn bộ solution; CI phải chạy đủ ba project test. Formatter toàn solution cần terminal/CI vì build host named pipe bị giới hạn trong môi trường agent.
+- Lượt ban đầu chưa chạy được Application.Tests vì thiếu package TimeProvider.Testing; ở lượt sửa review phía trên, package đã có và toàn bộ ba project test đều chạy pass. Formatter toàn solution vẫn cần terminal/CI vì build host named pipe bị giới hạn trong môi trường agent.
 
 ## Git và kiểm tra trước merge
 

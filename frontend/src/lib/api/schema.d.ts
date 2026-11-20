@@ -1183,7 +1183,7 @@ export interface components {
                 isTrue: boolean;
             }[];
         };
-        /** @description ≥ 1 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. */
+        /** @description 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi số hữu hạn, chấp nhận dấu phẩy/chấm thập phân, không dùng phân cách hàng nghìn. */
         ShortAnswerPayload: {
             /** @enum {string} */
             answerType: "number" | "text";

@@ -95,8 +95,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 **Chặng 2 (25–29/11) — Quy trình**
 - [ ] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
+  - Sửa review PR #69 (20/11/2026): xử lý đủ 8 điểm, thêm 16 test hồi quy; toàn backend 426/426 pass, không skip (269 API/quy tắc, 38 Application, 119 Infrastructure; 83 PostgreSQL). Đã sinh lại schema frontend và kiểm đồng bộ; chờ CI/review trên commit sửa trước khi merge.
   - Triển khai local 20/11/2026: ngân hàng câu hỏi CRUD + 6 action workflow + review queue; state machine/validation payload ở Application, quyền DB/row lock/audit transaction ở Infrastructure. Không thêm migration. Xem `docs/a6-question-workflow.md`.
-  - Kiểm thử local: 259 API/quy tắc + 113 Infrastructure pass, không skip (77 PostgreSQL); A6 thêm 150 test, gồm 11 PostgreSQL. Application.Tests của B5 chưa chạy lại do thiếu package TimeProvider.Testing/NuGet bị chặn; cần CI chạy toàn solution và formatter. Chưa tạo được nhánh/commit/push trong môi trường agent; cần tách nhánh A6 trước commit, chờ review/CI/merge mới tick hoàn tất.
+  - Lượt triển khai ban đầu có 372 test ở hai project pass; hạn chế restore Application.Tests đã được giải quyết ở lượt review phía trên. PR #69 đang mở; giữ task chưa tick cho tới khi CI xanh và merge vào dev.
 - [ ] A7. `Exam`, `ExamVersion`, **snapshot khi Submit** + `content_hash`, kiểm tra mọi câu `Approved`, tổng điểm; state machine phiên bản (4.3): `submit/withdraw/approve/reject/archive/publish/unpublish`, partial unique 1 bản `Published`; `POST /exams/{id}/versions`; `GET /review/exam-versions`.
 - [ ] A8. Audit log mọi chuyển trạng thái + `GET /audit-logs` (Head: trong tổ).
 - [ ] A9. **Test**: unit cho mọi chuyển trạng thái hợp lệ/không hợp lệ và ma trận quyền (mục 3.2); integration với PostgreSQL thật.

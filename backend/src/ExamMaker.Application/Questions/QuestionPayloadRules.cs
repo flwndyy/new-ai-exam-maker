@@ -5,6 +5,9 @@ namespace ExamMaker.Application.Questions;
 
 public static class QuestionPayloadRules
 {
+    public const int MaxTextLength = 10000;
+    public const int MaxAnswers = 20;
+    public const int MaxRubricItems = 20;
     /// <summary>Validate the exact type-specific OpenAPI payload, including labels, answers and rubric points.</summary>
     public static void Validate(string type, JsonElement payload)
     {
@@ -24,11 +27,12 @@ public static class QuestionPayloadRules
                 var answerType = Text(payload.GetProperty("answerType"));
                 if (answerType is not ("number" or "text")) Fail();
                 var answers = payload.GetProperty("acceptedAnswers");
-                Array(answers, 1);
+                Array(answers, 1, MaxAnswers);
                 foreach (var answer in answers.EnumerateArray())
                 {
                     var value = Text(answer);
-                    if (answerType == "number" && (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+                    // Accept Vietnamese decimal commas without treating punctuation as a thousands separator or rewriting stored answers.
+                    if (answerType == "number" && (!double.TryParse(value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
                         || !double.IsFinite(number))) Fail();
                 }
                 if (payload.TryGetProperty("unit", out var unit) && unit.ValueKind != JsonValueKind.Null) Text(unit, true);
@@ -41,7 +45,7 @@ public static class QuestionPayloadRules
                 Object(payload, ["modelAnswer", "rubric"]);
                 Text(payload.GetProperty("modelAnswer"), true);
                 var rubric = payload.GetProperty("rubric");
-                Array(rubric, 1);
+                Array(rubric, 1, MaxRubricItems);
                 foreach (var item in rubric.EnumerateArray())
                 {
                     Object(item, ["criterion", "points"]);
@@ -66,7 +70,7 @@ public static class QuestionPayloadRules
     /// <summary>Require four distinct labelled options/statements and explicit boolean answers for true/false items.</summary>
     private static void Labels(JsonElement value, string[] labels, bool truth)
     {
-        Array(value, 4);
+        Array(value, 4, 4);
         if (value.GetArrayLength() != 4) Fail();
         var seen = new HashSet<string>();
         foreach (var item in value.EnumerateArray())
@@ -84,14 +88,14 @@ public static class QuestionPayloadRules
     {
         if (value.ValueKind != JsonValueKind.String) Fail();
         var text = value.GetString()!;
-        if ((!allowEmpty && string.IsNullOrWhiteSpace(text)) || text.Contains('\0')) Fail();
+        if ((!allowEmpty && string.IsNullOrWhiteSpace(text)) || text.Length > MaxTextLength || text.Contains('\0')) Fail();
         return text;
     }
 
-    /// <summary>Reject scalar values or arrays below the schema's required minimum size.</summary>
-    private static void Array(JsonElement value, int minimum)
+    /// <summary>Reject scalar values and arrays outside the schema's bounded item count.</summary>
+    private static void Array(JsonElement value, int minimum, int maximum)
     {
-        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() < minimum) Fail();
+        if (value.ValueKind != JsonValueKind.Array || (value.GetArrayLength() < minimum || value.GetArrayLength() > maximum)) Fail();
     }
 
     private static void Fail() => throw QuestionRules.Invalid("payload");

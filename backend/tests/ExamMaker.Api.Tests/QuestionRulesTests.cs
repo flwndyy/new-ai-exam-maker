@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Text.Json;
 using ExamMaker.Application.Authentication;
 using ExamMaker.Application.Questions;
@@ -195,4 +196,78 @@ public sealed class QuestionRulesTests
         var error = Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type, JsonSerializer.Deserialize<JsonElement>(json)));
         Assert.Equal(400, error.StatusCode); Assert.Equal("payload", error.Field);
     }
+    [Fact]
+    // Vietnamese decimal notation must match the context example without rewriting accepted answer strings.
+    public void Numeric_short_answers_accept_both_decimal_separators()
+    {
+        var payload = JsonSerializer.Deserialize<JsonElement>("""{"answerType":"number","acceptedAnswers":["12","12,0","12.0"],"tolerance":0}""");
+        QuestionPayloadRules.Validate("ShortAnswer", payload);
+        Assert.Equal("12,0", payload.GetProperty("acceptedAnswers")[1].GetString());
+        foreach (var value in new[] { "NaN", "Infinity", "12,0.1", "12,,0" })
+            Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("ShortAnswer",
+                JsonSerializer.SerializeToElement(new { answerType = "number", acceptedAnswers = new[] { value } })));
+    }
+
+    [Fact]
+    // Formatting-only edits of approved worker output must preserve its revision and human/AI verification flags.
+    public void Noop_edit_compares_normalized_stem_and_optional_explanation()
+    {
+        var q = Question("Approved");
+        q.Source = "AI"; q.AiReviewedByAuthor = true; q.AiVerification = "Agree";
+        q.Stem += "  "; q.Explanation = " \t "; q.ReviewNote = "OK";
+        var input = new QuestionInput(q.SubjectId, q.TopicId, q.Grade, q.Type, q.Difficulty,
+            q.Stem.Trim(), JsonSerializer.Deserialize<JsonElement>(q.Payload), "");
+        Assert.False(QuestionRules.Edit(Actor("teacher", true), q, input, DateTime.UtcNow));
+        Assert.Equal("Approved", q.Status); Assert.Equal(1, q.Revision);
+        Assert.True(q.AiReviewedByAuthor); Assert.Equal("Agree", q.AiVerification); Assert.Equal("OK", q.ReviewNote);
+        Assert.True(QuestionRules.Edit(Actor("teacher", true), q, input with { Explanation = " Changed " }, DateTime.UtcNow));
+        Assert.Equal("Changed", q.Explanation); Assert.Equal(q.Stem.Trim(), q.Stem); Assert.Equal(2, q.Revision);
+    }
+
+    [Theory]
+    [InlineData("MultipleChoice", "options/0/text")]
+    [InlineData("TrueFalse", "statements/0/text")]
+    [InlineData("ShortAnswer", "acceptedAnswers/0")]
+    [InlineData("ShortAnswer", "unit")]
+    [InlineData("Essay", "modelAnswer")]
+    [InlineData("Essay", "rubric/0/criterion")]
+    // Check the exact text boundary independently for each schema field, not just one shared helper path.
+    public void Payload_text_fields_have_bounded_lengths(string type, string path)
+    {
+        var json = type switch
+        {
+            "MultipleChoice" => ValidPayload,
+            "TrueFalse" => """{"statements":[{"label":"a","text":"A","isTrue":true},{"label":"b","text":"B","isTrue":false},{"label":"c","text":"C","isTrue":true},{"label":"d","text":"D","isTrue":false}]}""",
+            "ShortAnswer" => """{"answerType":"text","acceptedAnswers":["Answer"],"unit":"unit"}""",
+            _ => """{"modelAnswer":"Answer","rubric":[{"criterion":"Reason","points":1}]}"""
+        };
+        foreach (var length in new[] { 10000, 10001 })
+        {
+            var root = JsonNode.Parse(json)!;
+            var parts = path.Split('/');
+            var parent = root;
+            foreach (var part in parts[..^1]) parent = parent is JsonArray ? parent[int.Parse(part)]! : parent[part]!;
+            if (parent is JsonArray) parent[int.Parse(parts[^1])] = new string('x', length);
+            else parent[parts[^1]] = new string('x', length);
+            var payload = JsonSerializer.SerializeToElement(root);
+            if (length == 10000) QuestionPayloadRules.Validate(type, payload);
+            else Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type, payload)).Field);
+        }
+    }
+
+    [Theory]
+    [InlineData("ShortAnswer")]
+    [InlineData("Essay")]
+    public void Payload_arrays_limit_answer_and_rubric_counts(string type)
+    {
+        foreach (var count in new[] { 20, 21 })
+        {
+            var payload = type == "ShortAnswer"
+                ? JsonSerializer.SerializeToElement(new { answerType = "text", acceptedAnswers = Enumerable.Repeat("Answer", count) })
+                : JsonSerializer.SerializeToElement(new { modelAnswer = "Answer", rubric = Enumerable.Range(0, count).Select(_ => new { criterion = "Reason", points = 1 }) });
+            if (count == 20) QuestionPayloadRules.Validate(type, payload);
+            else Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type, payload)).Field);
+        }
+    }
+
 }

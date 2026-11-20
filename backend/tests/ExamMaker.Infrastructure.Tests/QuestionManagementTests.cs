@@ -1,3 +1,4 @@
+using ExamMaker.Domain.Catalog;
 using System.Text.Json;
 using ExamMaker.Application.Questions;
 using ExamMaker.Domain.Ai;
@@ -94,8 +95,8 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         var question = await CreateAsync(head);
         await ActAsync(head, question.Id, QuestionAction.Submit);
         Assert.Equal("SelfReview", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(head, question.Id, QuestionAction.Approve))).Code);
-        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(outsider, question.Id, QuestionAction.Approve))).Code);
-        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(owner, question.Id, QuestionAction.Withdraw))).Code);
+        Assert.Equal("NotFound", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(outsider, question.Id, QuestionAction.Approve))).Code);
+        Assert.Equal("NotFound", (await Assert.ThrowsAsync<QuestionException>(() => ActAsync(owner, question.Id, QuestionAction.Withdraw))).Code);
         await using (var db = fixture.CreateContext())
         {
             Assert.Equal(403, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(admin, Input(), default))).StatusCode);
@@ -232,6 +233,10 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.Equal(2, changed.Revision);
         var snapshot = await edit.ExamVersionQuestions.SingleAsync(x => x.ExamVersionId == versionId);
         Assert.Equal(q.Stem, snapshot.StemSnapshot); Assert.Equal(1, snapshot.SourceRevision);
+        var reclassified = await Service(edit).UpdateAsync(owner, q.Id,
+            Input("New source") with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000011"), Grade = 11 }, default);
+        Assert.Equal(11, reclassified.Grade);
+        Assert.Equal(q.Stem, (await edit.ExamVersionQuestions.AsNoTracking().SingleAsync(x => x.ExamVersionId == versionId)).StemSnapshot);
     }
 
     [PostgresFact]
@@ -308,6 +313,140 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.Equal("Draft", (await attempt.Questions.AsNoTracking().SingleAsync(x => x.Id == q.Id)).Status);
     }
 
+
+    [PostgresFact]
+    // Shared management locks allow independent question writes while keeping user-admin mutations excluded.
+    public async Task Independent_question_writes_do_not_wait_for_each_others_shared_management_lock()
+    {
+        await SeedAsync();
+        await using var holder = fixture.CreateContext();
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683401)");
+        var question = await CreateAsync();
+        Assert.Equal("Draft", question.Status);
+        Assert.NotEqual(Guid.Empty, question.Id);
+    }
+
+    [PostgresFact]
+    // Every mutation must hide private IDs exactly like GET, before role and state checks disclose existence.
+    public async Task Private_question_identifiers_are_hidden_from_all_mutation_endpoints()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using var db = fixture.CreateContext();
+        var service = Service(db);
+        foreach (var actor in new[] { head, outsider })
+        {
+            Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => service.GetAsync(actor, q.Id, default))).StatusCode);
+            Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => service.UpdateAsync(actor, q.Id, Input(), default))).StatusCode);
+            Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => service.DeleteAsync(actor, q.Id, default))).StatusCode);
+            foreach (var action in Enum.GetValues<QuestionAction>())
+                Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => service.TransitionAsync(actor, q.Id, action, "Reason", default))).StatusCode);
+        }
+    }
+
+    [PostgresFact]
+    // A workflow lock must be reported before a mismatched catalog leads the client toward editing the wrong field.
+    public async Task Locked_question_edits_return_state_conflicts_before_catalog_errors()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await ActAsync(owner, q.Id, QuestionAction.Submit);
+        var wrong = Input() with { SubjectId = Guid.Parse("20000000-0000-0000-0000-000000000002") };
+        await using (var db = fixture.CreateContext())
+            Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() => Service(db).UpdateAsync(owner, q.Id, wrong, default))).Code);
+        await ActAsync(head, q.Id, QuestionAction.Approve); await ActAsync(owner, q.Id, QuestionAction.Archive);
+        await using var archived = fixture.CreateContext();
+        Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() => Service(archived).UpdateAsync(owner, q.Id, wrong, default))).Code);
+    }
+
+    [PostgresFact]
+    // Classification changes must not silently invalidate editable exam membership, regardless of the source question state.
+    public async Task Editable_exam_references_block_subject_topic_and_grade_changes()
+    {
+        await SeedAsync();
+        await using var db = fixture.CreateContext();
+        var secondSubject = new Subject { Id = Guid.NewGuid(), DepartmentId = Department, Name = "Synthetic alternative subject" };
+        var secondTopic = new Topic { Id = Guid.NewGuid(), Subject = secondSubject, Grade = 10, Name = "Synthetic chapter", SortOrder = 1 };
+        db.Topics.Add(secondTopic); await db.SaveChangesAsync();
+        foreach (var state in new[] { "Draft", "Rejected", "Approved" })
+        {
+            var q = await CreateAsync();
+            if (state != "Draft")
+            {
+                await ActAsync(owner, q.Id, QuestionAction.Submit);
+                await ActAsync(head, q.Id, state == "Rejected" ? QuestionAction.Reject : QuestionAction.Approve, "Reason");
+            }
+            foreach (var versionState in new[] { "Draft", "Rejected" })
+            {
+                var exam = new Exam { Id = Guid.NewGuid(), Title = "Synthetic", SubjectId = Subject, DepartmentId = Department, Grade = 10, CreatedBy = owner };
+                var version = new ExamVersion
+                {
+                    Id = Guid.NewGuid(),
+                    Exam = exam,
+                    VersionNo = 1,
+                    DurationMinutes = 45,
+                    TotalPoints = 10,
+                    Status = versionState,
+                    ReviewNote = versionState == "Rejected" ? "Reason" : null,
+                    ReviewedBy = versionState == "Rejected" ? head : null,
+                    ReviewedAt = versionState == "Rejected" ? DateTime.UtcNow : null
+                };
+                db.ExamVersions.Add(version); await db.SaveChangesAsync();
+                db.ExamVersionQuestions.Add(new ExamVersionQuestion { ExamVersionId = version.Id, SourceQuestionId = q.Id, SourceRevision = 1, SortOrder = 1, Points = 10 });
+                await db.SaveChangesAsync();
+                foreach (var input in new[]
+                {
+                    Input() with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000002") },
+                    Input() with { TopicId = Guid.Parse("30000000-0000-0000-0000-000000000011"), Grade = 11 },
+                    Input() with { SubjectId = secondSubject.Id, TopicId = secondTopic.Id }
+                })
+                {
+                    await using var attempt = fixture.CreateContext();
+                    Assert.Equal("QuestionReferenced", (await Assert.ThrowsAsync<QuestionException>(() => Service(attempt).UpdateAsync(owner, q.Id, input, default))).Code);
+                }
+                await db.ExamVersionQuestions.Where(x => x.ExamVersionId == version.Id).ExecuteDeleteAsync();
+            }
+        }
+    }
+
+    [PostgresFact]
+    // Stored AI output using the documented comma-decimal example must survive revalidation on submit.
+    public async Task Ai_numeric_short_answers_with_decimal_commas_can_be_submitted()
+    {
+        await SeedAsync();
+        await using var db = fixture.CreateContext();
+        var input = Input() with { Type = "ShortAnswer", Payload = JsonSerializer.Deserialize<JsonElement>("""{"answerType":"number","acceptedAnswers":["12","12,0"]}""") };
+        var q = await Service(db).CreateAsync(owner, input, default);
+        var job = new AiGenerationJob { Id = Guid.NewGuid(), RequestedBy = owner };
+        db.AiGenerationJobs.Add(job); await db.SaveChangesAsync();
+        await db.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Source, "AI")
+            .SetProperty(v => v.AiJobId, job.Id).SetProperty(v => v.AiOrdinal, 1).SetProperty(v => v.AiReviewedByAuthor, true));
+        q = await ActAsync(owner, q.Id, QuestionAction.Submit);
+        Assert.Equal("Submitted", q.Status); Assert.Equal("12,0", q.Payload.GetProperty("acceptedAnswers")[1].GetString());
+    }
+
+    [PostgresFact]
+    // Audit notes belong only to the reviewer decision, never to a later archive or author-review action.
+    public async Task Transition_audits_do_not_attribute_old_review_notes_to_other_actions()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using (var db = fixture.CreateContext())
+        {
+            var job = new AiGenerationJob { Id = Guid.NewGuid(), RequestedBy = owner };
+            db.AiGenerationJobs.Add(job); await db.SaveChangesAsync();
+            await db.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Source, "AI")
+                .SetProperty(v => v.AiJobId, job.Id).SetProperty(v => v.AiOrdinal, 1));
+        }
+        await ActAsync(owner, q.Id, QuestionAction.MarkReviewed); await ActAsync(owner, q.Id, QuestionAction.Submit);
+        await ActAsync(head, q.Id, QuestionAction.Reject, "Old rejection");
+        await ActAsync(owner, q.Id, QuestionAction.MarkReviewed); await ActAsync(owner, q.Id, QuestionAction.Submit);
+        await ActAsync(head, q.Id, QuestionAction.Approve, "OK"); await ActAsync(head, q.Id, QuestionAction.Archive);
+        await using var verify = fixture.CreateContext();
+        var audit = await verify.AuditLogs.Where(x => x.EntityId == q.Id).ToListAsync();
+        Assert.Equal("OK", audit.Single(x => x.Action == "ApproveQuestion").Note);
+        Assert.Equal("Old rejection", audit.Single(x => x.Action == "RejectQuestion").Note);
+        Assert.Null(audit.Single(x => x.Action == "ArchiveQuestion").Note);
+        Assert.All(audit.Where(x => x.Action == "MarkReviewedQuestion" || x.Action == "SubmitQuestion"), x => Assert.Null(x.Note));
+    }
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {
         public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(

@@ -30,7 +30,7 @@ public static class QuestionRules
         if (stem.Length is < 1 or > 10000 || stem.Contains('\0')) throw Invalid("stem");
         if (input.Explanation?.Length > 10000 || input.Explanation?.Contains('\0') == true) throw Invalid("explanation");
         QuestionPayloadRules.Validate(input.Type, input.Payload);
-        return input with { Stem = stem };
+        return input with { Stem = stem, Explanation = NormalizeExplanation(input.Explanation) };
     }
 
     /// <summary>Require a live teacher/head owner before editing, deleting or submitting content.</summary>
@@ -43,10 +43,11 @@ public static class QuestionRules
     public static bool Edit(AuthenticatedUser actor, Question question, QuestionInput input, DateTime now)
     {
         RequireOwner(actor, question);
-        if (question.Status is not ("Draft" or "Rejected" or "Approved")) throw InvalidState();
+        RequireEditable(question);
+        input = Validate(input);
         var changed = question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade
-            || question.Type != input.Type || question.Difficulty != input.Difficulty || question.Stem != input.Stem
-            || question.Explanation != input.Explanation
+            || question.Type != input.Type || question.Difficulty != input.Difficulty || question.Stem.Trim() != input.Stem
+            || NormalizeExplanation(question.Explanation) != input.Explanation
             || !JsonNode.DeepEquals(JsonNode.Parse(question.Payload), JsonNode.Parse(input.Payload.GetRawText()));
         if (!changed) return false;
         if (question.Status == "Approved")
@@ -133,6 +134,15 @@ public static class QuestionRules
         }
         question.UpdatedAt = now;
     }
+
+    /// <summary>Reject editing a locked workflow state before catalog or content validation can obscure the required action.</summary>
+    public static void RequireEditable(Question question)
+    {
+        if (question.Status is not ("Draft" or "Rejected" or "Approved")) throw InvalidState();
+    }
+
+    /// <summary>Treat blank explanations as absent and ignore formatting-only whitespace during content comparison.</summary>
+    private static string? NormalizeExplanation(string? explanation) => string.IsNullOrWhiteSpace(explanation) ? null : explanation.Trim();
 
     /// <summary>Clear reviewer metadata when a review round is withdrawn, reopened or resubmitted.</summary>
     private static void ClearReview(Question question)

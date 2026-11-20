@@ -78,12 +78,15 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     /// <summary>Lock the source row, preserve its department and apply pure revision/edit rules in one audited transaction.</summary>
     public async Task<QuestionView> UpdateAsync(Guid actorId, Guid id, QuestionInput input, CancellationToken cancellationToken)
     {
-        input = QuestionRules.Validate(input);
         return (await MutateAsync(actorId, async actor =>
         {
-            var question = await LockQuestionAsync(id, cancellationToken);
+            var question = await LockQuestionAsync(actor, id, cancellationToken);
             QuestionRules.RequireOwner(actor, question);
+            QuestionRules.RequireEditable(question);
+            input = QuestionRules.Validate(input);
             if (await CatalogAsync(input, cancellationToken) != question.DepartmentId) throw QuestionRules.Invalid("subjectId");
+            if (question.SubjectId != input.SubjectId || question.TopicId != input.TopicId || question.Grade != input.Grade)
+                await EnsureClassificationChangeAllowedAsync(id, cancellationToken);
             var before = question.Status;
             var revision = question.Revision;
             if (QuestionRules.Edit(actor, question, input, DateTime.UtcNow))
@@ -96,10 +99,11 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     public async Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken) =>
         (await MutateAsync(actorId, async actor =>
         {
-            var question = await LockQuestionAsync(id, cancellationToken);
+            var question = await LockQuestionAsync(actor, id, cancellationToken);
             var before = question.Status;
             QuestionRules.Transition(actor, question, action, note, DateTime.UtcNow);
-            Audit(actor.Id, question, action + "Question", before, question.ReviewNote);
+            Audit(actor.Id, question, action + "Question", before,
+                action is QuestionAction.Approve or QuestionAction.Reject ? question.ReviewNote : null);
             return question;
         }, false, cancellationToken))!;
 
@@ -108,7 +112,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     {
         await MutateAsync(actorId, async actor =>
         {
-            var question = await LockQuestionAsync(id, cancellationToken);
+            var question = await LockQuestionAsync(actor, id, cancellationToken);
             QuestionRules.RequireOwner(actor, question);
             if (question.Status is not ("Draft" or "Rejected")) throw QuestionRules.InvalidState();
             if (await database.ExamVersionQuestions.AnyAsync(x => x.SourceQuestionId == id, cancellationToken)
@@ -128,7 +132,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await database.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '2s'", cancellationToken);
-            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(48683401)", cancellationToken);
+            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683401)", cancellationToken);
             var actor = await ActorAsync(actorId, cancellationToken);
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683402)", cancellationToken);
             var question = await operation(actor);
@@ -150,12 +154,28 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     }
 
     /// <summary>Hold an update lock until commit and refresh tracked state before making a workflow decision.</summary>
-    private async Task<Question> LockQuestionAsync(Guid id, CancellationToken cancellationToken)
+    private async Task<Question> LockQuestionAsync(AuthenticatedUser actor, Guid id, CancellationToken cancellationToken)
     {
         var question = await database.Questions.FromSqlInterpolated($"SELECT * FROM questions WHERE id = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken) ?? throw Missing();
         await database.Entry(question).ReloadAsync(cancellationToken);
+        if (!QuestionRules.CanRead(actor, question)) throw Missing();
         return question;
+    }
+
+    /// <summary>Keep editable exam membership consistent and serialize classification changes with version status transitions.</summary>
+    private async Task EnsureClassificationChangeAllowedAsync(Guid id, CancellationToken cancellationToken)
+    {
+        // Lock all referencing versions, including frozen ones that could be withdrawn into an editable state.
+        // A competing submit locks the version before its source questions; a deadlock is safely retried as Conflict.
+        var states = await database.Database.SqlQuery<string>($"""
+            SELECT v.status AS "Value" FROM exam_versions v
+            WHERE EXISTS (SELECT 1 FROM exam_version_questions i
+                WHERE i.exam_version_id = v.id AND i.source_question_id = {id})
+            ORDER BY v.id FOR SHARE OF v
+            """).ToListAsync(cancellationToken);
+        if (states.Any(x => x is "Draft" or "Rejected"))
+            throw new QuestionException(409, "QuestionReferenced", "Không thể đổi môn, chương hoặc khối của câu trong đề đang soạn.");
     }
 
     /// <summary>Validate topic/subject/grade together and derive the immutable department from trusted catalog data.</summary>
