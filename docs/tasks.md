@@ -132,7 +132,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 - [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
 - [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
-- [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+- [x] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+  - Hoàn thành 21/11/2026: Dựng Standard Queue `exammaker-dev-ai-jobs` (`VisibilityTimeout=300s`, Long Polling `20s`, retention 4 ngày, `RedrivePolicy` `maxReceiveCount=3`) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày), bật SSE-SQS ($0). Lưu 4 tham số lên Parameter Store (`/exammaker/dev/Sqs/AiJobsQueueUrl` khớp `Sqs:AiJobsQueueUrl` của B5, `AiJobsQueueArn`, `AiJobsDlqUrl`, `AiJobsDlqArn`).
+  - Kiểm thử: 13/13 tiêu chí (12 check + smoke test gửi/nhận/xóa message) pass trong `infra/sqs/verify-sqs.sh`. Xem `docs/runbooks/sqs.md`.
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).

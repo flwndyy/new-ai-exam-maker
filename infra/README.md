@@ -12,6 +12,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
 - `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
+- `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).
 
 ## Quy tắc placeholder
 
