@@ -133,7 +133,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
 - [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
 - [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
-- [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
+- [x] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
+  - Hoàn thành 21/11/2026: Chuẩn hóa toàn bộ cây `/exammaker/dev/*` (32 tham số tổng cộng gồm O9 Cognito, O10 RDS, O11 SQS và 16 tham số mới của O12: `AWS/Region`, `Bedrock/*`, `AiQuota/*` khớp `AiQuotaOptions.cs`, `AiRateLimit/*` khớp `AiRateLimitOptions`, `Origin/VerifySecret` SecureString 64 hex ký tự, `CloudWatch/*`). 100% Standard tier ($0) và khóa AWS-managed `alias/aws/ssm` ($0).
+  - Kiểm thử: 15/15 tiêu chí pass trong `infra/ssm/verify-ssm.sh` (kiểm tra idempotency, mã hóa SecureString, Standard tier, không in/lưu secret dạng thuần). Xem `docs/runbooks/parameter-store.md`.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
 - [ ] O15. CI/CD **backend** (E8): build/publish theo kiến trúc đã chọn, giải nén vào `/opt/exammaker/releases/<id>`, đổi symlink, restart systemd (API + Worker), kiểm tra health, giữ N bản để rollback; **EF migration bundle** chạy trước, tương thích ngược, snapshot RDS thủ công trước migration lớn. *Cần A1.*

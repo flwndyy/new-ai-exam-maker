@@ -173,6 +173,7 @@ public IP idle hoặc CloudFront distribution thử nghiệm.
 
 ## 5. Tài liệu AWS tham khảo
 
+- Runbook AWS Systems Manager Parameter Store (O12): [`runbooks/parameter-store.md`](runbooks/parameter-store.md)
 - VPC public/private subnet và Internet Gateway: <https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html>
 - AWS-managed prefix lists: <https://docs.aws.amazon.com/vpc/latest/userguide/working-with-aws-managed-prefix-lists.html>
 - Security Group rules và quota: <https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html>

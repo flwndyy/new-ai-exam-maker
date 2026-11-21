@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Verification script for AWS Systems Manager Parameter Store (AI Exam Maker - Task O12).
+# Audits the complete parameter tree under ${SSM_PREFIX}/* across O9 (Cognito), O10 (RDS),
+# O11 (SQS), and O12 (Bedrock, AI Quota, AI Rate Limit, Origin Secret, CloudWatch) for:
+#   - Presence and .NET IConfiguration key alignment
+#   - Proper SecureString encryption using AWS-managed key alias/aws/ssm ($0)
+#   - Standard tier enforcement across all parameters ($0)
+#   - Valid numeric/boolean/TimeSpan values and budget guardrails
+#
+# Never prints secret values (ConnectionStrings/ExamMaker, Origin/VerifySecret, Rds/MasterPassword).
+#
+# Dependencies: aws (CLI v2), jq (both pre-installed in AWS CloudShell).
+#
+# Usage:
+#   ./infra/ssm/verify-ssm.sh
+
+set -euo pipefail
+
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
+AWS_REGION="${AWS_REGION:-ap-southeast-1}"
+ENV_NAME="${ENV_NAME:-dev}"
+SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
+
+command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
+
+PASSED=0
+FAILURES=0
+
+pass() { echo "[PASS] $1"; PASSED=$((PASSED + 1)); }
+fail() { echo "[FAIL] $1" >&2; FAILURES=$((FAILURES + 1)); }
+
+echo "==> Auditing SSM Parameter Store under '${SSM_PREFIX}/' (${AWS_REGION}, env=${ENV_NAME})..."
+
+# Fetch all parameter metadata (Tier, Type, KeyId) via describe-parameters
+DESCRIBE_JSON="$(aws ssm describe-parameters \
+  --region "$AWS_REGION" \
+  --parameter-filters "Key=Name,Option=BeginsWith,Values=${SSM_PREFIX}/" \
+  --output json)"
+
+# Fetch all parameter values (including decrypted SecureString for length/presence validation only; never printed)
+VALUES_JSON="$(aws ssm get-parameters-by-path \
+  --region "$AWS_REGION" \
+  --path "${SSM_PREFIX}" \
+  --recursive \
+  --with-decryption \
+  --output json)"
+
+param_exists() {
+  local suffix="$1"
+  local full="${SSM_PREFIX}/${suffix}"
+  local found=""
+  found="$(jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Name' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+  [ -n "$found" ]
+}
+
+param_type() {
+  local suffix="$1"
+  local full="${SSM_PREFIX}/${suffix}"
+  jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Type // empty' <<<"$DESCRIBE_JSON" | tr -d '\r\n'
+}
+
+param_val() {
+  local suffix="$1"
+  local full="${SSM_PREFIX}/${suffix}"
+  jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Value // empty' <<<"$VALUES_JSON" | tr -d '\r\n'
+}
+
+check_group_present() {
+  local label="$1"
+  shift
+  local missing=()
+  local suffix=""
+  for suffix in "$@"; do
+    if ! param_exists "$suffix" || [ -z "$(param_val "$suffix")" ]; then
+      missing+=("$suffix")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    pass "${label}: all $# required parameters exist and are non-empty"
+  else
+    fail "${label}: missing or empty parameter(s): ${missing[*]}"
+  fi
+}
+
+is_pos_int() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+# 1. O9 Cognito parameters
+check_group_present "O9 Cognito" \
+  "Cognito/Region" \
+  "Cognito/UserPoolId" \
+  "Cognito/ClientId" \
+  "Cognito/HostedUiDomain" \
+  "Cognito/Authority"
+
+# 2. O10 RDS ConnectionString (must exist and be SecureString)
+if param_exists "ConnectionStrings/ExamMaker" && [ "$(param_type "ConnectionStrings/ExamMaker")" = "SecureString" ] && [ -n "$(param_val "ConnectionStrings/ExamMaker")" ]; then
+  pass "O10 RDS: ConnectionStrings/ExamMaker exists as SecureString"
+else
+  fail "O10 RDS: ConnectionStrings/ExamMaker missing, empty, or not SecureString (type='$(param_type "ConnectionStrings/ExamMaker")')"
+fi
+
+# 3. O10 RDS metadata parameters
+check_group_present "O10 RDS metadata" \
+  "Rds/InstanceId" \
+  "Rds/Endpoint" \
+  "Rds/Port" \
+  "Rds/Database" \
+  "Rds/Username"
+
+# 4. O11 SQS parameters
+check_group_present "O11 SQS" \
+  "Sqs/AiJobsQueueUrl" \
+  "Sqs/AiJobsQueueArn" \
+  "Sqs/AiJobsDlqUrl" \
+  "Sqs/AiJobsDlqArn"
+
+# 5. O12 AWS Core region
+AWS_REGION_VAL="$(param_val "AWS/Region")"
+if [ "$AWS_REGION_VAL" = "$AWS_REGION" ]; then
+  pass "O12 AWS Core: AWS/Region = '${AWS_REGION_VAL}'"
+else
+  fail "O12 AWS Core: expected AWS/Region='${AWS_REGION}', got '${AWS_REGION_VAL}'"
+fi
+
+# 6. O12 Bedrock parameters
+check_group_present "O12 Bedrock" \
+  "Bedrock/Region" \
+  "Bedrock/ModelId" \
+  "Bedrock/DemoModelId" \
+  "Bedrock/EnableAnswerVerification"
+
+BEDROCK_VERIFY="$(param_val "Bedrock/EnableAnswerVerification")"
+if [ "$BEDROCK_VERIFY" = "true" ] || [ "$BEDROCK_VERIFY" = "false" ]; then
+  pass "O12 Bedrock: EnableAnswerVerification is valid boolean ('${BEDROCK_VERIFY}')"
+else
+  fail "O12 Bedrock: EnableAnswerVerification must be 'true' or 'false', got '${BEDROCK_VERIFY}'"
+fi
+
+# 7. O12 AI Quota parameters (AiQuotaOptions)
+check_group_present "O12 AI Quota" \
+  "AiQuota/JobsPerUserPerDay" \
+  "AiQuota/MaxQuestionsPerJob" \
+  "AiQuota/TokensPerUserPerDay" \
+  "AiQuota/SystemTokensPerDay" \
+  "AiQuota/MaxNoteLength" \
+  "AiQuota/MaxAttempts"
+
+Q_JOBS="$(param_val "AiQuota/JobsPerUserPerDay")"
+Q_MAXQ="$(param_val "AiQuota/MaxQuestionsPerJob")"
+Q_UTOK="$(param_val "AiQuota/TokensPerUserPerDay")"
+Q_STOK="$(param_val "AiQuota/SystemTokensPerDay")"
+Q_NOTE="$(param_val "AiQuota/MaxNoteLength")"
+Q_ATT="$(param_val "AiQuota/MaxAttempts")"
+
+if is_pos_int "$Q_JOBS" && is_pos_int "$Q_MAXQ" && is_pos_int "$Q_UTOK" && is_pos_int "$Q_STOK" && is_pos_int "$Q_NOTE" && [ "$Q_ATT" = "3" ] && [ "$Q_STOK" -ge "$Q_UTOK" ]; then
+  pass "O12 AI Quota values valid (jobs=${Q_JOBS}/d, maxQ=${Q_MAXQ}, userTok=${Q_UTOK}, sysTok=${Q_STOK}, maxAttempts=${Q_ATT})"
+else
+  fail "O12 AI Quota guardrail violation (jobs='${Q_JOBS}', maxQ='${Q_MAXQ}', userTok='${Q_UTOK}', sysTok='${Q_STOK}', note='${Q_NOTE}', maxAttempts='${Q_ATT}' expected 3)"
+fi
+
+# 8. O12 AI Rate Limit parameters (AiRateLimitOptions)
+RL_PERMIT="$(param_val "AiRateLimit/PermitLimit")"
+RL_WINDOW="$(param_val "AiRateLimit/Window")"
+if is_pos_int "$RL_PERMIT" && [[ "$RL_WINDOW" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+  pass "O12 AI Rate Limit valid (PermitLimit=${RL_PERMIT}, Window=${RL_WINDOW})"
+else
+  fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}')"
+fi
+
+# 9. O12 Origin VerifySecret (SecureString, >= 32 chars, never printed)
+ORIGIN_TYPE="$(param_type "Origin/VerifySecret")"
+ORIGIN_VAL="$(param_val "Origin/VerifySecret")"
+if [ "$ORIGIN_TYPE" = "SecureString" ] && [ "${#ORIGIN_VAL}" -ge 32 ]; then
+  pass "O12 Origin/VerifySecret exists as SecureString with length ${#ORIGIN_VAL} (>= 32 chars)"
+else
+  fail "O12 Origin/VerifySecret invalid (type='${ORIGIN_TYPE}', length=${#ORIGIN_VAL}, expected SecureString >= 32 chars)"
+fi
+
+# 10. O12 CloudWatch metadata
+check_group_present "O12 CloudWatch metadata" \
+  "CloudWatch/LogGroupName" \
+  "CloudWatch/MetricNamespace"
+
+# 11. Cost guardrail: ALL parameters under prefix must be Standard tier ($0)
+NON_STANDARD="$(jq -r '[.Parameters[]? | select(.Tier != "Standard") | "\(.Name)(\(.Tier))"] | join(", ")' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+if [ -z "$NON_STANDARD" ]; then
+  TOTAL_COUNT="$(jq -r '.Parameters | length' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+  pass "Cost control: all ${TOTAL_COUNT} parameters under '${SSM_PREFIX}/' use Standard tier (\$0)"
+else
+  fail "Cost control: non-Standard tier parameters detected: ${NON_STANDARD}"
+fi
+
+# 12. Cost guardrail: ALL SecureString parameters must use AWS-managed KMS key (alias/aws/ssm = $0)
+CUSTOM_KMS="$(jq -r '[.Parameters[]? | select(.Type == "SecureString" and (.KeyId // "") != "alias/aws/ssm") | "\(.Name)(\(.KeyId // "unknown"))"] | join(", ")' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+if [ -z "$CUSTOM_KMS" ]; then
+  pass "Cost control: all SecureString parameters use AWS-managed key alias/aws/ssm (\$0)"
+else
+  fail "Cost control: SecureString parameter(s) not using alias/aws/ssm: ${CUSTOM_KMS}"
+fi
+
+# 13. Security guardrail: No sensitive parameter stored as plaintext String
+PLAINTEXT_SECRETS="$(jq -r '[.Parameters[]? | select((.Name | test("Secret|Password|ConnectionStrings"; "i")) and .Type != "SecureString") | .Name] | join(", ")' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+if [ -z "$PLAINTEXT_SECRETS" ]; then
+  pass "Security: no Secret/Password/ConnectionString parameter is stored as plaintext String"
+else
+  fail "Security: sensitive parameter(s) stored as non-SecureString: ${PLAINTEXT_SECRETS}"
+fi
+
+echo ""
+if [ "$FAILURES" -eq 0 ]; then
+  echo "ALL CHECKS PASSED (${PASSED}/${PASSED})."
+  exit 0
+else
+  echo "VERIFICATION FAILED: ${PASSED} passed, ${FAILURES} failed." >&2
+  exit 1
+fi
