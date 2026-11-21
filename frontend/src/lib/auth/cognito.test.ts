@@ -6,6 +6,7 @@ import {
   exchangeCode,
   refreshTokens,
   revokeToken,
+  TOKEN_REQUEST_TIMEOUT_MS,
   TokenEndpointError,
 } from "./cognito";
 
@@ -179,5 +180,52 @@ describe("token endpoint", () => {
     const controller = new AbortController();
     await revokeToken(cfg, "rt-to-revoke", controller.signal);
     expect(lastRequest().init.signal).toBe(controller.signal);
+  });
+});
+
+describe("token endpoint timeout", () => {
+  // Simulates a connection that never answers: it only settles when its signal aborts.
+  const hangingFetch = vi.fn(
+    (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      }),
+  );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    hangingFetch.mockClear();
+    vi.stubGlobal("fetch", hangingFetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["exchangeCode", () => exchangeCode(cfg, { code: "c", codeVerifier: "v" })],
+    ["refreshTokens", () => refreshTokens(cfg, "rt")],
+  ])("%s rejects as a transient error once the request hangs past the timeout", async (_name, call) => {
+    const settled = vi.fn();
+    const pending = call().then(settled, (e: unknown) => {
+      settled();
+      return e;
+    });
+
+    await vi.advanceTimersByTimeAsync(TOKEN_REQUEST_TIMEOUT_MS - 1);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    const err = await pending;
+    // A DOMException from jsdom is not `instanceof Error` across realms; the name is the contract.
+    expect(err).not.toBeInstanceOf(TokenEndpointError);
+    expect((err as DOMException).name).toBe("TimeoutError");
+  });
+
+  it("leaves no timer behind when the request completes in time", async () => {
+    hangingFetch.mockResolvedValueOnce(jsonResponse({ access_token: "at", expires_in: 3600 }));
+    await refreshTokens(cfg, "rt");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

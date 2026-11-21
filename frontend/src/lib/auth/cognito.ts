@@ -70,23 +70,38 @@ async function readErrorCode(res: Response): Promise<string> {
   return "unknown_error";
 }
 
+// Upper bound for one token request (headers and body). Without it a hanging connection
+// would keep the callback page loading and block the shared refresh forever.
+export const TOKEN_REQUEST_TIMEOUT_MS = 10_000;
+
 // Network failures (fetch rejects) propagate unchanged so callers can tell them apart
-// from an explicit rejection by Cognito.
+// from an explicit rejection by Cognito. A timeout rejects with a "TimeoutError"
+// DOMException, which callers treat like any other transient network failure.
 async function requestTokens(cfg: AuthConfig, body: Record<string, string>): Promise<TokenSet> {
-  const res = await postForm(cfg, "/oauth2/token", body);
-  if (!res.ok) {
-    throw new TokenEndpointError(await readErrorCode(res), res.status);
+  // AbortController + setTimeout rather than AbortSignal.timeout: works on Safari < 16.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("Token request timed out", "TimeoutError")),
+    TOKEN_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const res = await postForm(cfg, "/oauth2/token", body, controller.signal);
+    if (!res.ok) {
+      throw new TokenEndpointError(await readErrorCode(res), res.status);
+    }
+    const data = (await res.json()) as {
+      access_token: string;
+      expires_in: number;
+      refresh_token?: string;
+    };
+    return {
+      accessToken: data.access_token,
+      expiresIn: data.expires_in,
+      refreshToken: data.refresh_token,
+    };
+  } finally {
+    clearTimeout(timer);
   }
-  const data = (await res.json()) as {
-    access_token: string;
-    expires_in: number;
-    refresh_token?: string;
-  };
-  return {
-    accessToken: data.access_token,
-    expiresIn: data.expires_in,
-    refreshToken: data.refresh_token,
-  };
 }
 
 export function exchangeCode(

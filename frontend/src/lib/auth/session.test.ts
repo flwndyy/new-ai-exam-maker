@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TokenEndpointError } from "./cognito";
+import { TOKEN_REQUEST_TIMEOUT_MS, TokenEndpointError } from "./cognito";
 import {
   __resetSessionForTests,
   clearSession,
@@ -212,6 +212,54 @@ describe("session", () => {
       await expect(forceRefresh()).rejects.toThrow("Failed to fetch");
       expect(getStatus()).toBe("signedIn");
       expect(sessionStorage.getItem(REFRESH_KEY)).toBe("r1");
+    });
+
+    describe("when the token endpoint hangs (real refreshTokens)", () => {
+      const hangingFetch = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          }),
+      );
+
+      beforeEach(async () => {
+        const actual = await vi.importActual<typeof import("./cognito")>("./cognito");
+        refreshTokensMock.mockImplementation(actual.refreshTokens);
+        hangingFetch.mockClear();
+        vi.stubGlobal("fetch", hangingFetch);
+      });
+
+      afterEach(() => {
+        vi.unstubAllGlobals();
+      });
+
+      it("releases the single-flight refresh after the timeout so a retry can start", async () => {
+        setTokens({ accessToken: "a1", expiresIn: 3600, refreshToken: "r1" });
+
+        const first = forceRefresh().catch((e: unknown) => e);
+        await vi.advanceTimersByTimeAsync(TOKEN_REQUEST_TIMEOUT_MS);
+        const err = await first;
+
+        expect((err as Error).name).toBe("TimeoutError");
+        expect(getStatus()).toBe("signedIn");
+        expect(sessionStorage.getItem(REFRESH_KEY)).toBe("r1");
+
+        hangingFetch.mockResolvedValueOnce(
+          new Response(JSON.stringify({ access_token: "a2", expires_in: 3600 }), { status: 200 }),
+        );
+        await expect(forceRefresh()).resolves.toBe("a2");
+        expect(hangingFetch).toHaveBeenCalledTimes(2);
+      });
+
+      it("falls back to the cached token once a proactive refresh times out", async () => {
+        setTokens({ accessToken: "a1", expiresIn: 4 * MINUTE, refreshToken: "r1" });
+
+        const token = getValidAccessToken();
+        await vi.advanceTimersByTimeAsync(TOKEN_REQUEST_TIMEOUT_MS);
+
+        await expect(token).resolves.toBe("a1");
+        expect(getStatus()).toBe("signedIn");
+      });
     });
 
     it("allows a retry after a network failure", async () => {
