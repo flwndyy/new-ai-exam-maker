@@ -9,6 +9,56 @@ namespace ExamMaker.Api.Tests;
 public sealed class QuestionRulesTests
 {
     [Theory]
+    [InlineData("1e-20000", false)]
+    [InlineData("1e200000", false)]
+    [InlineData("1.2345678901234567890123456789e-1000", false)]
+    [InlineData("1.2345678901234567890123456789e-990", true)]
+    [InlineData("1e-1000", true)]
+    [InlineData("-1e-1000", false)]
+    // Points and tolerance must apply the same storage budget to the expanded decimal, without decimal underflow.
+    public void Numeric_storage_rules_are_shared_across_payload_fields(string number, bool allowed)
+    {
+        foreach (var type in new[] { "Essay", "ShortAnswer" })
+        {
+            var json = type == "Essay"
+                ? "{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":" + number + "}]}"
+                : "{\"answerType\":\"number\",\"acceptedAnswers\":[\"1\"],\"tolerance\":" + number + "}";
+            var payload = JsonSerializer.Deserialize<JsonElement>(json);
+            if (allowed) QuestionPayloadRules.Validate(type, payload);
+            else Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate(type, payload)).Field);
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-0")]
+    [InlineData("0e-1000")]
+    public void Tolerance_accepts_zero_without_weakening_positive_rubric_rules(string number)
+    {
+        QuestionPayloadRules.Validate("ShortAnswer", JsonSerializer.Deserialize<JsonElement>(
+            "{\"answerType\":\"number\",\"acceptedAnswers\":[\"1\"],\"tolerance\":" + number + "}"));
+        Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("Essay", JsonSerializer.Deserialize<JsonElement>(
+            "{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":" + number + "}]}")));
+    }
+
+    [Fact]
+    // Millisecond normalization must never reuse a token when several workflow operations see the same clock value.
+    public void Resubmission_tokens_advance_even_with_a_frozen_clock()
+    {
+        var q = Question(); var clock = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        q.UpdatedAt = clock;
+        var actor = Actor("teacher", true);
+        QuestionRules.Transition(actor, q, QuestionAction.Submit, null, clock);
+        var first = q.SubmittedAt!.Value;
+        QuestionRules.Transition(actor, q, QuestionAction.Withdraw, null, clock);
+        QuestionRules.Edit(actor, q, new(q.SubjectId, q.TopicId, q.Grade, q.Type, q.Difficulty, "Replacement",
+            JsonSerializer.Deserialize<JsonElement>(q.Payload)), clock);
+        QuestionRules.Transition(actor, q, QuestionAction.Submit, null, clock);
+        Assert.True(q.SubmittedAt >= first.AddMilliseconds(1));
+        Assert.Equal(0, q.SubmittedAt!.Value.Ticks % TimeSpan.TicksPerMillisecond);
+    }
+
+    [Theory]
     [InlineData("1e-30", true)]
     [InlineData("1e-1000", true)]
     [InlineData("1e30", true)]
@@ -114,7 +164,12 @@ public sealed class QuestionRulesTests
             QuestionAction.Archive => "Archived",
             _ => state
         }, q.Status);
-        Assert.Equal(now, q.UpdatedAt);
+        if (action == QuestionAction.Submit)
+        {
+            Assert.Equal(0, q.SubmittedAt!.Value.Ticks % TimeSpan.TicksPerMillisecond);
+            Assert.Equal(q.SubmittedAt, q.UpdatedAt);
+        }
+        else Assert.Equal(now, q.UpdatedAt);
     }
 
     [Theory]

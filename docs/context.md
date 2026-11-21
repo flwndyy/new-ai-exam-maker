@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.11** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.12** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -201,8 +201,9 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 #### Chi tiết triển khai A6
 
 - Giữ chặn sửa/archive khi đề Draft/Rejected/Submitted tham chiếu. Lỗi 409 QuestionReferenced trả references (totalItems và tối đa 20 items: examId, versionId, status, createdBy.id/fullName) để liên hệ chủ đề gỡ câu; không lộ tiêu đề/nội dung đề hoặc email, chỉ trả sau kiểm quyền nhìn thấy/thao tác trên câu.
-- Approve/reject câu hỏi và contract A7 bắt buộc gửi submittedAt đã đọc. Kiểm dưới khóa hàng: thiếu trả 400 errors[submittedAt], không khớp lượt Submitted hiện tại trả 409 Conflict; không thay trạng thái/audit. Quyền và trạng thái được kiểm trước token lượt duyệt. Frontend phải tải lại sau Conflict, không tự thay submittedAt rồi duyệt lại.
-- Rubric giữ kiểm dấu trên JSON gốc để nhận số dương nhỏ; mỗi token số tối đa 1024 ký tự, số mũ tường minh trong [-1000, 1000] để không tràn numeric của jsonb. Explanation trim/blank thành null trước kiểm giới hạn 10000 ký tự; vẫn cấm NUL.
+- Approve/reject câu hỏi và contract A7 bắt buộc gửi submittedAt đã đọc. So UTC tới mili giây để hỗ trợ JavaScript Date; lượt submit mới lưu đúng mili giây và vượt mốc mili giây của sự kiện trước, nên hai lượt gửi cách nhau ít nhất 1ms dù cùng giờ hệ thống. Thiếu trả 400 errors[submittedAt], lệch lượt trả 409 Conflict; không thay trạng thái/audit. Quyền và trạng thái được kiểm trước token lượt duyệt. Frontend phải đọc lại sau Conflict, không tự thay token rồi retry.
+- Points và tolerance dùng chung bộ kiểm số JSON: số mũ tường minh trong [-1000, 1000], dạng thập phân PostgreSQL sẽ lưu tối đa 1024 ký tự (kể cả dấu và dấu chấm). Không giới hạn theo độ dài token khoa học ban đầu; nội dung đã nhận phải vẫn validate được sau jsonb chuẩn hóa. Points > 0, tolerance >= 0, không làm tròn qua decimal. Explanation trim/blank thành null trước kiểm giới hạn 10000 ký tự; vẫn cấm NUL.
+- Đọc câu không khóa và kiểm CanRead trước FOR UPDATE; sau khi khóa phải reload và kiểm lại quyền. Câu riêng tư của người khác trả 404 ngay cả khi hàng đang bị khóa, không trả 409 theo tình trạng khóa.
 
 - Model validation và lỗi binding dùng key JSON camelCase (stem/type/subjectId/grade), bỏ tiền tố $. của JSON path. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind MVC vẫn được kiểm trước action. Điểm rubric Essay kiểm dương trên số JSON gốc, không làm tròn qua decimal, nên số dương rất nhỏ vẫn hợp lệ theo OpenAPI.
 
@@ -591,6 +592,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.12 — 21/11/2026**
+
+- Thống nhất kiểm points/tolerance theo dạng thập phân jsonb sẽ lưu; token lượt duyệt tương thích mili giây JavaScript và tăng qua các lần submit. Kiểm CanRead cả trước và sau khóa câu; bổ sung test chu trình lưu/đọc/submit, timestamp và tranh chấp khóa riêng tư.
 
 **0.11 — 21/11/2026**
 

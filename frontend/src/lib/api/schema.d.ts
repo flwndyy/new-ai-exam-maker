@@ -1208,6 +1208,7 @@ export interface components {
             answerType: "number" | "text";
             acceptedAnswers: string[];
             unit?: string | null;
+            /** @description Dùng chung quy tắc lưu số với points; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Không làm tròn qua decimal. */
             tolerance?: number | null;
         };
         /** @description Tổng điểm rubric = điểm câu (khi đưa vào đề). */
@@ -1215,7 +1216,7 @@ export interface components {
             modelAnswer: string;
             rubric: {
                 criterion: string;
-                /** @description Điểm dương theo JSON gốc; token số tối đa 1024 ký tự và số mũ tường minh trong [-1000, 1000] để phù hợp jsonb numeric. Không làm tròn qua decimal khi kiểm dấu. */
+                /** @description Điểm dương theo JSON gốc; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Kiểm cùng quy tắc với tolerance, không giới hạn riêng độ dài token khoa học hoặc làm tròn qua decimal. */
                 points: number;
             }[];
         };
@@ -1287,7 +1288,7 @@ export interface components {
         QuestionApproveRequest: {
             /**
              * Format: date-time
-             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
              */
             submittedAt: string;
             note?: string | null;
@@ -1295,7 +1296,7 @@ export interface components {
         QuestionRejectRequest: {
             /**
              * Format: date-time
-             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
              */
             submittedAt: string;
             /** @description Lý do từ chối — bắt buộc. */
@@ -1304,7 +1305,7 @@ export interface components {
         ApproveRequest: {
             /**
              * Format: date-time
-             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
              */
             submittedAt: string;
             note?: string | null;
@@ -1312,7 +1313,7 @@ export interface components {
         RejectRequest: {
             /**
              * Format: date-time
-             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
              */
             submittedAt: string;
             /** @description Lý do từ chối — bắt buộc. */

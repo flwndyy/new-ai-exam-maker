@@ -78,7 +78,7 @@ public static class QuestionRules
             question.AiVerification = "NotChecked";
             question.AiVerificationNote = null;
         }
-        question.UpdatedAt = now;
+        question.UpdatedAt = now > question.UpdatedAt ? now : question.UpdatedAt.AddTicks(1);
         return true;
     }
 
@@ -108,6 +108,10 @@ public static class QuestionRules
                 // Revalidate worker output before it enters the review workflow.
                 Validate(new(question.SubjectId, question.TopicId, question.Grade, question.Type, question.Difficulty,
                     question.Stem, JsonSerializer.Deserialize<JsonElement>(question.Payload), question.Explanation));
+                // Millisecond tokens survive JavaScript Date; each round must advance even under a coarse or frozen clock.
+                var previousMillisecond = question.UpdatedAt.Ticks / TimeSpan.TicksPerMillisecond;
+                var currentMillisecond = now.Ticks / TimeSpan.TicksPerMillisecond;
+                now = new DateTime(Math.Max(currentMillisecond, previousMillisecond + 1) * TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
                 question.Status = "Submitted";
                 question.SubmittedAt = now;
                 ClearReview(question);
@@ -139,7 +143,7 @@ public static class QuestionRules
                 break;
             default: throw InvalidState();
         }
-        question.UpdatedAt = now;
+        question.UpdatedAt = now > question.UpdatedAt ? now : question.UpdatedAt.AddTicks(1);
         return true;
     }
 

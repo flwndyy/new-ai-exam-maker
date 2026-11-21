@@ -1755,7 +1755,10 @@ components:
           maxItems: 20
           items: { type: string, minLength: 1, maxLength: 10000 }
         unit: { type: [string, 'null'], maxLength: 10000 }
-        tolerance: { type: [number, 'null'], minimum: 0 }
+        tolerance:
+          type: [number, 'null']
+          minimum: 0
+          description: Dùng chung quy tắc lưu số với points; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Không làm tròn qua decimal.
     EssayPayload:
       type: object
       description: Tổng điểm rubric = điểm câu (khi đưa vào đề).
@@ -1776,7 +1779,7 @@ components:
               points:
                 type: number
                 exclusiveMinimum: 0
-                description: Điểm dương theo JSON gốc; token số tối đa 1024 ký tự và số mũ tường minh trong [-1000, 1000] để phù hợp jsonb numeric. Không làm tròn qua decimal khi kiểm dấu.
+                description: Điểm dương theo JSON gốc; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Kiểm cùng quy tắc với tolerance, không giới hạn riêng độ dài token khoa học hoặc làm tròn qua decimal.
     QuestionPayload:
       description: |
         Cấu trúc theo `type` của câu chứa nó. Backend validate `payload` khớp `type`
@@ -1885,7 +1888,7 @@ components:
         submittedAt:
           type: string
           format: date-time
-          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note: { type: [string, 'null'], maxLength: 2000 }
     QuestionRejectRequest:
       type: object
@@ -1895,7 +1898,7 @@ components:
         submittedAt:
           type: string
           format: date-time
-          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note:
           type: string
           minLength: 1
@@ -1909,7 +1912,7 @@ components:
         submittedAt:
           type: string
           format: date-time
-          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note: { type: [string, 'null'], maxLength: 2000 }
     RejectRequest:
       type: object
@@ -1918,7 +1921,7 @@ components:
         submittedAt:
           type: string
           format: date-time
-          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note:
           type: string
           minLength: 1

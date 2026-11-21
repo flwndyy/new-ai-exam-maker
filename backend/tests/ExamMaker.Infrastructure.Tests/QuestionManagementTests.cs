@@ -798,6 +798,94 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         }
     }
 
+    [PostgresFact]
+    // Accepted numbers must survive the entire create/read/update/read/submit cycle after jsonb expands scientific notation.
+    public async Task Numeric_payloads_round_trip_through_jsonb_before_submission()
+    {
+        await SeedAsync();
+        foreach (var type in new[] { "Essay", "ShortAnswer" })
+            foreach (var number in new[] { "1e-1000", "1.2345678901234567890123456789e-990",
+            "1.2345678901234567890123456789e-1000", "1e-20000", "1e200000",
+            "0." + new string('0', 1021) + "1", "0." + new string('0', 1022) + "1",
+            "0." + new string('0', 1020) + "1e1000", "0.0001e1000" })
+            {
+                var json = type == "Essay"
+                    ? "{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":" + number + "}]}"
+                    : "{\"answerType\":\"number\",\"acceptedAnswers\":[\"1\"],\"tolerance\":" + number + "}";
+                var input = Input() with { Type = type, Payload = JsonSerializer.Deserialize<JsonElement>(json) };
+                await using var db = fixture.CreateContext();
+                if (number is "1e-20000" or "1e200000" or "1.2345678901234567890123456789e-1000" || number.Length == 1025)
+                {
+                    var error = await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, input, default));
+                    Assert.Equal(400, error.StatusCode); Assert.Equal("payload", error.Field);
+                    continue;
+                }
+                var created = await Service(db).CreateAsync(owner, input, default);
+                var read = await Service(db).GetAsync(owner, created.Id, default);
+                QuestionPayloadRules.Validate(type, read.Payload);
+                var edited = await Service(db).UpdateAsync(owner, created.Id, input with { Explanation = "Edited after reading JSONB" }, default);
+                QuestionPayloadRules.Validate(type, edited.Payload);
+                Assert.Equal("Submitted", (await ActAsync(owner, created.Id, QuestionAction.Submit)).Status);
+            }
+    }
+
+    [PostgresFact]
+    // JavaScript Date drops legacy microseconds; a current-round millisecond token must still permit both decisions.
+    public async Task Legacy_microsecond_submissions_accept_javascript_millisecond_round_trips()
+    {
+        await SeedAsync();
+        foreach (var action in new[] { QuestionAction.Approve, QuestionAction.Reject })
+        {
+            var q = await CreateAsync(); q = await ActAsync(owner, q.Id, QuestionAction.Submit);
+            var microseconds = new DateTime(q.SubmittedAt!.Value.Ticks + 4560, DateTimeKind.Utc);
+            await using var db = fixture.CreateContext();
+            await db.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.SubmittedAt, microseconds)
+                .SetProperty(v => v.UpdatedAt, microseconds));
+            var read = await Service(db).GetAsync(head, q.Id, default);
+            var javascriptDate = DateTimeOffset.FromUnixTimeMilliseconds(new DateTimeOffset(read.SubmittedAt!.Value).ToUnixTimeMilliseconds());
+            Assert.NotEqual(read.SubmittedAt, javascriptDate.UtcDateTime);
+            var result = await Service(db).TransitionAsync(head, q.Id, action, "Synthetic decision", default, javascriptDate);
+            Assert.Equal(action == QuestionAction.Approve ? "Approved" : "Rejected", result.Status);
+        }
+    }
+
+    [PostgresFact]
+    // Private row existence and lock contention must produce the same immediate 404 as an absent identifier.
+    public async Task Invisible_question_probes_do_not_wait_for_or_take_question_row_locks()
+    {
+        await SeedAsync(); var q = await CreateAsync();
+        await using var holder = fixture.CreateContext();
+        await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Questions.FromSqlInterpolated($"SELECT * FROM questions WHERE id = {q.Id} FOR UPDATE").SingleAsync();
+        foreach (var actor in new[] { head, outsider })
+            foreach (var action in new[] { QuestionAction.Withdraw, QuestionAction.Submit, QuestionAction.Approve, QuestionAction.Archive })
+            {
+                await using var probe = fixture.CreateContext();
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
+                var error = await Assert.ThrowsAsync<QuestionException>(() => Service(probe).TransitionAsync(actor, q.Id, action, null, deadline.Token));
+                Assert.Equal(404, error.StatusCode); Assert.Equal("NotFound", error.Code); Assert.Null(error.References);
+            }
+    }
+
+    [PostgresFact]
+    // Visibility can change after the optimistic read; it must be checked again after the row lock is granted.
+    public async Task Question_visibility_is_rechecked_after_a_concurrent_archive_commits()
+    {
+        await SeedAsync(); var q = await CreateAsync(); await ActAsync(owner, q.Id, QuestionAction.Submit);
+        await ActAsync(head, q.Id, QuestionAction.Approve);
+        await using var holder = fixture.CreateContext(); await using var transaction = await holder.Database.BeginTransactionAsync();
+        await holder.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(x => x.SetProperty(v => v.Status, "Archived"));
+        await using var attempt = fixture.CreateContext(); await attempt.Database.OpenConnectionAsync();
+        var pid = ((Npgsql.NpgsqlConnection)attempt.Database.GetDbConnection()).ProcessID;
+        var holderPid = ((Npgsql.NpgsqlConnection)holder.Database.GetDbConnection()).ProcessID;
+        var pending = Service(attempt).TransitionAsync(otherHead, q.Id, QuestionAction.Withdraw, null, default);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(1.8));
+        while (!await holder.Database.SqlQuery<bool>($"SELECT {holderPid} = ANY(pg_blocking_pids({pid})) AS \"Value\"").SingleAsync(deadline.Token))
+            await Task.Delay(10, deadline.Token);
+        await transaction.CommitAsync();
+        Assert.Equal(404, (await Assert.ThrowsAsync<QuestionException>(() => pending)).StatusCode);
+    }
+
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {
         public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(

@@ -43,7 +43,7 @@ Validation nghiệp vụ dùng các hàm thuần ở Application (QuestionRules/
 | `QuestionManagement.ActorAsync` | Đọc lại trạng thái/role/tổ từ DB; không tin dữ liệu quyền trong body/token cache. |
 | `CatalogAsync` | Kiểm bộ topic/subject/grade và lấy department từ catalog, giữ department câu cố định khi sửa. |
 | `MutateAsync` | Mở transaction, lấy khóa, kiểm actor, thực hiện thay đổi, lưu audit và commit cùng nhau. |
-| `LockQuestionAsync` | Giữ FOR UPDATE và reload trước khi quyết định để hai reviewer không ghi đè kết quả. |
+| `LockQuestionAsync` | Đọc không khóa và kiểm CanRead trước; sau FOR UPDATE thì reload, kiểm lại để vừa che ID riêng tư vừa chống race. |
 | `EnsureSourceChangeAllowedAsync` | Khóa các phiên bản đề tham chiếu; chặn mở lại/archive nguồn và đổi phân loại khi còn đề Draft/Rejected/Submitted. |
 | `CreateAsync/UpdateAsync` | Tạo hoặc sửa câu theo quyền và ràng buộc danh mục; không cho client giả mạo source/creator/revision/status. |
 | `TransitionAsync` | Đọc câu có khóa, gọi state machine ở Application và ghi audit từ trạng thái cũ sang mới. |
@@ -70,7 +70,7 @@ Validation nghiệp vụ dùng các hàm thuần ở Application (QuestionRules/
 - PUT cùng nội dung (so payload theo cấu trúc JSON) không tăng revision hoặc mở lại Approved.
 - Sửa nội dung thực sự của câu Approved hoặc archive bị chặn bằng 409 `QuestionReferenced` khi đề Draft/Rejected/Submitted còn tham chiếu, kể cả đề của người khác. Submitted có thể withdraw/reject nên cần bảo vệ câu nguồn. Phải gỡ câu khỏi phiên bản có thể sửa trước khi mở lại/archive câu; PUT không đổi nội dung vẫn thành công. Cùng guard bảo vệ đổi môn/chương/khối. Chỉ còn đề Approved/Published/Archived thì cho sửa/archive nguồn, không thay snapshot.
 - Giữ chính sách chặn trên, không cho tác giả tự sửa đề của người khác. Lỗi có `references.totalItems` và tối đa 20 `items` gồm examId/versionId/status/createdBy (id/fullName) để liên hệ chủ đề gỡ câu; Submitted cần withdraw/reject trước. Không trả tiêu đề/nội dung đề hay email. Khi còn nhiều hơn 20 liên kết, xử lý các liên kết hiển thị rồi thử lại để thấy phần còn lại. Đây không phải quyền đọc/sửa đề riêng tư.
-- Approve/reject phải gửi đúng submittedAt từ lần GET reviewer đã đọc. So sánh dưới khóa hàng sau kiểm quyền/trạng thái: thiếu trả 400 errors[submittedAt], lệch lượt trả 409 Conflict và không audit/thay trạng thái. Client phải tải lại, đọc nội dung mới và ra quyết định lại; không tự thay token để retry. Contract A7 dùng cùng tiền điều kiện này khi triển khai endpoint phiên bản đề.
+- Approve/reject gửi submittedAt từ lần GET reviewer đã đọc, so UTC tới mili giây nên hỗ trợ JavaScript Date/toISOString kể cả hàng cũ có micro giây. Lượt submit mới lưu đúng mili giây, lớn hơn mốc UpdatedAt trước ít nhất một mốc mili giây; các thay đổi giữ UpdatedAt không lùi để submit lại nhanh không trùng token. Thiếu token trả 400 errors[submittedAt], lệch lượt trả 409 Conflict, không audit/thay trạng thái. Client phải đọc lại sau Conflict; không tự thay token để retry. A7 dùng cùng tiền điều kiện này.
 - AI chưa rà soát không submit được: 409 `AiReviewRequired`. Sửa nội dung AI reset aiReviewedByAuthor, aiVerification và aiVerificationNote, giữ nguyên job/ordinal/source.
 - Submit xóa quyết định cũ và đặt submittedAt mới. Withdraw xóa submittedAt và quyết định duyệt. Reject note không trắng, tối đa 2000; approve note tùy chọn, tối đa 2000. Reviewer và thời gian lưu UTC.
 - Actor không tồn tại hoặc bị khóa lúc kiểm lại DB trả 401 `Unauthorized` kèm `WWW-Authenticate: Bearer`, kể cả sau khi chờ khóa. Actor hợp lệ nhưng thiếu quyền trả 403 `Forbidden`; tự duyệt của head/admin trả 403 `SelfReview`. Sai trạng thái trả 409 `InvalidStateTransition`.
@@ -79,13 +79,15 @@ Validation nghiệp vụ dùng các hàm thuần ở Application (QuestionRules/
 - Approve/reject câu hỏi dùng schema riêng `QuestionApproveRequest` / `QuestionRejectRequest`, từ chối field ngoài hợp đồng. Schema `ApproveRequest` / `RejectRequest` của exam-version cũng bắt buộc submittedAt để A7 triển khai cùng tiền điều kiện; không áp đặt từ chối field thừa lên A7 trong lượt này.
 - Validation trả 400 `ValidationFailed` với errors[field]; body không cho field ngoài hợp đồng. Bốn dạng payload đều kiểm: MC đúng 4 nhãn A–D/1 correctLabel; TrueFalse 4 nhãn a–d và boolean; ShortAnswer có đáp án, tolerance chỉ cho number; Essay có rubric điểm dương. Tổng rubric bằng điểm câu kiểm khi ghép đề ở A7.
 - Lỗi binding/DataAnnotations cũng dùng key camelCase như `stem`, `type`, `subjectId`, `grade`, bỏ tiền tố `$.` của JSON path và giữ code/traceId. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind/Required của MVC vẫn trả trước action.
-- Điểm rubric kiểm dấu và phần định trị trên số JSON gốc, không ép qua decimal; `1e-30` và `1e-1000` hợp lệ, số âm và mọi dạng số 0 đều không hợp lệ. Mỗi token số tối đa 1024 ký tự và số mũ tường minh trong [-1000, 1000]; ngoài giới hạn trả 400 errors[payload] trước PostgreSQL. Explanation trim/blank thành null trước kiểm độ dài 10000, vẫn cấm NUL.
+- Points/tolerance dùng chung bộ kiểm số JSON: số mũ tường minh [-1000, 1000], dạng thập phân jsonb sẽ lưu tối đa 1024 ký tự. Tính phần nguyên/phần lẻ sau dịch dấu chấm, không dùng độ dài token khoa học ban đầu hoặc ép decimal. Points > 0, tolerance >= 0 (cho phép zero). `1e-1000` hợp lệ và vẫn submit được sau đọc DB; `1.2345678901234567890123456789e-1000` bị chặn 400 errors[payload] ngay từ create vì dạng lưu vượt giới hạn. Explanation trim/blank thành null trước kiểm độ dài 10000, vẫn cấm NUL.
 - Options/statements phải theo thứ tự A–D/a–d. ShortAnswer number chỉ nhận `-?[0-9]+([.,][0-9]+)?`, giữ nguyên chuỗi đáp án; không nhận khoảng trắng, dấu cộng, số mũ, NaN/Infinity. Text payload tối đa 10000 ký tự, acceptedAnswers/rubric tối đa 20 phần tử; surrogate lẻ trả 400 `errors[payload]`.
 - Mark-reviewed đã hoàn tất là no-op sau kiểm quyền/trạng thái: không thêm audit hoặc đổi updatedAt. Câu mới dùng cùng mốc UTC cho createdAt/updatedAt.
 
 ## Transaction và đồng thời
 
 Mỗi ghi giữ `FOR SHARE` trên hàng user của actor và đọc quyền live, sau đó giữ shared catalog lock `48683402` rồi khóa hàng câu hỏi. Khóa hàng actor ngăn thay đổi role/tổ/activation tới commit, không chờ advisory lock `48683401` của A4 khi admin đang tạo hoặc sửa tài khoản khác. Cập nhật chính actor hoặc ghi catalog đồng thời vẫn có thể trả Conflict sau 2 giây chờ; đây là xung đột cần thiết để giữ quyền và dữ liệu nhất quán.
+
+Trước khóa câu, đọc thường và trả 404 nếu không có quyền xem, kể cả hàng đang bị khóa bởi giao dịch khác. Sau khi lấy được khóa phải đọc lại và kiểm CanRead lần nữa để xử lý trường hợp câu vừa bị archive/reject trong lúc chờ.
 
 Duyệt đồng thời: người thắng commit quyết định. Nếu Approved thắng, reviewer còn lại vẫn nhìn thấy câu và nhận 409 InvalidStateTransition. Nếu Rejected thắng, câu trở lại phạm vi riêng tư của tác giả; reviewer khác nhận 404 NotFound trước kiểm trạng thái. Chỉ có một audit quyết định thành công. SQLSTATE lock/deadlock/FK/unique được chuyển thành lỗi an toàn. Audit lỗi làm rollback cả trạng thái, nội dung hoặc lệnh DELETE đã chạy. Log server chỉ ghi loại exception, SQLSTATE và stack, bỏ raw message.
 
@@ -112,11 +114,12 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 
 ## Kết quả kiểm tra hiện tại
 
-- Kiểm tra local ngày 21/11/2026: toàn solution backend Release **487/487 test pass, 0 failed, 0 skipped** (319 API/quy tắc, 38 Application, 130 Infrastructure), gồm các integration test PostgreSQL thật.
+- Kiểm tra local ngày 21/11/2026: toàn solution backend Release **501/501 test pass, 0 failed, 0 skipped** (329 API/quy tắc, 38 Application, 134 Infrastructure), gồm các integration test PostgreSQL thật.
 - Test xác nhận: sửa stem/payload/difficulty/explanation và archive bị chặn khi còn đề Draft/Rejected/Submitted của người khác; PUT không đổi nội dung vẫn thành công. Đề Approved/Published/Archived giữ nguyên snapshot khi nguồn bị archive. Head đã chuyển tổ vẫn archive được câu của mình. Các test quyền sau chờ khóa, audit rollback, payload và đồng thời tiếp tục pass.
 - Schema TypeScript đã sinh lại và kiểm đồng bộ OpenAPI đạt. Formatter whitespace và `git diff --check` đạt. Kết quả CI của commit mới cần xác nhận sau khi push.
 - Có test hồi quy HTTP cho key lỗi Required/binding (kể cả `$.grade`), test rubric cực nhỏ/zero/số âm và test PostgreSQL cho actor bị khóa hoặc không tồn tại gửi payload sai. Validation nghiệp vụ của Create chỉ chạy sau actor/role; toàn bộ test các vòng trước tiếp tục đạt.
 - Có test stale approve/reject sau withdraw/sửa/resubmit giữ nguyên revision, token thời gian khác múi giờ, 400 trước overflow jsonb và lưu được rubric 1e-30. HTTP xác nhận body thiếu token bị chặn và references không lộ nội dung/email; catalog/admin user/AI đều dùng errors key camelCase.
+- Kiểm chu trình create/read/update/read/submit cho cả points và tolerance qua PostgreSQL, gồm giới hạn 1024/1025 ký tự sau chuẩn hóa và token khoa học dài nhưng dạng lưu ngắn. Test JS-millisecond trên timestamp cũ có micro giây, clock cố định qua nhiều lần submit, 404 khi câu riêng tư đang bị khóa và kiểm lại quyền sau archive đồng thời đều đạt.
 
 ## Kiểm tra trước merge
 

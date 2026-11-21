@@ -108,7 +108,9 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
             {
                 QuestionRules.RequireReviewer(actor, question);
                 if (expectedSubmittedAt is null) throw QuestionRules.Invalid("submittedAt");
-                if (question.SubmittedAt != expectedSubmittedAt.Value.UtcDateTime)
+                // Legacy rows may contain microseconds; compare the same UTC millisecond visible to JavaScript Date.
+                if (question.SubmittedAt is not DateTime submittedAt
+                    || submittedAt.Ticks / TimeSpan.TicksPerMillisecond != expectedSubmittedAt.Value.UtcDateTime.Ticks / TimeSpan.TicksPerMillisecond)
                     throw new QuestionException(409, "Conflict", "Lượt gửi duyệt đã thay đổi. Hãy tải lại và đọc nội dung trước khi duyệt.");
             }
             if (action == QuestionAction.Archive)
@@ -186,9 +188,11 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         }
     }
 
-    /// <summary>Hold an update lock until commit and refresh tracked state before making a workflow decision.</summary>
+    /// <summary>Reject invisible identifiers before any row lock, then lock, refresh and recheck visibility for concurrent state changes.</summary>
     private async Task<Question> LockQuestionAsync(AuthenticatedUser actor, Guid id, CancellationToken cancellationToken)
     {
+        var visible = await database.Questions.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (visible is null || !QuestionRules.CanRead(actor, visible)) throw Missing();
         var question = await database.Questions.FromSqlInterpolated($"SELECT * FROM questions WHERE id = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken) ?? throw Missing();
         await database.Entry(question).ReloadAsync(cancellationToken);
