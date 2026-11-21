@@ -299,4 +299,62 @@ describe("A10 admin, review, and role navigation screens", () => {
       expect(mocks.apiPost).toHaveBeenCalledWith("/questions/{id}/submit", { params: { path: { id: mocks.searchId } } }),
     );
   });
+
+  it("updates AI review state from PUT even when submit fails and allows 0.1 rubric points", async () => {
+    mocks.auth.me.role = "teacher";
+    const loadedAiEssay = {
+      id: mocks.searchId,
+      subjectId: "s1",
+      topicId: "t1",
+      departmentId: "d1",
+      grade: 10,
+      type: "Essay",
+      difficulty: "Application",
+      stem: "AI essay stem",
+      payload: {
+        modelAnswer: "Model",
+        rubric: [{ criterion: "Fine grain", points: 0.1 }],
+      },
+      explanation: null,
+      status: "Draft",
+      revision: 1,
+      source: "AI",
+      aiVerification: "Agree",
+      aiVerificationNote: null,
+      aiReviewedByAuthor: true,
+      createdBy: { id: mocks.auth.me.id, fullName: "Teacher" },
+      submittedAt: null,
+      createdAt: "2026-11-22T00:00:00.000Z",
+      updatedAt: "2026-11-22T00:00:00.000Z",
+    };
+
+    const updatedAiEssay = {
+      ...loadedAiEssay,
+      stem: "AI essay edited",
+      aiVerification: "NotChecked",
+      aiReviewedByAuthor: false,
+      updatedAt: "2026-11-22T00:05:00.000Z",
+    };
+
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") return { data: loadedAiEssay, error: undefined };
+      if (path === "/subjects") return { data: { items: [{ id: "s1", name: "Toán", departmentId: "d1" }] }, error: undefined };
+      if (path === "/topics") return { data: { items: [{ id: "t1", subjectId: "s1", grade: 10, name: "Chương 1", sortOrder: 1 }] }, error: undefined };
+      return { data: { items: [] }, error: undefined };
+    });
+    mocks.apiPut.mockResolvedValue({ data: updatedAiEssay, error: undefined });
+    mocks.apiPost.mockResolvedValue({ data: undefined, error: { title: "Cần rà soát lại câu AI trước khi gửi duyệt." } });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("AI essay stem")).toBeTruthy());
+    expect(screen.queryByText(messages.questions.markReviewed)).toBeNull();
+
+    fireEvent.change(screen.getByDisplayValue("AI essay stem"), { target: { value: "AI essay edited" } });
+    fireEvent.click(screen.getByText(messages.questions.submit));
+
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut.mock.calls[0][1].body.payload.rubric[0].points).toBe(0.1);
+    await waitFor(() => expect(screen.getByText("Cần rà soát lại câu AI trước khi gửi duyệt.")).toBeTruthy());
+    expect(screen.getByText(messages.questions.markReviewed)).toBeTruthy();
+  });
 });

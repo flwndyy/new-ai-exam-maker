@@ -40,7 +40,15 @@ function initEssayRubric(q?: Question): { criterion: string; points: string }[] 
   return [{ criterion: "", points: "1" }];
 }
 
-function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question }) {
+function QuestionEditorForm({
+  initialQuestion,
+  onFeedback,
+  onError,
+}: {
+  initialQuestion?: Question;
+  onFeedback: (message: string) => void;
+  onError: (message: string) => void;
+}) {
   const q = initialQuestion;
   const id = q?.id ?? null;
   const router = useRouter();
@@ -84,8 +92,6 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
   const [essayRubric, setEssayRubric] = useState(() => initEssayRubric(q));
 
   const [isDirty, setIsDirty] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
@@ -129,10 +135,16 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
     }
     return {
       modelAnswer: essayAnswer,
-      rubric: essayRubric.map((r) => ({
-        criterion: r.criterion.trim() || "Đáp án đúng",
-        points: Number(r.points) || 1,
-      })),
+      rubric: essayRubric.map((r) => {
+        const pts = Number(r.points);
+        if (!Number.isFinite(pts) || pts <= 0) {
+          throw new Error("Điểm tiêu chí phải lớn hơn 0.");
+        }
+        return {
+          criterion: r.criterion.trim() || "Đáp án đúng",
+          points: pts,
+        };
+      }),
     };
   };
 
@@ -161,16 +173,12 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
     mutationFn: persistQuestion,
     onSuccess: (saved) => {
       setIsDirty(false);
-      setErrorMsg(null);
-      setFeedback(vi.questions.savedSuccess);
+      onFeedback(vi.questions.savedSuccess);
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
       void queryClient.invalidateQueries({ queryKey: ["question", saved.id] });
       if (!id) router.replace(`/questions/detail/?id=${saved.id}`);
     },
-    onError: (err: Error) => {
-      setFeedback(null);
-      setErrorMsg(err.message);
-    },
+    onError: (err: Error) => onError(err.message),
   });
 
   const actionMutation = useMutation({
@@ -183,8 +191,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
       }
       // Save unsaved edits before submitting so reviewers never see stale content and edits are not lost.
       if (action === "submit" && isDirty) {
-        await persistQuestion();
+        const saved = await persistQuestion();
         setIsDirty(false);
+        queryClient.setQueryData(["question", saved.id], saved);
+        void queryClient.invalidateQueries({ queryKey: ["questions"] });
       }
       const pathMap = {
         submit: "/questions/{id}/submit",
@@ -197,19 +207,15 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
       return action;
     },
     onSuccess: (result) => {
-      setErrorMsg(null);
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
       if (result === "deleted") {
         router.replace("/questions/");
         return;
       }
-      setFeedback(vi.questions.transitionSuccess);
+      onFeedback(vi.questions.transitionSuccess);
       void queryClient.invalidateQueries({ queryKey: ["question", id] });
     },
-    onError: (err: Error) => {
-      setFeedback(null);
-      setErrorMsg(err.message);
-    },
+    onError: (err: Error) => onError(err.message),
   });
 
   const isOwner = !q || me?.id === q.createdBy.id;
@@ -235,8 +241,6 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           <strong>{vi.questions.reviewNote}:</strong> {q.reviewNote}
         </div>
       )}
-      {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
-      {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
 
       <form
         onSubmit={(e) => {
@@ -508,8 +512,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                   <input
                     required
                     type="number"
-                    step="0.25"
-                    min="0.25"
+                    step="any"
                     value={row.points}
                     onChange={(e) => {
                       setEssayRubric((prev) => prev.map((item, i) => (i === idx ? { ...item, points: e.target.value } : item)));
@@ -633,6 +636,9 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
 
 function QuestionDetailInner() {
   const id = useSearchParams().get("id");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const questionQuery = useQuery({
     queryKey: ["question", id],
     enabled: Boolean(id),
@@ -654,6 +660,9 @@ function QuestionDetailInner() {
         </h1>
       </div>
 
+      {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
+      {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
+
       {id && questionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
 
       {id && questionQuery.isError && (
@@ -673,6 +682,14 @@ function QuestionDetailInner() {
         <QuestionEditorForm
           key={questionQuery.data ? `${questionQuery.data.id}-${questionQuery.data.updatedAt}` : "new"}
           initialQuestion={questionQuery.data}
+          onFeedback={(msg) => {
+            setErrorMsg(null);
+            setFeedback(msg);
+          }}
+          onError={(msg) => {
+            setFeedback(null);
+            setErrorMsg(msg);
+          }}
         />
       )}
     </section>
