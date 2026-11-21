@@ -46,8 +46,17 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
             var subject = await database.Subjects.AsNoTracking().SingleOrDefaultAsync(x => x.Id == input.SubjectId, cancellationToken);
             if (subject is null || subject.DepartmentId != actor.DepartmentId) throw ExamRules.Invalid("subjectId");
             var now = DateTime.UtcNow;
-            var exam = new Exam { Id = Guid.NewGuid(), Title = title, SubjectId = subject.Id, Grade = input.Grade.Value,
-                DepartmentId = subject.DepartmentId, CreatedBy = actor.Id, CreatedAt = now, UpdatedAt = now };
+            var exam = new Exam
+            {
+                Id = Guid.NewGuid(),
+                Title = title,
+                SubjectId = subject.Id,
+                Grade = input.Grade.Value,
+                DepartmentId = subject.DepartmentId,
+                CreatedBy = actor.Id,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
             var version = NewVersion(exam.Id, 1, 45, now);
             database.Exams.Add(exam); database.ExamVersions.Add(version);
             Audit(actor.Id, "Exam", exam.Id, "CreateExam", null, null);
