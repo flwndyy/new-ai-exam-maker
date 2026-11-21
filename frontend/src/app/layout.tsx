@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { AuthGate } from "@/components/auth-gate";
+import { UserMenu } from "@/components/user-menu";
 import { vi } from "@/messages/vi";
 
 import "./globals.css";
@@ -25,9 +27,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/" className="text-sm text-slate-600 hover:text-slate-900">
                 {vi.nav.home}
               </Link>
+              <UserMenu />
             </nav>
           </header>
-          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+          <main className="mx-auto max-w-5xl px-4 py-8">
+            <AuthGate>{children}</AuthGate>
+          </main>
         </Providers>
       </body>
     </html>

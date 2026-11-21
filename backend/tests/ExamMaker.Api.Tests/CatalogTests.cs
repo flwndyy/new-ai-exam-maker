@@ -13,6 +13,18 @@ namespace ExamMaker.Api.Tests;
 public sealed class CatalogTests
 {
     [Fact]
+    // Catalog query binding follows the global JSON error-key convention too.
+    public async Task Catalog_binding_errors_use_json_field_names()
+    {
+        using var app = new CatalogTestFactory(); using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.GetAsync("/api/v1/topics?subjectId=invalid-guid");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty("subjectId", out _));
+    }
+
+    [Fact]
     // Normalize equivalent Unicode spellings and measure length only after trimming/normalization.
     public void Names_use_NFC_and_reject_control_characters()
     {

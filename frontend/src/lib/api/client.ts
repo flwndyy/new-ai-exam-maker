@@ -1,6 +1,6 @@
-import createClient, { type Middleware } from "openapi-fetch";
+import createClient from "openapi-fetch";
 
-import { getAccessToken } from "./auth-token";
+import { createAuthMiddleware } from "./auth-middleware";
 import type { paths } from "./schema";
 
 // Paths in docs/api/openapi.yaml are declared WITHOUT the `/api/v1` prefix (it lives in
@@ -9,15 +9,5 @@ import type { paths } from "./schema";
 // optional override for local development against a separately running backend.
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
-const authMiddleware: Middleware = {
-  async onRequest({ request }) {
-    const token = await getAccessToken();
-    if (token) {
-      request.headers.set("Authorization", `Bearer ${token}`);
-    }
-    return request;
-  },
-};
-
 export const api = createClient<paths>({ baseUrl: API_BASE_URL });
-api.use(authMiddleware);
+api.use(createAuthMiddleware());

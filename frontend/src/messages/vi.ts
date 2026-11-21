@@ -21,6 +21,18 @@ export const vi = {
   common: {
     loading: "Đang tải…",
   },
+  auth: {
+    redirecting: "Đang chuyển tới trang đăng nhập…",
+    completing: "Đang hoàn tất đăng nhập…",
+    callbackFailed: "Đăng nhập không thành công. Vui lòng thử lại.",
+    retry: "Thử lại",
+    deniedTitle: "Tài khoản chưa được cấp quyền hoặc đã bị khóa",
+    deniedBody: "Vui lòng liên hệ quản trị viên của trường để được hỗ trợ.",
+    misconfigured: "Hệ thống chưa được cấu hình đăng nhập. Vui lòng liên hệ quản trị viên.",
+    networkError: "Không kết nối được máy chủ. Vui lòng thử lại.",
+    logout: "Đăng xuất",
+    roles: { teacher: "Giáo viên", head: "Tổ trưởng", admin: "Quản trị" },
+  },
 } as const;
 
 export type Messages = typeof vi;

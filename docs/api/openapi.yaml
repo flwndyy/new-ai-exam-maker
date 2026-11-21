@@ -223,6 +223,7 @@ paths:
       tags: [Questions]
       operationId: getQuestion
       summary: Chi tiết câu hỏi
+      description: Tác giả xem câu của mình; câu Approved dùng chung trong tổ; Head được xem Submitted cùng tổ để duyệt; Admin xem tất cả. Ngoài phạm vi hoặc không tồn tại trả 404.
       responses:
         '200':
           description: OK
@@ -239,7 +240,9 @@ paths:
         Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
         - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
         - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
+          Nếu còn đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
         - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
+        Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
         Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
       requestBody:
         required: true
@@ -263,7 +266,8 @@ paths:
       summary: Xóa câu hỏi
       description: |
         Chỉ người tạo, chỉ câu `Draft`/`Rejected` và **chưa được đề nào tham chiếu**
-        (`409 QuestionReferenced`). Câu đã `Approved` dùng `archive`.
+        (`409 QuestionReferenced`). Liên kết question_set_items được xóa trong cùng transaction trước khi xóa câu,
+        kể cả bộ của người khác. Câu đã `Approved` dùng `archive`.
       responses:
         '204': { description: Đã xóa }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -283,6 +287,7 @@ paths:
         - $ref: '#/components/parameters/Id'
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -314,12 +319,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ApproveRequest' }
+            schema: { $ref: '#/components/schemas/QuestionApproveRequest' }
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -337,7 +343,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/RejectRequest' }
+            schema: { $ref: '#/components/schemas/QuestionRejectRequest' }
       responses:
         '200': { $ref: '#/components/responses/QuestionOk' }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -352,7 +358,8 @@ paths:
       operationId: archiveQuestion
       summary: Lưu trữ câu hỏi
       description: |
-        `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: cùng tổ; Admin: tất cả.
+        `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: của mình hoặc cùng tổ; Admin: tất cả.
+        Còn phiên bản đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; snapshot Approved/Published/Archived không chặn archive nguồn.
         Các đề đã snapshot không bị ảnh hưởng.
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -370,6 +377,7 @@ paths:
       summary: Đánh dấu "Đã rà soát" câu do AI sinh
       description: |
         Đặt `aiReviewedByAuthor=true`. Chỉ người tạo, chỉ câu `source=AI` đang `Draft`/`Rejected`.
+        Nếu cờ đã true thì trả nguyên dữ liệu, không thêm audit hoặc đổi updatedAt.
         Điều kiện bắt buộc trước khi `submit` (context 4.1.2).
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -404,6 +412,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QuestionPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -425,6 +434,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -695,6 +705,7 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /exams/{id}:
     parameters:
@@ -733,6 +744,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /exams/{id}/versions:
     parameters:
@@ -751,7 +763,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [ExamVersions]
@@ -839,6 +853,7 @@ paths:
         - $ref: '#/components/parameters/VersionId'
       responses:
         '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -868,12 +883,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/VersionId'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ApproveRequest' }
       responses:
         '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1499,15 +1515,36 @@ components:
           description: Dùng để tra log; không chứa dữ liệu nhạy cảm.
         errors:
           type: object
-          description: Chỉ có khi `code=ValidationFailed`. Khóa là đường dẫn trường (`payload.options[2].text`).
+          description: Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload), gồm cả catalog, admin user và AI. Lỗi nội dung payload câu hỏi dùng chung key payload, không trả đường dẫn từng phần tử.
           additionalProperties:
             type: array
             items: { type: string }
+        references:
+          $ref: '#/components/schemas/QuestionReferencePage'
         invalidQuestionIds:
           type: array
           description: Chỉ có khi `code=QuestionsNotApproved`.
           items: { type: string, format: uuid }
       additionalProperties: true
+
+    QuestionReferencePage:
+      type: object
+      description: Chỉ có cho 409 QuestionReferenced do sửa/archive; metadata liên hệ chủ đề, không trả nội dung hoặc tiêu đề đề.
+      required: [totalItems, items]
+      properties:
+        totalItems: { type: integer, minimum: 1 }
+        items:
+          type: array
+          maxItems: 20
+          minItems: 1
+          items:
+            type: object
+            required: [examId, versionId, status, createdBy]
+            properties:
+              examId: { type: string, format: uuid }
+              versionId: { type: string, format: uuid }
+              status: { type: string, enum: [Draft, Rejected, Submitted] }
+              createdBy: { $ref: '#/components/schemas/UserRef' }
 
     ErrorCode:
       type: string
@@ -1517,7 +1554,7 @@ components:
         - `SelfReview` (403): tự duyệt nội dung của mình
         - `InvalidStateTransition` (409): thao tác không hợp lệ ở trạng thái hiện tại
         - `AiReviewRequired` (409): câu AI chưa bấm "Đã rà soát"
-        - `QuestionReferenced` (409): câu đang được đề tham chiếu nên không xóa được
+        - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
         - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
         - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
         - `QuotaExceeded` (429) · `RateLimited` (429)
@@ -1677,7 +1714,7 @@ components:
     # ───────────── Payload theo dạng câu (context 8.2) ─────────────
     MultipleChoicePayload:
       type: object
-      description: Đúng 4 phương án A–D, đúng 1 đáp án đúng.
+      description: Đúng 4 phương án theo thứ tự A, B, C, D; đúng 1 đáp án đúng.
       required: [options, correctLabel]
       additionalProperties: false
       properties:
@@ -1691,11 +1728,11 @@ components:
             additionalProperties: false
             properties:
               label: { type: string, enum: [A, B, C, D] }
-              text: { type: string, minLength: 1 }
+              text: { type: string, minLength: 1, maxLength: 10000 }
         correctLabel: { type: string, enum: [A, B, C, D] }
     TrueFalsePayload:
       type: object
-      description: Đúng 4 ý a–d, mỗi ý có đúng/sai.
+      description: Đúng 4 ý theo thứ tự a, b, c, d; mỗi ý có đúng/sai.
       required: [statements]
       additionalProperties: false
       properties:
@@ -1709,11 +1746,11 @@ components:
             additionalProperties: false
             properties:
               label: { type: string, enum: [a, b, c, d] }
-              text: { type: string, minLength: 1 }
+              text: { type: string, minLength: 1, maxLength: 10000 }
               isTrue: { type: boolean }
     ShortAnswerPayload:
       type: object
-      description: ≥ 1 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`.
+      description: 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi thập phân hữu hạn theo dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng, số mũ hoặc phân cách hàng nghìn.
       required: [answerType, acceptedAnswers]
       additionalProperties: false
       properties:
@@ -1721,26 +1758,34 @@ components:
         acceptedAnswers:
           type: array
           minItems: 1
-          items: { type: string, minLength: 1 }
-        unit: { type: [string, 'null'] }
-        tolerance: { type: [number, 'null'], minimum: 0 }
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 10000 }
+        unit: { type: [string, 'null'], maxLength: 10000 }
+        tolerance:
+          type: [number, 'null']
+          minimum: 0
+          description: Dùng chung quy tắc lưu số với points; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Không làm tròn qua decimal.
     EssayPayload:
       type: object
       description: Tổng điểm rubric = điểm câu (khi đưa vào đề).
       required: [modelAnswer, rubric]
       additionalProperties: false
       properties:
-        modelAnswer: { type: string }
+        modelAnswer: { type: string, maxLength: 10000 }
         rubric:
           type: array
           minItems: 1
+          maxItems: 20
           items:
             type: object
             required: [criterion, points]
             additionalProperties: false
             properties:
-              criterion: { type: string, minLength: 1 }
-              points: { type: number, exclusiveMinimum: 0 }
+              criterion: { type: string, minLength: 1, maxLength: 10000 }
+              points:
+                type: number
+                exclusiveMinimum: 0
+                description: Điểm dương theo JSON gốc; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Kiểm cùng quy tắc với tolerance, không giới hạn riêng độ dài token khoa học hoặc làm tròn qua decimal.
     QuestionPayload:
       description: |
         Cấu trúc theo `type` của câu chứa nó. Backend validate `payload` khớp `type`
@@ -1755,6 +1800,7 @@ components:
     # ───────────── Questions ─────────────
     QuestionInput:
       type: object
+      additionalProperties: false
       required: [subjectId, topicId, grade, type, difficulty, stem, payload]
       properties:
         subjectId: { type: string, format: uuid }
@@ -1840,14 +1886,48 @@ components:
               type: array
               items: { $ref: '#/components/schemas/Question' }
 
+    QuestionApproveRequest:
+      type: object
+      required: [submittedAt]
+      additionalProperties: false
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note: { type: [string, 'null'], maxLength: 2000 }
+    QuestionRejectRequest:
+      type: object
+      additionalProperties: false
+      required: [note, submittedAt]
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Lý do từ chối — bắt buộc.
+
     ApproveRequest:
       type: object
+      required: [submittedAt]
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note: { type: [string, 'null'], maxLength: 2000 }
     RejectRequest:
       type: object
-      required: [note]
+      required: [note, submittedAt]
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
         note:
           type: string
           minLength: 1
@@ -2035,10 +2115,12 @@ components:
         durationMinutes: { type: integer, minimum: 1, maximum: 600 }
         items:
           type: array
+          maxItems: 200
           description: Thứ tự mảng = `sortOrder`. Không trùng `sourceQuestionId`.
           items: { $ref: '#/components/schemas/ExamVersionItemInput' }
     ExamVersionItem:
       type: object
+      description: Item giữ metadata liên kết/điểm; nội dung trả null khi người xem không có quyền đọc nguồn Draft/Rejected hoặc bản Archived không có snapshot đầy đủ. Xem warnings của phiên bản.
       required: [sortOrder, points, sourceQuestionId, sourceRevision, type, difficulty, stem, payload]
       properties:
         sortOrder: { type: integer, minimum: 1 }
@@ -2051,11 +2133,20 @@ components:
           type: [integer, 'null']
           description: |
             Chỉ có khi `Draft`/`Rejected`: `revision` hiện tại của câu nguồn; khác `sourceRevision` → cảnh báo.
-            Từ `Submitted` trở đi luôn `null`.
-        type: { $ref: '#/components/schemas/QuestionType' }
-        difficulty: { $ref: '#/components/schemas/Difficulty' }
-        stem: { type: string, description: 'Nội dung hiện tại (Draft) hoặc `stem_snapshot`.' }
-        payload: { $ref: '#/components/schemas/QuestionPayload' }
+            Null khi nội dung nguồn không được phép xem, hoặc khi dùng snapshot.
+        type:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionType'
+            - type: 'null'
+        difficulty:
+          oneOf:
+            - $ref: '#/components/schemas/Difficulty'
+            - type: 'null'
+        stem: { type: [string, 'null'], description: 'Nội dung được phép đọc hiện tại hoặc snapshot; null nếu không khả dụng.' }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionPayload'
+            - type: 'null'
         explanation: { type: [string, 'null'] }
     ExamVersionSummary:
       type: object
@@ -2078,7 +2169,7 @@ components:
         questionCount: { type: integer, minimum: 0 }
         contentHash:
           type: [string, 'null']
-          description: Chỉ có từ `Submitted` trở đi.
+          description: Null khi Draft/Rejected hoặc snapshot chưa đầy đủ; các trạng thái còn lại trả hash của snapshot được trả về.
         submittedAt: { type: [string, 'null'], format: date-time }
         reviewedBy:
           oneOf:
