@@ -11,9 +11,11 @@ using ExamMaker.Infrastructure.Catalog;
 using ExamMaker.Infrastructure.Persistence;
 using ExamMaker.Infrastructure.Questions;
 using ExamMaker.Infrastructure.Users;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Metadata;
 using Serilog;
+using System.Net;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -77,9 +79,18 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
 });
 builder.Services.AddHealthChecks();
 builder.Services.AddExamMakerAuthentication(builder.Configuration);
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Nginx must normalize CloudFront-Viewer-Address to one client hop first.
+    options.ForwardLimit = 1;
+    options.KnownProxies.Add(IPAddress.Loopback);
+});
 
 var app = builder.Build();
 
+// Only the local Nginx reverse proxy is trusted to supply forwarded headers.
+app.UseForwardedHeaders();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();

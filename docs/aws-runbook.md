@@ -87,6 +87,8 @@ Hướng dẫn thao tác Console và checklist chi tiết: [aws-o3-ec2-ssm.md](a
 
 ### O4 — Domain, DNS, Nginx và TLS
 
+Hướng dẫn thao tác Console/SSM và checklist chi tiết: [aws-o4-domain-https.md](aws-o4-domain-https.md).
+
 1. Tạo DNS record:
    - `origin.<domain>` → Elastic IP của EC2;
    - `app.<domain>` → CloudFront alias sau khi O5 tạo distribution.
@@ -122,8 +124,9 @@ Hướng dẫn thao tác Console và checklist chi tiết: [aws-o3-ec2-ssm.md](a
      `systemctl start certbot-renew.service`;
    - deploy hook chỉ chạy sau khi Certbot gia hạn thành công, chạy `nginx -t` rồi reload Nginx.
 7. Chạy `nginx -t && systemctl reload nginx`. Kiểm tra request trực tiếp thiếu `X-Origin-Verify` nhận `403`. CloudFront sẽ gửi header
-   secret ở O5; Nginx xóa header này trước khi proxy sang Kestrel để secret không lọt vào
-   application log/exception dump.
+   secret và `CloudFront-Viewer-Address` ở O5; Nginx chuẩn hóa địa chỉ viewer thành một
+   `X-Forwarded-For` duy nhất rồi xóa header secret trước khi proxy sang Kestrel để secret
+   không lọt vào application log/exception dump.
 
 ### O5 — S3 và CloudFront
 
