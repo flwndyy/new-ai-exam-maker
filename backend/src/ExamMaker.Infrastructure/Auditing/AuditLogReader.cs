@@ -37,7 +37,9 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
             if (actor.DepartmentId is not Guid deptId)
                 throw new AuditException(403, "Forbidden", "Trưởng bộ môn chưa được gán tổ chuyên môn.");
 
-            logs = FilterByDepartment(logs, deptId);
+            // Only entries explicitly scoped to the head's department are visible;
+            // departmentless entries (e.g., admin provisioning or legacy unresolvable rows) remain admin-only.
+            logs = logs.Where(log => log.DepartmentId == deptId);
         }
 
         if (entityType is not null)
@@ -80,22 +82,6 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
 
         return new AuditLogPage(query.Page, query.PageSize, totalItems, totalPages, items);
     }
-
-    /// <summary>Restrict audit logs to entities belonging to the head's department using the immutable event department snapshot (with live-table fallback only for pre-migration rows without DepartmentId).</summary>
-    private IQueryable<AuditLog> FilterByDepartment(IQueryable<AuditLog> logs, Guid deptId) =>
-        logs.Where(log =>
-            log.DepartmentId == deptId
-            || (log.DepartmentId == null && (
-                (log.EntityType == "Question" && database.Questions.Any(q => q.Id == log.EntityId && q.DepartmentId == deptId))
-                || (log.EntityType == "Exam" && database.Exams.Any(e => e.Id == log.EntityId && e.DepartmentId == deptId))
-                || (log.EntityType == "ExamVersion" && database.ExamVersions.Any(v => v.Id == log.EntityId && v.Exam!.DepartmentId == deptId))
-                || (log.EntityType == "QuestionSet" && database.QuestionSetItems.Any(i => i.QuestionSetId == log.EntityId && i.Question!.DepartmentId == deptId))
-                || (log.EntityType == "AiJob" && database.AiGenerationJobs.Any(j =>
-                    j.Id == log.EntityId && database.Users.Any(u => u.Id == j.RequestedBy && u.DepartmentId == deptId)))
-                || (log.EntityType == "User" && database.Users.Any(u => u.Id == log.EntityId && u.DepartmentId == deptId))
-                || (log.EntityType == "Department" && log.EntityId == deptId)
-                || (log.EntityType == "Subject" && database.Subjects.Any(s => s.Id == log.EntityId && s.DepartmentId == deptId))
-                || (log.EntityType == "Topic" && database.Topics.Any(t => t.Id == log.EntityId && t.Subject!.DepartmentId == deptId)))));
 
     /// <summary>Validate pagination, offset overflow, entityType enum, and UTC time bounds before querying the database.</summary>
     private static (string? EntityType, string? Action, DateTime? FromUtc, DateTime? ToUtc, int Offset) ValidateQuery(AuditLogQuery query)

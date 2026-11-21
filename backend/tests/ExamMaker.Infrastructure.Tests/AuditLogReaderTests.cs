@@ -5,6 +5,11 @@ using ExamMaker.Domain.Exams;
 using ExamMaker.Domain.Questions;
 using ExamMaker.Domain.Users;
 using ExamMaker.Infrastructure.Auditing;
+using ExamMaker.Infrastructure.Questions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ExamMaker.Infrastructure.Tests;
 
@@ -175,5 +180,93 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
             To: new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero)), CancellationToken.None));
         Assert.Equal(400, badRange.StatusCode);
         Assert.Equal("ValidationFailed", badRange.Code);
+    }
+
+    [PostgresFact]
+    public async Task Departmentless_admin_logs_stay_hidden_from_head_even_if_user_later_moves_to_department()
+    {
+        await SeedAsync();
+        await using var db = fixture.CreateContext();
+        var movedAdmin = new User
+        {
+            Id = Guid.NewGuid(),
+            CognitoSub = "moved-admin",
+            Email = "movedadmin@example.invalid",
+            FullName = "Moved Admin",
+            Role = Roles.Admin,
+            DepartmentId = null
+        };
+        var adminProvisionLogId = Guid.NewGuid();
+        db.Users.Add(movedAdmin);
+        db.AuditLogs.Add(new AuditLog
+        {
+            Id = adminProvisionLogId,
+            ActorId = admin,
+            EntityType = "User",
+            EntityId = movedAdmin.Id,
+            DepartmentId = null,
+            Action = "CreateUser",
+            FromStatus = null,
+            ToStatus = "Active",
+            Note = "Administrator provisioned an invited account.",
+            CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        // Simulate demoting and assigning the former administrator to DeptB.
+        movedAdmin.Role = Roles.Teacher;
+        movedAdmin.DepartmentId = DeptB;
+        await db.SaveChangesAsync();
+
+        var reader = new AuditLogReader(db);
+        var headBPage = await reader.ListAsync(headB, new AuditLogQuery(), CancellationToken.None);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == adminProvisionLogId);
+
+        var adminPage = await reader.ListAsync(admin, new AuditLogQuery(EntityId: movedAdmin.Id), CancellationToken.None);
+        Assert.Contains(adminPage.Items, x => x.Id == adminProvisionLogId);
+    }
+
+    [PostgresFact]
+    public async Task Migration_backfills_existing_logs_so_head_retains_history_after_post_upgrade_delete()
+    {
+        await using var db = fixture.CreateContext();
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261120071750_AddUserAdministration");
+
+        var localHeadA = Guid.NewGuid();
+        var localTeacherA = Guid.NewGuid();
+        var questionId = Guid.NewGuid();
+        var createLogId = Guid.NewGuid();
+        var updateLogId = Guid.NewGuid();
+        var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active, created_at)
+            VALUES
+                ({localHeadA}, {"sub-head-" + localHeadA}, {"head-" + localHeadA + "@example.invalid"}, {"Local Head A"}, {Roles.Head}, {DeptA}, true, {t0}),
+                ({localTeacherA}, {"sub-teacher-" + localTeacherA}, {"teacher-" + localTeacherA + "@example.invalid"}, {"Local Teacher A"}, {Roles.Teacher}, {DeptA}, true, {t0});
+
+            INSERT INTO questions (id, subject_id, topic_id, grade, department_id, created_by, type, difficulty, stem, payload, status, revision, source, ai_verification, ai_reviewed_by_author, created_at, updated_at)
+            VALUES ({questionId}, {SubjectA}, {TopicA}, 10, {DeptA}, {localTeacherA}, 'MultipleChoice', 'Recognition', 'Pre-migration question', {Payload}::jsonb, 'Draft', 1, 'Manual', 'NotChecked', false, {t0}, {t0});
+
+            INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
+            VALUES
+                ({createLogId}, {localTeacherA}, 'Question', {questionId}, 'CreateQuestion', NULL, 'Draft', 'Manual question; revision=1', {t0}),
+                ({updateLogId}, {localTeacherA}, 'Question', {questionId}, 'UpdateQuestion', 'Draft', 'Draft', 'revision=1->1', {t0.AddMinutes(1)});
+            """);
+
+        // Upgrade to latest migration (AddAuditLogDepartmentId) which must backfill department_id.
+        await db.Database.MigrateAsync();
+
+        // Delete the question after upgrade; Create/Update history must remain visible to Head A.
+        var questions = new QuestionManagement(db, NullLogger<QuestionManagement>.Instance);
+        await questions.DeleteAsync(localTeacherA, questionId, CancellationToken.None);
+
+        var reader = new AuditLogReader(db);
+        var headPage = await reader.ListAsync(localHeadA, new AuditLogQuery(EntityId: questionId), CancellationToken.None);
+        Assert.Equal(3, headPage.TotalItems);
+        Assert.Contains(headPage.Items, x => x.Id == createLogId && x.Action == "CreateQuestion");
+        Assert.Contains(headPage.Items, x => x.Id == updateLogId && x.Action == "UpdateQuestion");
+        Assert.Contains(headPage.Items, x => x.Action == "DeleteQuestion");
     }
 }
