@@ -434,6 +434,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -704,6 +705,7 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /exams/{id}:
     parameters:
@@ -742,6 +744,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /exams/{id}/versions:
     parameters:
@@ -760,7 +763,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [ExamVersions]
@@ -848,6 +853,7 @@ paths:
         - $ref: '#/components/parameters/VersionId'
       responses:
         '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2109,10 +2115,12 @@ components:
         durationMinutes: { type: integer, minimum: 1, maximum: 600 }
         items:
           type: array
+          maxItems: 200
           description: Thứ tự mảng = `sortOrder`. Không trùng `sourceQuestionId`.
           items: { $ref: '#/components/schemas/ExamVersionItemInput' }
     ExamVersionItem:
       type: object
+      description: Item giữ metadata liên kết/điểm; nội dung trả null khi người xem không có quyền đọc nguồn Draft/Rejected hoặc bản Archived không có snapshot đầy đủ. Xem warnings của phiên bản.
       required: [sortOrder, points, sourceQuestionId, sourceRevision, type, difficulty, stem, payload]
       properties:
         sortOrder: { type: integer, minimum: 1 }
@@ -2125,11 +2133,20 @@ components:
           type: [integer, 'null']
           description: |
             Chỉ có khi `Draft`/`Rejected`: `revision` hiện tại của câu nguồn; khác `sourceRevision` → cảnh báo.
-            Từ `Submitted` trở đi luôn `null`.
-        type: { $ref: '#/components/schemas/QuestionType' }
-        difficulty: { $ref: '#/components/schemas/Difficulty' }
-        stem: { type: string, description: 'Nội dung hiện tại (Draft) hoặc `stem_snapshot`.' }
-        payload: { $ref: '#/components/schemas/QuestionPayload' }
+            Null khi nội dung nguồn không được phép xem, hoặc khi dùng snapshot.
+        type:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionType'
+            - type: 'null'
+        difficulty:
+          oneOf:
+            - $ref: '#/components/schemas/Difficulty'
+            - type: 'null'
+        stem: { type: [string, 'null'], description: 'Nội dung được phép đọc hiện tại hoặc snapshot; null nếu không khả dụng.' }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionPayload'
+            - type: 'null'
         explanation: { type: [string, 'null'] }
     ExamVersionSummary:
       type: object
@@ -2152,7 +2169,7 @@ components:
         questionCount: { type: integer, minimum: 0 }
         contentHash:
           type: [string, 'null']
-          description: Chỉ có từ `Submitted` trở đi.
+          description: Null khi Draft/Rejected hoặc snapshot chưa đầy đủ; các trạng thái còn lại trả hash của snapshot được trả về.
         submittedAt: { type: [string, 'null'], format: date-time }
         reviewedBy:
           oneOf:

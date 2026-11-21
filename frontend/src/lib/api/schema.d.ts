@@ -1452,6 +1452,7 @@ export interface components {
             /** @description Thứ tự mảng = `sortOrder`. Không trùng `sourceQuestionId`. */
             items: components["schemas"]["ExamVersionItemInput"][];
         };
+        /** @description Item giữ metadata liên kết/điểm; nội dung trả null khi người xem không có quyền đọc nguồn Draft/Rejected hoặc bản Archived không có snapshot đầy đủ. Xem warnings của phiên bản. */
         ExamVersionItem: {
             sortOrder: number;
             points: number;
@@ -1461,14 +1462,14 @@ export interface components {
             sourceRevision: number;
             /**
              * @description Chỉ có khi `Draft`/`Rejected`: `revision` hiện tại của câu nguồn; khác `sourceRevision` → cảnh báo.
-             *     Từ `Submitted` trở đi luôn `null`.
+             *     Null khi nội dung nguồn không được phép xem, hoặc khi dùng snapshot.
              */
             currentSourceRevision?: number | null;
-            type: components["schemas"]["QuestionType"];
-            difficulty: components["schemas"]["Difficulty"];
-            /** @description Nội dung hiện tại (Draft) hoặc `stem_snapshot`. */
-            stem: string;
-            payload: components["schemas"]["QuestionPayload"];
+            type: components["schemas"]["QuestionType"] | null;
+            difficulty: components["schemas"]["Difficulty"] | null;
+            /** @description Nội dung được phép đọc hiện tại hoặc snapshot; null nếu không khả dụng. */
+            stem: string | null;
+            payload: components["schemas"]["QuestionPayload"] | null;
             explanation?: string | null;
         };
         ExamVersionSummary: {
@@ -1489,7 +1490,7 @@ export interface components {
             durationMinutes: number;
             totalPoints: number;
             questionCount: number;
-            /** @description Chỉ có từ `Submitted` trở đi. */
+            /** @description Null khi Draft/Rejected hoặc snapshot chưa đầy đủ; các trạng thái còn lại trả hash của snapshot được trả về. */
             contentHash?: string | null;
             /** Format: date-time */
             submittedAt?: string | null;
@@ -2235,6 +2236,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExamVersionSummaryPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2582,6 +2584,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getExam: {
@@ -2636,6 +2639,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listExamVersions: {
@@ -2663,7 +2667,9 @@ export interface operations {
                     "application/json": components["schemas"]["ExamVersionSummaryPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -2769,6 +2775,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["ExamVersionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
