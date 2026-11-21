@@ -134,7 +134,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [x] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
   - Hoàn thành 20/11/2026: Dựng PostgreSQL 16.13 (`db.t4g.micro`, Single-AZ, private subnet, gp3 20GB, KMS `alias/aws/rds`, backup 3 ngày, `rds.force_ssl=1`). Lưu ConnectionString dạng `SecureString` lên Parameter Store (`/exammaker/dev/ConnectionStrings/ExamMaker`) và metadata (`/exammaker/dev/Rds/*`).
   - Kiểm thử: 15/15 tiêu chí pass trong `infra/rds/verify-rds.sh`; đã chạy thành công kịch bản Infrastructure Restore Drill trong `infra/rds/restore-drill.sh` (chụp snapshot, khôi phục instance test, kiểm tra guardrails và xoá dọn dẹp sạch sẽ qua trap). Kiểm tra toàn vẹn dữ liệu ứng dụng (departments/subjects/topics/users) sẽ tiếp tục thực hiện tại Chặng 3 / O16 sau khi EC2 O3 và migration bundle sẵn sàng. Xem `docs/runbooks/rds.md`.
-- [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+- [x] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+  - Hoàn thành 21/11/2026: Dựng Standard Queue `exammaker-dev-ai-jobs` (`VisibilityTimeout=300s`, Long Polling `20s`, retention 4 ngày, `RedrivePolicy` `maxReceiveCount=3`) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày), bật SSE-SQS ($0). Lưu 4 tham số lên Parameter Store (`/exammaker/dev/Sqs/AiJobsQueueUrl` khớp `Sqs:AiJobsQueueUrl` của B5, `AiJobsQueueArn`, `AiJobsDlqUrl`, `AiJobsDlqArn`).
+  - Kiểm thử: 13/13 tiêu chí (12 check + smoke test gửi/nhận/xóa message) pass trong `infra/sqs/verify-sqs.sh`. Xem `docs/runbooks/sqs.md`.
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).

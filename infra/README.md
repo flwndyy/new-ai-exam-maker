@@ -14,6 +14,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
 - `cognito/`: script dựng và xác minh Cognito User Pool, nhóm người dùng và App Client (Task O9 — xem [`../docs/runbooks/cognito.md`](../docs/runbooks/cognito.md)).
 - `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
+- `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).
 
 ## Quy tắc placeholder
 
