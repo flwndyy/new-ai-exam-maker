@@ -12,6 +12,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
 - `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
+- `budgets/`: script thiết lập và kiểm tra cảnh báo ngân sách AWS Budgets $200 (Task O14 — xem [`../docs/runbooks/budgets.md`](../docs/runbooks/budgets.md)).
 
 ## Quy tắc placeholder
 

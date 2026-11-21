@@ -135,7 +135,9 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 - [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
-- [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
+- [x] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
+  - Hoàn thành 21/11/2026: Dựng Cost Budget `exammaker-200usd-budget` ($200 USD, chu kỳ `QUARTERLY`, miễn phí $0) với `IncludeCredit=false` và `IncludeRefund=false` để đo chính xác mức tiêu thụ $200 AWS credit; cấu hình đủ 4 ngưỡng cảnh báo email (`ACTUAL > 50%/80%/100%` + `FORECASTED > 80%`) cho đủ **4/4 thành viên** (không lưu email thật hay Account ID trong repo).
+  - Kiểm thử: 10/10 tiêu chí pass với `MIN_SUBSCRIBERS=4 ./infra/budgets/verify-budgets.sh` (kiểm tra idempotency, cập nhật `UPDATE_BUDGET=1`, giới hạn $200, loại trừ Credit/Refund, đủ 4 email subscriber ở cả 4 ngưỡng). Xem `docs/runbooks/budgets.md`.
 - [ ] O15. CI/CD **backend** (E8): build/publish theo kiến trúc đã chọn, giải nén vào `/opt/exammaker/releases/<id>`, đổi symlink, restart systemd (API + Worker), kiểm tra health, giữ N bản để rollback; **EF migration bundle** chạy trước, tương thích ngược, snapshot RDS thủ công trước migration lớn. *Cần A1.*
 - [ ] O16. Dọn tài nguyên sau demo: snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng.
 
