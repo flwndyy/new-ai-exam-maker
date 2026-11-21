@@ -133,13 +133,15 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 ## OPS-2 — Dữ liệu, danh tính, giám sát, chi phí (@TranGiaBao2005)
 
 - [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
-- [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
+- [x] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
+  - Hoàn thành 20/11/2026: Dựng PostgreSQL 16.13 (`db.t4g.micro`, Single-AZ, private subnet, gp3 20GB, KMS `alias/aws/rds`, backup 3 ngày, `rds.force_ssl=1`). Lưu ConnectionString dạng `SecureString` lên Parameter Store (`/exammaker/dev/ConnectionStrings/ExamMaker`) và metadata (`/exammaker/dev/Rds/*`).
+  - Kiểm thử: 15/15 tiêu chí pass trong `infra/rds/verify-rds.sh`; đã chạy thành công kịch bản Infrastructure Restore Drill trong `infra/rds/restore-drill.sh` (chụp snapshot, khôi phục instance test, kiểm tra guardrails và xoá dọn dẹp sạch sẽ qua trap). Kiểm tra toàn vẹn dữ liệu ứng dụng (departments/subjects/topics/users) sẽ tiếp tục thực hiện tại Chặng 3 / O16 sau khi EC2 O3 và migration bundle sẵn sàng. Xem `docs/runbooks/rds.md`.
 - [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
 - [ ] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
 - [ ] O15. CI/CD **backend** (E8): build/publish theo kiến trúc đã chọn, giải nén vào `/opt/exammaker/releases/<id>`, đổi symlink, restart systemd (API + Worker), kiểm tra health, giữ N bản để rollback; **EF migration bundle** chạy trước, tương thích ngược, snapshot RDS thủ công trước migration lớn. *Cần A1.*
-- [ ] O16. Dọn tài nguyên sau demo: snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng.
+- [ ] O16. **Thử khôi phục RDS + kiểm tra dữ liệu** (đếm 4/4/82 departments/subjects/topics, `users`, `__EFMigrationsHistory` qua EC2 SSM) trước demo; dọn tài nguyên sau demo (snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng).
 
 ---
 

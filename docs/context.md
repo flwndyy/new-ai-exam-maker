@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.12** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.13** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -304,10 +304,16 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 - **Behavior `/api/*`**:
   - Allowed methods: `GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE`.
   - Cache policy: **`CachingDisabled`** — không cache dữ liệu riêng tư.
-  - Origin request policy: **`AllViewerExceptHostHeader`** (chuyển tiếp `Authorization`, query, header; không chuyển `Host` để khớp chứng chỉ/`server_name` của origin).
+  - Origin request policy: **custom policy bắt buộc**; chuyển tiếp `Authorization`, query và
+    các header API cần thiết, đặc biệt `CloudFront-Viewer-Address`; **không chuyển tiếp
+    `Host`** để khớp chứng chỉ/`server_name` của origin. Không dùng managed policy thay thế
+    nếu chưa xác minh policy đó có `CloudFront-Viewer-Address`.
   - Origin read timeout mặc định đủ vì tác vụ AI chạy async; không cho API request dài.
   - Nginx đặt `X-Forwarded-For/Proto`; .NET bật `ForwardedHeaders` và chỉ tin Nginx.
-- **Behavior mặc định (`/*`)**: S3 origin, cache bình thường; file có hash trong tên cache lâu, HTML cache ngắn; invalidate khi deploy.
+- **Behavior frontend**: S3 origin qua OAC. Behavior mặc định `/*` dùng cache policy HTML
+  ngắn (min `0`, default `60`, max `300` giây) và CloudFront Function rewrite route. Hai
+  behavior `/_next/static/*` và `/assets/*` dùng cache policy asset lâu (TTL tối đa
+  `31536000` giây) cho file có hash trong tên. Invalidate khi deploy.
 - Một domain cho cả web và API → không cần cấu hình CORS phức tạp.
 
 ### 5.4 Các quyết định kiến trúc khác
@@ -338,7 +344,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 | EBS `gp3` 30 GB                            | 30 GB × $0.096/GB-tháng                                                                         | $2.88                                          | 2        | $5.76              |
 | IPv4 công khai / Elastic IP                | 1 EIP × $0.005/giờ × 730 giờ (tính cả khi dừng EC2)                                             | $3.65                                          | 2        | $7.30              |
 | RDS PostgreSQL (`db.t4g.micro`, Single-AZ) | $0.020/giờ × 480 giờ (07:00–23:00)                                                              | $9.60                                          | 2        | $19.20             |
-| RDS storage (`gp3` 20 GB) + backup         | 20 GB × $0.138 + 5 GB manual snapshot × $0.095 (auto backup ≤ 20 GB free)                       | $3.24                                          | 2        | $6.48              |
+| RDS storage (`gp3` 20 GB) + backup         | 20 GB × $0.138 + 5 GB manual snapshot × $0.095 (auto backup ≤ 20 GB free; trần autoscaling max 40 GB) | $3.24                                          | 2        | $6.48              |
 | CloudFront                                 | Always Free (≤ 1 TB data out + 10M HTTPS requests/tháng; demo < 10 GB)                          | $0.00                                          | 2        | $0.00              |
 | S3                                         | ≤ 5 GB × $0.025/GB + ~50,000 PUT/GET requests                                                   | $0.40                                          | 2        | $0.80              |
 | Cognito                                    | Always Free (≤ 10,000 MAU; quy mô dự án < 100 user)                                             | $0.00                                          | 2        | $0.00              |
@@ -476,6 +482,17 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 - **Màn hình duyệt**: hiển thị câu/đề + checklist duyệt + cờ `ai_verification`, nhập lý do khi từ chối.
 - **Xem trước & xuất**: hai chế độ riêng (đề học sinh / đáp án), CSS in, KaTeX.
 
+#### Chi tiết triển khai B2
+
+- **Nơi lưu token (phương án A)**: access token chỉ nằm trong bộ nhớ JS; refresh token nằm trong `sessionStorage` (key `exammaker.auth.refresh`), dữ liệu đăng nhập tạm (state, PKCE verifier, trang cần quay lại) ở `exammaker.auth.pending` và bị xóa ngay khi dùng. Không dùng `localStorage`, URL hay log. Mỗi tab có một phiên riêng, đóng tab là mất phiên.
+- **Không dùng ID token và `nonce`**: frontend không lưu/giải mã ID token; hồ sơ lấy từ `GET /me` bằng access token. Chống giả mạo callback bằng `state` + PKCE (S256). Scope `openid email profile`; `redirect_uri` = `<origin>/auth/callback/`, `logout_uri` = `<origin>/`.
+- **Làm mới token**: chủ động khi access token còn ≤ 5 phút, single-flight. Chỉ kết thúc phiên (`signedOut`) khi endpoint token trả 4xx dứt khoát (không tính 429) hoặc khi refresh token đã mất khỏi `sessionStorage`; lỗi mạng/429/5xx giữ phiên và dùng token đang có cho đến khi hết hạn. Mỗi request tới token endpoint (đổi code, làm mới) có timeout 10 giây; hết giờ được xử lý như lỗi mạng tạm thời.
+- **Quy tắc 401** (khớp A3): refresh một lần, gọi lại một lần. Refresh bị từ chối dứt khoát → `signedOut` → tự đăng nhập lại. Refresh được mà gọi lại vẫn 401 → trang `denied` (liên hệ quản trị viên), **không** tự đăng nhập lại để tránh vòng lặp. 403 không đụng đến phiên.
+- **Đăng xuất**: xóa phiên → xóa cache TanStack Query → thu hồi refresh token (best effort, chờ tối đa 5 giây) → điều hướng tới `/logout` của Cognito.
+- **CSP**: static export không có header nên `frontend/scripts/inject-csp.mjs` chèn `<meta http-equiv="Content-Security-Policy">` vào mọi file HTML sau `next build`, `script-src` chỉ có `'self'` và hash sha256 của script inline (không `'unsafe-inline'`/`'unsafe-eval'`). `next dev` không có CSP.
+- **Header đề xuất cho O5** (CloudFront Response Headers Policy trên behavior `/*`): `Content-Security-Policy: frame-ancestors 'none'` (meta CSP không hỗ trợ `frame-ancestors`), `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
+- Cấu hình build-time `NEXT_PUBLIC_COGNITO_DOMAIN`, `NEXT_PUBLIC_COGNITO_CLIENT_ID` (tuỳ chọn `NEXT_PUBLIC_API_BASE_URL`) lấy từ Parameter Store/OPS, không commit. Chi tiết và checklist smoke test: `docs/b2-auth-frontend.md`.
+
 ---
 
 ## 10. Bảo mật & giám sát
@@ -594,6 +611,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 ## Lịch sử thay đổi
 
+**0.13 — 21/11/2026**
+- Triển khai đăng nhập frontend B2: Authorization Code + PKCE với Cognito, access token trong bộ nhớ, refresh token trong `sessionStorage`, xử lý 401 (`signedOut`/`denied`) và đăng xuất. Bổ sung mục "Chi tiết triển khai B2" ở 9.2 và `docs/b2-auth-frontend.md`.
+- CSP meta sinh lúc build bằng hash script inline; đề xuất header bổ sung cho O5. Chưa xác nhận smoke test Cognito thật (checklist trong `docs/b2-auth-frontend.md`).
+
 **0.12 — 21/11/2026**
 
 - Thống nhất kiểm points/tolerance theo dạng thập phân jsonb sẽ lưu; token lượt duyệt tương thích mili giây JavaScript và tăng qua các lần submit. Kiểm CanRead cả trước và sau khóa câu; bổ sung test chu trình lưu/đọc/submit, timestamp và tranh chấp khóa riêng tư.
@@ -622,6 +643,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 - Triển khai A5: API danh mục, phân quyền admin, phân trang/lọc, ràng buộc FK/unique và audit trong cùng transaction. Không thay schema hoặc seed.
 
 **0.7 — 20/11/2026**
+- Triển khai Amazon RDS PostgreSQL 16 (O10): Single-AZ, private subnet, mã hóa KMS, backup tự động 3 ngày, `rds.force_ssl=1`; ghi nhận trần autoscaling RDS 40 GB trong mục 6.
 - Sửa review PR #64: log chẩn đoán an toàn, timeout async/lock có giới hạn, audit đổi quyền, client AWS dùng chung, tối giản Create và tách bootstrap khỏi service API.
 - Triển khai quản lý user A4, đồng bộ Cognito có đền bù/fail-closed, đối soát chỉ đọc và bootstrap admin CLI. Bổ sung created_at và unique email cho users theo hợp đồng API.
 
