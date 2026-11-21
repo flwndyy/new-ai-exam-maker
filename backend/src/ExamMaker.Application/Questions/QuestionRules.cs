@@ -28,15 +28,25 @@ public static class QuestionRules
         if (!Difficulties.Contains(input.Difficulty)) throw Invalid("difficulty");
         var stem = input.Stem?.Trim() ?? "";
         if (stem.Length is < 1 or > 10000 || stem.Contains('\0')) throw Invalid("stem");
-        if (input.Explanation?.Length > 10000 || input.Explanation?.Contains('\0') == true) throw Invalid("explanation");
+        var explanation = NormalizeExplanation(input.Explanation);
+        if (explanation?.Length > 10000 || explanation?.Contains('\0') == true) throw Invalid("explanation");
         QuestionPayloadRules.Validate(input.Type, input.Payload);
-        return input with { Stem = stem, Explanation = NormalizeExplanation(input.Explanation) };
+        return input with { Stem = stem, Explanation = explanation };
     }
 
     /// <summary>Require a live teacher/head owner before editing, deleting or submitting content.</summary>
     public static void RequireOwner(AuthenticatedUser actor, Question question)
     {
         if (!AccessRules.IsOwner(actor, Resource(question))) throw Forbidden();
+    }
+
+    /// <summary>Check reviewer authority and state before comparing a review-round token or applying a decision.</summary>
+    public static void RequireReviewer(AuthenticatedUser actor, Question question)
+    {
+        var access = AccessRules.Review(actor, Resource(question));
+        if (access == ReviewAccess.SelfReview) throw new QuestionException(403, "SelfReview", "Không được tự duyệt câu hỏi.");
+        if (access != ReviewAccess.Allowed) throw Forbidden();
+        if (question.Status != "Submitted") throw InvalidState();
     }
 
     /// <summary>Update content, reopen approved revisions and invalidate AI review flags only when content changes.</summary>
@@ -84,9 +94,7 @@ public static class QuestionRules
     {
         if (action is QuestionAction.Approve or QuestionAction.Reject)
         {
-            var access = AccessRules.Review(actor, Resource(question));
-            if (access == ReviewAccess.SelfReview) throw new QuestionException(403, "SelfReview", "Không được tự duyệt câu hỏi.");
-            if (access != ReviewAccess.Allowed) throw Forbidden();
+            RequireReviewer(actor, question);
         }
         else if (action == QuestionAction.Archive) RequireArchive(actor, question);
         else RequireOwner(actor, question);

@@ -3,7 +3,6 @@ using ExamMaker.Application.Authentication;
 using ExamMaker.Application.Questions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace ExamMaker.Api.Controllers;
 
@@ -72,13 +71,13 @@ public sealed class QuestionsController(IQuestionManagement questions, ICurrentU
     /// <summary>Approve another author's submitted question, optionally recording a review note.</summary>
     [HttpPost("{id:guid}/approve")]
     [Authorize(Roles = Roles.Head + "," + Roles.Admin)]
-    public Task<QuestionView> Approve(Guid id, [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] QuestionReviewInput? input,
+    public Task<QuestionView> Approve(Guid id, QuestionReviewInput input,
         CancellationToken cancellationToken) =>
-        questions.TransitionAsync(currentUser.User!.Id, id, QuestionAction.Approve, input?.Note, cancellationToken);
+        questions.TransitionAsync(currentUser.User!.Id, id, QuestionAction.Approve, input.Note, cancellationToken, input.SubmittedAt);
 
     /// <summary>Reject another author's submitted question with a mandatory reason.</summary>
     [HttpPost("{id:guid}/reject")]
     [Authorize(Roles = Roles.Head + "," + Roles.Admin)]
     public Task<QuestionView> Reject(Guid id, QuestionReviewInput input, CancellationToken cancellationToken) =>
-        questions.TransitionAsync(currentUser.User!.Id, id, QuestionAction.Reject, input.Note, cancellationToken);
+        questions.TransitionAsync(currentUser.User!.Id, id, QuestionAction.Reject, input.Note, cancellationToken, input.SubmittedAt);
 }

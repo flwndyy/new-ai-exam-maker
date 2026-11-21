@@ -10,12 +10,14 @@ public sealed record QuestionInput([Required] Guid? SubjectId, [Required] Guid? 
     [Required] string Stem, JsonElement Payload, string? Explanation = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record QuestionReviewInput(string? Note = null);
+public sealed record QuestionReviewInput([Required] DateTimeOffset? SubmittedAt, string? Note = null);
 public sealed record QuestionQuery(int Page = 1, int PageSize = 20, string? Status = null,
     Guid? SubjectId = null, Guid? TopicId = null, int? Grade = null, string? Type = null,
     string? Difficulty = null, bool Mine = false, Guid? AiJobId = null);
 public sealed record QuestionReviewQuery(int Page = 1, int PageSize = 20, Guid? SubjectId = null, Guid? TopicId = null);
 public sealed record QuestionUser(Guid Id, string FullName);
+public sealed record QuestionExamReference(Guid ExamId, Guid VersionId, string Status, QuestionUser CreatedBy);
+public sealed record QuestionReferencePage(int TotalItems, IReadOnlyList<QuestionExamReference> Items);
 public sealed record QuestionView(Guid Id, Guid SubjectId, Guid TopicId, Guid DepartmentId,
     int Grade, string Type, string Difficulty, string Stem, JsonElement Payload, string? Explanation,
     string Status, int Revision, string Source, Guid? AiJobId, int? AiOrdinal,
@@ -27,11 +29,12 @@ public sealed record QuestionPage(int Page, int PageSize, int TotalItems, int To
 public enum QuestionAction { Submit, Withdraw, Approve, Reject, Archive, MarkReviewed }
 
 public sealed class QuestionException(int statusCode, string code, string message,
-    string? field = null) : Exception(message)
+    string? field = null, QuestionReferencePage? references = null) : Exception(message)
 {
     public int StatusCode { get; } = statusCode;
     public string Code { get; } = code;
     public string? Field { get; } = field;
+    public QuestionReferencePage? References { get; } = references;
 }
 
 /// <summary>Expose bank queries and atomic question mutations without leaking persistence entities to HTTP.</summary>
@@ -42,6 +45,7 @@ public interface IQuestionManagement
     Task<QuestionView> GetAsync(Guid actorId, Guid id, CancellationToken cancellationToken);
     Task<QuestionView> CreateAsync(Guid actorId, QuestionInput input, CancellationToken cancellationToken);
     Task<QuestionView> UpdateAsync(Guid actorId, Guid id, QuestionInput input, CancellationToken cancellationToken);
-    Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken);
+    Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken,
+        DateTimeOffset? expectedSubmittedAt = null);
     Task DeleteAsync(Guid actorId, Guid id, CancellationToken cancellationToken);
 }

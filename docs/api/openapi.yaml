@@ -319,7 +319,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Id'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/QuestionApproveRequest' }
@@ -412,6 +412,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QuestionPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -876,12 +877,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/VersionId'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ApproveRequest' }
       responses:
         '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1507,15 +1509,36 @@ components:
           description: Dùng để tra log; không chứa dữ liệu nhạy cảm.
         errors:
           type: object
-          description: Chỉ có khi `code=ValidationFailed`. Khóa là đường dẫn trường (`payload.options[2].text`).
+          description: Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload.options[2].text), gồm cả catalog, admin user và AI.
           additionalProperties:
             type: array
             items: { type: string }
+        references:
+          $ref: '#/components/schemas/QuestionReferencePage'
         invalidQuestionIds:
           type: array
           description: Chỉ có khi `code=QuestionsNotApproved`.
           items: { type: string, format: uuid }
       additionalProperties: true
+
+    QuestionReferencePage:
+      type: object
+      description: Chỉ có cho 409 QuestionReferenced do sửa/archive; metadata liên hệ chủ đề, không trả nội dung hoặc tiêu đề đề.
+      required: [totalItems, items]
+      properties:
+        totalItems: { type: integer, minimum: 1 }
+        items:
+          type: array
+          maxItems: 20
+          minItems: 1
+          items:
+            type: object
+            required: [examId, versionId, status, createdBy]
+            properties:
+              examId: { type: string, format: uuid }
+              versionId: { type: string, format: uuid }
+              status: { type: string, enum: [Draft, Rejected, Submitted] }
+              createdBy: { $ref: '#/components/schemas/UserRef' }
 
     ErrorCode:
       type: string
@@ -1525,7 +1548,7 @@ components:
         - `SelfReview` (403): tự duyệt nội dung của mình
         - `InvalidStateTransition` (409): thao tác không hợp lệ ở trạng thái hiện tại
         - `AiReviewRequired` (409): câu AI chưa bấm "Đã rà soát"
-        - `QuestionReferenced` (409): câu đang được đề tham chiếu nên không xóa được
+        - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
         - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
         - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
         - `QuotaExceeded` (429) · `RateLimited` (429)
@@ -1753,7 +1776,7 @@ components:
               points:
                 type: number
                 exclusiveMinimum: 0
-                description: Điểm dương theo số JSON gốc; không làm tròn về độ chính xác decimal khi kiểm dấu.
+                description: Điểm dương theo JSON gốc; token số tối đa 1024 ký tự và số mũ tường minh trong [-1000, 1000] để phù hợp jsonb numeric. Không làm tròn qua decimal khi kiểm dấu.
     QuestionPayload:
       description: |
         Cấu trúc theo `type` của câu chứa nó. Backend validate `payload` khớp `type`
@@ -1856,14 +1879,23 @@ components:
 
     QuestionApproveRequest:
       type: object
+      required: [submittedAt]
       additionalProperties: false
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
         note: { type: [string, 'null'], maxLength: 2000 }
     QuestionRejectRequest:
       type: object
       additionalProperties: false
-      required: [note]
+      required: [note, submittedAt]
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
         note:
           type: string
           minLength: 1
@@ -1872,12 +1904,21 @@ components:
 
     ApproveRequest:
       type: object
+      required: [submittedAt]
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
         note: { type: [string, 'null'], maxLength: 2000 }
     RejectRequest:
       type: object
-      required: [note]
+      required: [note, submittedAt]
       properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
         note:
           type: string
           minLength: 1

@@ -13,6 +13,40 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class QuestionsHttpTests
 {
+    [Theory]
+    [InlineData("approve", "{}")]
+    [InlineData("reject", "{\"note\":\"Reason\"}")]
+    [InlineData("approve", "{\"submittedAt\":\"invalid\"}")]
+    [InlineData("reject", "{\"submittedAt\":\"invalid\",\"note\":\"Reason\"}")]
+    // Every review decision must identify the submission round; missing or malformed tokens never reach the service.
+    public async Task Review_bodies_require_a_valid_submission_time(string action, string body)
+    {
+        using var app = new QuestionsTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = "head" };
+        using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PostAsync($"/api/v1/questions/{app.Management.View.Id}/{action}", new StringContent(body, Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty("submittedAt", out _)); Assert.Equal(0, app.Management.Calls);
+    }
+
+    [Fact]
+    // A source author gets contact metadata for blockers without disclosing the exam's title, questions or email addresses.
+    public async Task Reference_conflicts_include_only_documented_contact_metadata()
+    {
+        using var app = new QuestionsTestFactory();
+        app.Management.Failure = new(409, "QuestionReferenced", "Reference conflict", references:
+            new(1, [new(Guid.NewGuid(), Guid.NewGuid(), "Draft", new(AuthTestFactory.Teacher.Id, "Synthetic owner"))]));
+        using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PutAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}", app.Management.Input);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var reference = problem.GetProperty("references").GetProperty("items")[0];
+        Assert.Equal(4, reference.EnumerateObject().Count());
+        Assert.Equal("Synthetic owner", reference.GetProperty("createdBy").GetProperty("fullName").GetString());
+        Assert.Equal(2, reference.GetProperty("createdBy").EnumerateObject().Count());
+    }
+
     [Fact]
     // Exercise real routing, JSON contract, actor propagation and every workflow endpoint through JWT middleware.
     public async Task Question_routes_dispatch_verified_actors_and_serialize_the_OpenAPI_shape()
@@ -35,8 +69,10 @@ public sealed class QuestionsHttpTests
             Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/v1/questions/{app.Management.View.Id}/{action}", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync("/api/v1/questions/" + app.Management.View.Id)).StatusCode);
         app.Directory.User = AuthTestFactory.Teacher with { Role = "head" };
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/v1/questions/{app.Management.View.Id}/approve", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/reject", new { note = "Synthetic reason" })).StatusCode);
+        var submittedAt = DateTimeOffset.UtcNow;
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/approve", new { submittedAt })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/reject", new { submittedAt, note = "Synthetic reason" })).StatusCode);
+        Assert.Equal(submittedAt, app.Management.ExpectedSubmittedAt);
         Assert.Equal("Synthetic reason", app.Management.Note);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/v1/review/questions?page=1&pageSize=5")).StatusCode);
     }
@@ -116,7 +152,7 @@ public sealed class QuestionsHttpTests
         using var client = app.CreateClient();
         client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
         using var response = await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/{action}",
-            new { note = "Synthetic reason", unexpected = true });
+            new { submittedAt = DateTimeOffset.UtcNow, note = "Synthetic reason", unexpected = true });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(0, app.Management.Calls);
     }
@@ -207,6 +243,7 @@ public sealed class FakeQuestions : IQuestionManagement
     public QuestionQuery? Query { get; private set; }
     public QuestionException? Failure { get; set; }
     public bool ValidateInputs { get; set; }
+    public DateTimeOffset? ExpectedSubmittedAt { get; private set; }
     private void Capture(Guid actor) { Calls++; Actor = actor; if (Failure is not null) throw Failure; }
     public Task<QuestionPage> ListAsync(Guid actorId, QuestionQuery query, CancellationToken cancellationToken)
     { Capture(actorId); Query = query; return Task.FromResult(new QuestionPage(query.Page, query.PageSize, 1, 1, [View])); }
@@ -216,7 +253,8 @@ public sealed class FakeQuestions : IQuestionManagement
     public Task<QuestionView> CreateAsync(Guid actorId, QuestionInput input, CancellationToken cancellationToken)
     { Capture(actorId); if (ValidateInputs) QuestionRules.Validate(input); return Task.FromResult(View); }
     public Task<QuestionView> UpdateAsync(Guid actorId, Guid id, QuestionInput input, CancellationToken cancellationToken) { Capture(actorId); return Task.FromResult(View); }
-    public Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken)
-    { Capture(actorId); Note = note; return Task.FromResult(View); }
+    public Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken,
+        DateTimeOffset? expectedSubmittedAt = null)
+    { Capture(actorId); Note = note; ExpectedSubmittedAt = expectedSubmittedAt; return Task.FromResult(View); }
     public Task DeleteAsync(Guid actorId, Guid id, CancellationToken cancellationToken) { Capture(actorId); return Task.CompletedTask; }
 }

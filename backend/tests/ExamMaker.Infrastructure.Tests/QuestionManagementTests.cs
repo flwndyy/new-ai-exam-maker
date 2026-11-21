@@ -55,7 +55,9 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     private async Task<QuestionView> ActAsync(Guid actor, Guid id, QuestionAction action, string? note = null)
     {
         await using var db = fixture.CreateContext();
-        return await Service(db).TransitionAsync(actor, id, action, note, default);
+        var submittedAt = await db.Questions.AsNoTracking().Where(x => x.Id == id).Select(x => x.SubmittedAt).SingleAsync();
+        return await Service(db).TransitionAsync(actor, id, action, note, default,
+            submittedAt is DateTime at ? new DateTimeOffset(at) : null);
     }
 
     [PostgresFact]
@@ -637,6 +639,10 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             {
                 var error = await Assert.ThrowsAsync<QuestionException>(() => ActAsync(actor, q.Id, QuestionAction.Archive));
                 Assert.Equal(409, error.StatusCode); Assert.Equal("QuestionReferenced", error.Code);
+                Assert.Equal(1, error.References!.TotalItems);
+                var reference = Assert.Single(error.References.Items);
+                Assert.Equal(version.Id, reference.VersionId); Assert.Equal(state, reference.Status);
+                Assert.Equal(otherHead, reference.CreatedBy.Id); Assert.Equal("Synthetic head", reference.CreatedBy.FullName);
             }
             Assert.Equal("Approved", visible.Status); Assert.Equal(1, visible.Revision); Assert.Equal(q.Stem, visible.Stem);
             Assert.Equal(3, await verify.AuditLogs.CountAsync(x => x.EntityId == q.Id));
@@ -736,6 +742,60 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         var validation = await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, invalid, default));
         Assert.Equal(400, validation.StatusCode); Assert.Equal("payload", validation.Field);
         Assert.False(await db.Questions.AnyAsync()); Assert.False(await db.AuditLogs.AnyAsync());
+    }
+
+    [PostgresFact]
+    // A stale review tab cannot approve or reject unseen content after withdrawal, editing and resubmission at the same revision.
+    public async Task Review_decisions_require_the_submission_round_that_was_read()
+    {
+        await SeedAsync();
+        foreach (var action in new[] { QuestionAction.Approve, QuestionAction.Reject })
+        {
+            var q = await CreateAsync(); var first = await ActAsync(owner, q.Id, QuestionAction.Submit);
+            await ActAsync(owner, q.Id, QuestionAction.Withdraw);
+            await using (var edit = fixture.CreateContext()) await Service(edit).UpdateAsync(owner, q.Id, Input("Unseen replacement"), default);
+            var current = await ActAsync(owner, q.Id, QuestionAction.Submit);
+            Assert.Equal(first.Revision, current.Revision); Assert.NotEqual(first.SubmittedAt, current.SubmittedAt);
+            await using var db = fixture.CreateContext();
+            var missing = await Assert.ThrowsAsync<QuestionException>(() => Service(db).TransitionAsync(head, q.Id, action, "Reason", default));
+            Assert.Equal(400, missing.StatusCode); Assert.Equal("submittedAt", missing.Field);
+            var stale = await Assert.ThrowsAsync<QuestionException>(() => Service(db).TransitionAsync(head, q.Id, action, "Reason", default,
+                new DateTimeOffset(first.SubmittedAt!.Value)));
+            Assert.Equal(409, stale.StatusCode); Assert.Equal("Conflict", stale.Code);
+            Assert.Equal("Submitted", (await db.Questions.AsNoTracking().SingleAsync(x => x.Id == q.Id)).Status);
+            Assert.False(await db.AuditLogs.AnyAsync(x => x.EntityId == q.Id && (x.Action == "ApproveQuestion" || x.Action == "RejectQuestion")));
+            var result = await Service(db).TransitionAsync(head, q.Id, action, "Reason", default,
+                new DateTimeOffset(current.SubmittedAt!.Value).ToOffset(TimeSpan.FromHours(7)));
+            Assert.Equal(action == QuestionAction.Approve ? "Approved" : "Rejected", result.Status);
+        }
+    }
+
+    [PostgresFact]
+    // Out-of-range JSON numbers fail safely before jsonb parsing; representable small positive rubric values still persist and submit.
+    public async Task Rubric_numeric_limits_return_validation_errors_before_postgres_overflow()
+    {
+        await SeedAsync();
+        foreach (var number in new[] { "1e-20000", "1e200000", "1e-30" })
+        {
+            var input = Input() with
+            {
+                Type = "Essay",
+                Payload = JsonSerializer.Deserialize<JsonElement>(
+                "{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":" + number + "}]}")
+            };
+            await using var db = fixture.CreateContext();
+            if (number != "1e-30")
+            {
+                var error = await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, input, default));
+                Assert.Equal(400, error.StatusCode); Assert.Equal("payload", error.Field);
+            }
+            else
+            {
+                var created = await Service(db).CreateAsync(owner, input, default);
+                Assert.Equal(1e-30, created.Payload.GetProperty("rubric")[0].GetProperty("points").GetDouble());
+                Assert.Equal("Submitted", (await ActAsync(owner, created.Id, QuestionAction.Submit)).Status);
+            }
+        }
     }
 
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor

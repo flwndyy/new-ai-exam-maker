@@ -17,6 +17,11 @@ public sealed class QuestionRulesTests
     [InlineData("0e100", false)]
     [InlineData("0.000e-20", false)]
     [InlineData("-0e20", false)]
+    [InlineData("1e-20000", false)]
+    [InlineData("1e200000", false)]
+    [InlineData("1e1001", false)]
+    [InlineData("1e-1001", false)]
+    [InlineData("1e-2147483649", false)]
     // Positive rubric numbers remain valid below decimal precision; exponent digits cannot make zero positive.
     public void Essay_rubric_positivity_uses_the_original_json_number(string number, bool allowed)
     {
@@ -26,6 +31,27 @@ public sealed class QuestionRulesTests
     }
 
     public const string ValidPayload = """{"options":[{"label":"A","text":"One"},{"label":"B","text":"Two"},{"label":"C","text":"Three"},{"label":"D","text":"Four"}],"correctLabel":"A"}""";
+    [Fact]
+    // Lexical numeric precision must not exceed the safe jsonb storage budget even without scientific notation.
+    public void Essay_rejects_oversized_numeric_tokens()
+    {
+        var json = "{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":1" + new string('0', 1024) + "}]}";
+        Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("Essay",
+            JsonSerializer.Deserialize<JsonElement>(json))).Field);
+    }
+
+    [Theory]
+    [InlineData(10000, true)]
+    [InlineData(10001, false)]
+    // Whitespace outside a valid normalized explanation must not count against the stored-text limit.
+    public void Explanation_length_is_checked_after_normalization(int length, bool valid)
+    {
+        var input = new QuestionInput(Guid.NewGuid(), Guid.NewGuid(), 10, "MultipleChoice", "Recognition", "Synthetic",
+            JsonSerializer.Deserialize<JsonElement>(ValidPayload), "  " + new string('x', length) + "\n  ");
+        if (valid) Assert.Equal(new string('x', length), QuestionRules.Validate(input).Explanation);
+        else Assert.Equal("explanation", Assert.Throws<QuestionException>(() => QuestionRules.Validate(input)).Field);
+    }
+
     private static readonly Guid Owner = Guid.NewGuid();
     private static readonly Guid Department = Guid.NewGuid();
     private static AuthenticatedUser Actor(string role, bool own = false, bool sameDepartment = true) =>

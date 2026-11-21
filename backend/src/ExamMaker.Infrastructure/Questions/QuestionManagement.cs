@@ -98,11 +98,19 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     }
 
     /// <summary>Serialize competing review decisions and let Application enforce the workflow and self-review rules.</summary>
-    public async Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken) =>
+    public async Task<QuestionView> TransitionAsync(Guid actorId, Guid id, QuestionAction action, string? note, CancellationToken cancellationToken,
+        DateTimeOffset? expectedSubmittedAt = null) =>
         (await MutateAsync(actorId, async actor =>
         {
             var question = await LockQuestionAsync(actor, id, cancellationToken);
             var before = question.Status;
+            if (action is QuestionAction.Approve or QuestionAction.Reject)
+            {
+                QuestionRules.RequireReviewer(actor, question);
+                if (expectedSubmittedAt is null) throw QuestionRules.Invalid("submittedAt");
+                if (question.SubmittedAt != expectedSubmittedAt.Value.UtcDateTime)
+                    throw new QuestionException(409, "Conflict", "Lượt gửi duyệt đã thay đổi. Hãy tải lại và đọc nội dung trước khi duyệt.");
+            }
             if (action == QuestionAction.Archive)
             {
                 // Preserve the same permission/state error precedence before inspecting exam membership.
@@ -193,14 +201,17 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     {
         // Lock all referencing versions, including frozen ones that could be withdrawn into an editable state.
         // A competing submit locks the version before its source questions; a deadlock is safely retried as Conflict.
-        var states = await database.Database.SqlQuery<string>($"""
-            SELECT v.status AS "Value" FROM exam_versions v
+        var versions = await database.ExamVersions.FromSqlInterpolated($"""
+            SELECT v.* FROM exam_versions v
             WHERE EXISTS (SELECT 1 FROM exam_version_questions i
                 WHERE i.exam_version_id = v.id AND i.source_question_id = {id})
             ORDER BY v.id FOR SHARE OF v
-            """).ToListAsync(cancellationToken);
-        if (states.Any(x => x is "Draft" or "Rejected" or "Submitted"))
-            throw new QuestionException(409, "QuestionReferenced", "Không thể sửa câu đang được đề tham chiếu; hãy gỡ liên kết trước.");
+            """).AsNoTracking().Include(x => x.Exam).ThenInclude(x => x!.Creator).ToListAsync(cancellationToken);
+        var blocking = versions.Where(x => x.Status is "Draft" or "Rejected" or "Submitted").OrderBy(x => x.Id).ToArray();
+        if (blocking.Length > 0)
+            throw new QuestionException(409, "QuestionReferenced", "Không thể sửa câu đang được đề tham chiếu; hãy liên hệ người tạo đề để gỡ liên kết.",
+                references: new(blocking.Length, blocking.Take(20).Select(x => new QuestionExamReference(x.ExamId, x.Id, x.Status,
+                    new QuestionUser(x.Exam!.CreatedBy, x.Exam.Creator!.FullName))).ToArray()));
     }
 
     /// <summary>Validate topic/subject/grade together and derive the immutable department from trusted catalog data.</summary>

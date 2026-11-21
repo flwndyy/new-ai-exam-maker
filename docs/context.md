@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.10** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.11** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -200,6 +200,10 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 
 #### Chi tiết triển khai A6
 
+- Giữ chặn sửa/archive khi đề Draft/Rejected/Submitted tham chiếu. Lỗi 409 QuestionReferenced trả references (totalItems và tối đa 20 items: examId, versionId, status, createdBy.id/fullName) để liên hệ chủ đề gỡ câu; không lộ tiêu đề/nội dung đề hoặc email, chỉ trả sau kiểm quyền nhìn thấy/thao tác trên câu.
+- Approve/reject câu hỏi và contract A7 bắt buộc gửi submittedAt đã đọc. Kiểm dưới khóa hàng: thiếu trả 400 errors[submittedAt], không khớp lượt Submitted hiện tại trả 409 Conflict; không thay trạng thái/audit. Quyền và trạng thái được kiểm trước token lượt duyệt. Frontend phải tải lại sau Conflict, không tự thay submittedAt rồi duyệt lại.
+- Rubric giữ kiểm dấu trên JSON gốc để nhận số dương nhỏ; mỗi token số tối đa 1024 ký tự, số mũ tường minh trong [-1000, 1000] để không tràn numeric của jsonb. Explanation trim/blank thành null trước kiểm giới hạn 10000 ký tự; vẫn cấm NUL.
+
 - Model validation và lỗi binding dùng key JSON camelCase (stem/type/subjectId/grade), bỏ tiền tố $. của JSON path. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind MVC vẫn được kiểm trước action. Điểm rubric Essay kiểm dương trên số JSON gốc, không làm tròn qua decimal, nên số dương rất nhỏ vẫn hợp lệ theo OpenAPI.
 
 - API dùng schema A2, không thêm migration. State machine, quyền và payload ở Application; transaction và khóa ở Infrastructure. Creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
@@ -228,7 +232,7 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──publ
                                   └─ sửa rồi submit lại → Submitted
 ```
 
-- `Draft`: người tạo chọn/sắp xếp câu hỏi, đặt điểm. Nội dung hiển thị là nội dung **hiện tại** của câu hỏi nguồn (có cảnh báo nếu câu nguồn đã đổi `revision`). Khi ghép có thể chọn câu của mình hoặc câu `Approved` cùng tổ, **nhưng khi `Submit` mọi câu phải đang `Approved`** (duyệt đề không thay cho duyệt câu).
+- `Draft`: người tạo chọn/sắp xếp câu hỏi, đặt điểm. Nội dung hiển thị là nội dung **hiện tại** của câu hỏi nguồn (giữ revision của câu Approved bằng guard A6; cảnh báo revision chỉ dành cho liên kết cũ hoặc dữ liệu import). Khi ghép có thể chọn câu của mình hoặc câu `Approved` cùng tổ, **nhưng khi `Submit` mọi câu phải đang `Approved`** (duyệt đề không thay cho duyệt câu).
 - **Khi gửi duyệt (`Submit`) → đóng băng**: sao chép **nội dung, đáp án, lời giải, điểm, dạng, mức độ** của từng câu vào `exam_version_questions` (snapshot) kèm `source_question_id`, `source_revision`; tính `content_hash` của cả phiên bản. Từ `Submitted` trở đi **không sửa được**.
 - Muốn sửa: người tạo **rút lại** (`Submitted → Draft`) trước khi có quyết định, hoặc **tạo phiên bản mới** (`POST /exams/{id}/versions`) sao chép từ phiên bản cũ.
 - `Rejected` luôn kèm lý do; người tạo **sửa được** (phiên bản được mở khóa), rồi `submit` lại trực tiếp — mỗi lần `Submit` lại **chụp snapshot mới** và tính lại `content_hash`. Hoặc tạo phiên bản mới.
@@ -587,6 +591,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.11 — 21/11/2026**
+
+- Giữ guard câu đang được đề tham chiếu và bổ sung metadata liên hệ chủ đề; thống nhất mục 4.3. Approve/reject bắt buộc submittedAt chống duyệt tab cũ, gồm contract A7. Giới hạn token/số mũ rubric theo khả năng jsonb, kiểm explanation sau trim và xác nhận quy tắc key lỗi camelCase toàn API.
 
 **0.10 — 21/11/2026**
 

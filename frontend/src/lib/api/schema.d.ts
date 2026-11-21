@@ -1052,14 +1052,28 @@ export interface components {
             code: components["schemas"]["ErrorCode"];
             /** @description Dùng để tra log; không chứa dữ liệu nhạy cảm. */
             traceId?: string;
-            /** @description Chỉ có khi `code=ValidationFailed`. Khóa là đường dẫn trường (`payload.options[2].text`). */
+            /** @description Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload.options[2].text), gồm cả catalog, admin user và AI. */
             errors?: {
                 [key: string]: string[];
             };
+            references?: components["schemas"]["QuestionReferencePage"];
             /** @description Chỉ có khi `code=QuestionsNotApproved`. */
             invalidQuestionIds?: string[];
         } & {
             [key: string]: unknown;
+        };
+        /** @description Chỉ có cho 409 QuestionReferenced do sửa/archive; metadata liên hệ chủ đề, không trả nội dung hoặc tiêu đề đề. */
+        QuestionReferencePage: {
+            totalItems: number;
+            items: {
+                /** Format: uuid */
+                examId: string;
+                /** Format: uuid */
+                versionId: string;
+                /** @enum {string} */
+                status: "Draft" | "Rejected" | "Submitted";
+                createdBy: components["schemas"]["UserRef"];
+            }[];
         };
         /**
          * @description Mã lỗi máy đọc được, ổn định. Có thể **thêm** mã mới; client phải xử lý mã lạ như lỗi chung theo HTTP status.
@@ -1067,7 +1081,7 @@ export interface components {
          *     - `SelfReview` (403): tự duyệt nội dung của mình
          *     - `InvalidStateTransition` (409): thao tác không hợp lệ ở trạng thái hiện tại
          *     - `AiReviewRequired` (409): câu AI chưa bấm "Đã rà soát"
-         *     - `QuestionReferenced` (409): câu đang được đề tham chiếu nên không xóa được
+         *     - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
          *     - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
          *     - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
          *     - `QuotaExceeded` (429) · `RateLimited` (429)
@@ -1201,7 +1215,7 @@ export interface components {
             modelAnswer: string;
             rubric: {
                 criterion: string;
-                /** @description Điểm dương theo số JSON gốc; không làm tròn về độ chính xác decimal khi kiểm dấu. */
+                /** @description Điểm dương theo JSON gốc; token số tối đa 1024 ký tự và số mũ tường minh trong [-1000, 1000] để phù hợp jsonb numeric. Không làm tròn qua decimal khi kiểm dấu. */
                 points: number;
             }[];
         };
@@ -1271,16 +1285,36 @@ export interface components {
             items: components["schemas"]["Question"][];
         };
         QuestionApproveRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             */
+            submittedAt: string;
             note?: string | null;
         };
         QuestionRejectRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             */
+            submittedAt: string;
             /** @description Lý do từ chối — bắt buộc. */
             note: string;
         };
         ApproveRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             */
+            submittedAt: string;
             note?: string | null;
         };
         RejectRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; lượt gửi thay đổi trả 409 Conflict.
+             */
+            submittedAt: string;
             /** @description Lý do từ chối — bắt buộc. */
             note: string;
         };
@@ -2073,7 +2107,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["QuestionApproveRequest"];
             };
@@ -2171,6 +2205,7 @@ export interface operations {
                     "application/json": components["schemas"]["QuestionPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2768,13 +2803,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["ApproveRequest"];
             };
         };
         responses: {
             200: components["responses"]["ExamVersionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

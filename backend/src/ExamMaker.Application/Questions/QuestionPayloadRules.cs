@@ -66,6 +66,11 @@ public static class QuestionPayloadRules
     {
         if (value.ValueKind != JsonValueKind.Number) return false;
         var raw = value.GetRawText();
+        // Bound lexical precision and exponent so every accepted token is safely representable by PostgreSQL jsonb numeric.
+        if (raw.Length > 1024) return false;
+        var exponentIndex = raw.IndexOfAny(['e', 'E']);
+        if (exponentIndex >= 0 && (!int.TryParse(raw.AsSpan(exponentIndex + 1), NumberStyles.AllowLeadingSign,
+            CultureInfo.InvariantCulture, out var exponent) || exponent is < -1000 or > 1000)) return false;
         if (raw[0] == '-') return false;
         foreach (var digit in raw)
         {
