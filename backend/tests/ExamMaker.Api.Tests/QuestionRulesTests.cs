@@ -154,6 +154,7 @@ public sealed class QuestionRulesTests
             Assert.Equal(state, q.Status);
             return;
         }
+        var previousUpdatedAt = q.UpdatedAt;
         QuestionRules.Transition(actor, q, action, "Reason", now);
         Assert.Equal(action switch
         {
@@ -169,7 +170,12 @@ public sealed class QuestionRulesTests
             Assert.Equal(0, q.SubmittedAt!.Value.Ticks % TimeSpan.TicksPerMillisecond);
             Assert.Equal(q.SubmittedAt, q.UpdatedAt);
         }
-        else Assert.Equal(now, q.UpdatedAt);
+        else
+        {
+            Assert.Equal(0, q.UpdatedAt.Ticks % TimeSpan.TicksPerMicrosecond);
+            Assert.True(q.UpdatedAt > previousUpdatedAt);
+            Assert.True(q.UpdatedAt.Ticks >= now.Ticks / TimeSpan.TicksPerMicrosecond * TimeSpan.TicksPerMicrosecond);
+        }
     }
 
     [Theory]
@@ -423,10 +429,10 @@ public sealed class QuestionRulesTests
     public void Mark_reviewed_is_idempotent_without_changing_updated_at()
     {
         var q = Question(); q.Source = "AI";
-        var first = DateTime.UtcNow;
+        var first = DateTime.UtcNow.AddSeconds(1);
         Assert.True(QuestionRules.Transition(Actor("teacher", true), q, QuestionAction.MarkReviewed, null, first));
         Assert.False(QuestionRules.Transition(Actor("teacher", true), q, QuestionAction.MarkReviewed, null, first.AddMinutes(1)));
-        Assert.Equal(first, q.UpdatedAt);
+        Assert.Equal(first.Ticks / TimeSpan.TicksPerMicrosecond * TimeSpan.TicksPerMicrosecond, q.UpdatedAt.Ticks);
     }
 
 }

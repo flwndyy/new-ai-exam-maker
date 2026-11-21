@@ -18,16 +18,40 @@ public sealed class QuestionsHttpTests
     [InlineData("reject", "{\"note\":\"Reason\"}")]
     [InlineData("approve", "{\"submittedAt\":\"invalid\"}")]
     [InlineData("reject", "{\"submittedAt\":\"invalid\",\"note\":\"Reason\"}")]
-    // Every review decision must identify the submission round; missing or malformed tokens never reach the service.
+    // Missing tokens reach business validation; malformed dates still fail during MVC binding.
     public async Task Review_bodies_require_a_valid_submission_time(string action, string body)
     {
         using var app = new QuestionsTestFactory();
         app.Directory.User = AuthTestFactory.Teacher with { Role = "head" };
+        var malformed = body.Contains("invalid");
+        app.Management.Failure = new(400, "ValidationFailed", "Missing submission time", "submittedAt");
         using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
         using var response = await client.PostAsync($"/api/v1/questions/{app.Management.View.Id}/{action}", new StringContent(body, Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.True(problem.GetProperty("errors").TryGetProperty("submittedAt", out _)); Assert.Equal(0, app.Management.Calls);
+        Assert.True(problem.GetProperty("errors").TryGetProperty("submittedAt", out _));
+        Assert.Equal(malformed ? 0 : 1, app.Management.Calls);
+    }
+
+    [Theory]
+    [InlineData("approve", 404, "NotFound")]
+    [InlineData("reject", 404, "NotFound")]
+    [InlineData("approve", 403, "SelfReview")]
+    [InlineData("reject", 403, "SelfReview")]
+    [InlineData("approve", 409, "InvalidStateTransition")]
+    [InlineData("reject", 409, "InvalidStateTransition")]
+    // An omitted token must not hide the service's visibility, permission or workflow errors.
+    public async Task Missing_review_tokens_do_not_preempt_service_authorization(string action, int status, string code)
+    {
+        using var app = new QuestionsTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = "head" };
+        app.Management.Failure = new(status, code, "Safe error");
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PostAsJsonAsync($"/api/v1/questions/{app.Management.View.Id}/{action}", new { });
+        Assert.Equal((HttpStatusCode)status, response.StatusCode);
+        Assert.Equal(code, (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        Assert.Equal(1, app.Management.Calls);
     }
 
     [Fact]

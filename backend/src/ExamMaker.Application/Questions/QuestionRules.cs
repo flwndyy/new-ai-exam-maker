@@ -78,7 +78,7 @@ public static class QuestionRules
             question.AiVerification = "NotChecked";
             question.AiVerificationNote = null;
         }
-        question.UpdatedAt = now > question.UpdatedAt ? now : question.UpdatedAt.AddTicks(1);
+        question.UpdatedAt = NextUpdatedAt(question.UpdatedAt, now);
         return true;
     }
 
@@ -143,9 +143,15 @@ public static class QuestionRules
                 break;
             default: throw InvalidState();
         }
-        question.UpdatedAt = now > question.UpdatedAt ? now : question.UpdatedAt.AddTicks(1);
+        question.UpdatedAt = NextUpdatedAt(question.UpdatedAt, now);
         return true;
     }
+
+    /// <summary>Advance real mutations by at least one PostgreSQL microsecond, even with a frozen or backward clock.</summary>
+    private static DateTime NextUpdatedAt(DateTime previous, DateTime now) => new(
+        Math.Max(now.Ticks / TimeSpan.TicksPerMicrosecond,
+            previous.Ticks / TimeSpan.TicksPerMicrosecond + 1) * TimeSpan.TicksPerMicrosecond,
+        DateTimeKind.Utc);
 
     /// <summary>Allow teacher/head owners across department transfers, same-department heads, or administrators to archive approved content.</summary>
     public static void RequireArchive(AuthenticatedUser actor, Question question)

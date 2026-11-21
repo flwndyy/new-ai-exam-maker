@@ -10,7 +10,7 @@ public sealed record QuestionInput([Required] Guid? SubjectId, [Required] Guid? 
     [Required] string Stem, JsonElement Payload, string? Explanation = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record QuestionReviewInput([Required] DateTimeOffset? SubmittedAt, string? Note = null);
+public sealed record QuestionReviewInput(DateTimeOffset? SubmittedAt, string? Note = null);
 public sealed record QuestionQuery(int Page = 1, int PageSize = 20, string? Status = null,
     Guid? SubjectId = null, Guid? TopicId = null, int? Grade = null, string? Type = null,
     string? Difficulty = null, bool Mine = false, Guid? AiJobId = null);

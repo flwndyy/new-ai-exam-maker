@@ -114,7 +114,9 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 
 ## Kết quả kiểm tra hiện tại
 
-- Kiểm tra local ngày 21/11/2026: toàn solution backend Release **501/501 test pass, 0 failed, 0 skipped** (329 API/quy tắc, 38 Application, 134 Infrastructure), gồm các integration test PostgreSQL thật.
+- Lỗi nội dung payload dùng key `errors[payload]`, không có đường dẫn từng phần tử. Body review thiếu `submittedAt` vẫn đi qua kiểm quyền và trạng thái trong service trước lỗi 400; timestamp sai định dạng vẫn bị MVC trả 400 trước action. `UpdatedAt` của thay đổi thực sự tăng ít nhất một micro giây PostgreSQL; no-op giữ nguyên.
+
+- Kiểm tra local ngày 21/11/2026: toàn solution backend Release **509/509 test pass, 0 failed, 0 skipped** (335 API/quy tắc, 38 Application, 136 Infrastructure), gồm các integration test PostgreSQL thật.
 - Test xác nhận: sửa stem/payload/difficulty/explanation và archive bị chặn khi còn đề Draft/Rejected/Submitted của người khác; PUT không đổi nội dung vẫn thành công. Đề Approved/Published/Archived giữ nguyên snapshot khi nguồn bị archive. Head đã chuyển tổ vẫn archive được câu của mình. Các test quyền sau chờ khóa, audit rollback, payload và đồng thời tiếp tục pass.
 - Schema TypeScript đã sinh lại và kiểm đồng bộ OpenAPI đạt. Formatter whitespace và `git diff --check` đạt. Kết quả CI của commit mới cần xác nhận sau khi push.
 - Có test hồi quy HTTP cho key lỗi Required/binding (kể cả `$.grade`), test rubric cực nhỏ/zero/số âm và test PostgreSQL cho actor bị khóa hoặc không tồn tại gửi payload sai. Validation nghiệp vụ của Create chỉ chạy sau actor/role; toàn bộ test các vòng trước tiếp tục đạt.

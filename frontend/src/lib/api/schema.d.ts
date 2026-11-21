@@ -1052,7 +1052,7 @@ export interface components {
             code: components["schemas"]["ErrorCode"];
             /** @description Dùng để tra log; không chứa dữ liệu nhạy cảm. */
             traceId?: string;
-            /** @description Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload.options[2].text), gồm cả catalog, admin user và AI. */
+            /** @description Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload), gồm cả catalog, admin user và AI. Lỗi nội dung payload câu hỏi dùng chung key payload, không trả đường dẫn từng phần tử. */
             errors?: {
                 [key: string]: string[];
             };

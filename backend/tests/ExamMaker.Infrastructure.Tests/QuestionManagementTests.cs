@@ -61,6 +61,62 @@ public sealed class QuestionManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    // Both edit and transition timestamps must advance after an actual PostgreSQL round trip at sub-microsecond clock intervals.
+    public async Task Mutation_timestamps_advance_at_postgres_precision()
+    {
+        await SeedAsync();
+        var created = await CreateAsync();
+        var clock = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await using var db = fixture.CreateContext();
+        var q = await db.Questions.SingleAsync(x => x.Id == created.Id);
+        q.UpdatedAt = clock;
+        await db.SaveChangesAsync();
+        var actor = new ExamMaker.Application.Authentication.AuthenticatedUser(owner, owner.ToString(),
+            "synthetic@example.invalid", "Synthetic", "teacher", Department, null, true);
+        foreach (var offset in new[] { 0, 1, 9, -10 })
+        {
+            await db.Entry(q).ReloadAsync();
+            var before = q.UpdatedAt;
+            Assert.True(QuestionRules.Edit(actor, q, Input("Changed " + offset), before.AddTicks(offset)));
+            await db.SaveChangesAsync();
+            await db.Entry(q).ReloadAsync();
+            Assert.Equal(before.AddTicks(TimeSpan.TicksPerMicrosecond), q.UpdatedAt);
+            q.Status = "Submitted"; q.SubmittedAt = q.UpdatedAt;
+            before = q.UpdatedAt;
+            Assert.True(QuestionRules.Transition(actor, q, QuestionAction.Withdraw, null, before.AddTicks(offset)));
+            await db.SaveChangesAsync();
+            await db.Entry(q).ReloadAsync();
+            Assert.Equal(before.AddTicks(TimeSpan.TicksPerMicrosecond), q.UpdatedAt);
+        }
+    }
+
+    [PostgresFact]
+    // Actual permission and state checks must win over a missing review token for both decisions.
+    public async Task Missing_review_tokens_are_checked_after_visibility_authority_and_state()
+    {
+        await SeedAsync();
+        var q = await CreateAsync(head);
+        await ActAsync(head, q.Id, QuestionAction.Submit);
+        foreach (var action in new[] { QuestionAction.Approve, QuestionAction.Reject })
+        {
+            await using var db = fixture.CreateContext();
+            Assert.Equal("NotFound", (await Assert.ThrowsAsync<QuestionException>(() =>
+                Service(db).TransitionAsync(outsider, q.Id, action, "Reason", default))).Code);
+            Assert.Equal("SelfReview", (await Assert.ThrowsAsync<QuestionException>(() =>
+                Service(db).TransitionAsync(head, q.Id, action, "Reason", default))).Code);
+            Assert.Equal("submittedAt", (await Assert.ThrowsAsync<QuestionException>(() =>
+                Service(db).TransitionAsync(otherHead, q.Id, action, "Reason", default))).Field);
+        }
+        await ActAsync(otherHead, q.Id, QuestionAction.Approve);
+        foreach (var action in new[] { QuestionAction.Approve, QuestionAction.Reject })
+        {
+            await using var db = fixture.CreateContext();
+            Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<QuestionException>(() =>
+                Service(db).TransitionAsync(otherHead, q.Id, action, "Reason", default))).Code);
+        }
+    }
+
+    [PostgresFact]
     // Exercise rejection/resubmission, metadata clearing, approval, no-op PUT and approved revision reopening.
     public async Task Review_rounds_and_content_revisions_are_audited_and_persisted()
     {
