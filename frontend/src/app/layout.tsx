@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
+import { RoleNav } from "@/components/role-nav";
 import { UserMenu } from "@/components/user-menu";
 import { vi } from "@/messages/vi";
 
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/" className="text-sm text-slate-600 hover:text-slate-900">
                 {vi.nav.home}
               </Link>
+              <RoleNav />
               <UserMenu />
             </nav>
           </header>
