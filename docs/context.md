@@ -281,10 +281,16 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 - **Behavior `/api/*`**:
   - Allowed methods: `GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE`.
   - Cache policy: **`CachingDisabled`** — không cache dữ liệu riêng tư.
-  - Origin request policy: **`AllViewerExceptHostHeader`** (chuyển tiếp `Authorization`, query, header; không chuyển `Host` để khớp chứng chỉ/`server_name` của origin).
+  - Origin request policy: **custom policy bắt buộc**; chuyển tiếp `Authorization`, query và
+    các header API cần thiết, đặc biệt `CloudFront-Viewer-Address`; **không chuyển tiếp
+    `Host`** để khớp chứng chỉ/`server_name` của origin. Không dùng managed policy thay thế
+    nếu chưa xác minh policy đó có `CloudFront-Viewer-Address`.
   - Origin read timeout mặc định đủ vì tác vụ AI chạy async; không cho API request dài.
   - Nginx đặt `X-Forwarded-For/Proto`; .NET bật `ForwardedHeaders` và chỉ tin Nginx.
-- **Behavior mặc định (`/*`)**: S3 origin, cache bình thường; file có hash trong tên cache lâu, HTML cache ngắn; invalidate khi deploy.
+- **Behavior frontend**: S3 origin qua OAC. Behavior mặc định `/*` dùng cache policy HTML
+  ngắn (min `0`, default `60`, max `300` giây) và CloudFront Function rewrite route. Hai
+  behavior `/_next/static/*` và `/assets/*` dùng cache policy asset lâu (TTL tối đa
+  `31536000` giây) cho file có hash trong tên. Invalidate khi deploy.
 - Một domain cho cả web và API → không cần cấu hình CORS phức tạp.
 
 ### 5.4 Các quyết định kiến trúc khác

@@ -137,7 +137,8 @@ Phần dưới đây là tóm tắt để giữ thứ tự triển khai trong ru
    Origin Access Control (OAC), không dùng S3 website endpoint.
 2. Upload static export của Next.js.
 3. Tạo CloudFront distribution:
-   - behavior mặc định `/*` → S3, cache bình thường;
+   - behavior `/_next/static/*` và `/assets/*` → S3, cache asset fingerprinted lâu;
+   - behavior mặc định `/*` → S3, HTML cache ngắn và gắn CloudFront Function;
    - behavior `/api/*` → `origin.<domain>` qua HTTPS only;
    - `/api/*` dùng `CachingDisabled`;
    - `/api/*` dùng custom origin request policy: forward `CloudFront-Viewer-Address` nhưng

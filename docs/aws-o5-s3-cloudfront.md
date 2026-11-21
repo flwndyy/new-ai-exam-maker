@@ -61,16 +61,33 @@ Không dùng `Principal: "*"` và không thêm `s3:ListBucket` nếu distributio
 6. Thêm alternate domain name `app.<domain>`, bật HTTP → HTTPS redirect và dùng TLS policy
    hiện hành phù hợp.
 
-## 4. Behavior mặc định `/*` cho frontend
+## 4. Behavior frontend và cache
 
-Giữ behavior mặc định ở cuối danh sách:
+Tạo các behavior theo thứ tự ưu tiên sau; behavior mặc định nằm cuối danh sách:
+
+1. `/api/*` — theo mục 5.
+2. `/_next/static/*` — asset Next.js đã fingerprint.
+3. `/assets/*` — asset tĩnh có fingerprint nếu dự án tạo thư mục này.
+4. `/*` — HTML và các route static export.
+
+Với hai behavior asset (`/_next/static/*` và `/assets/*`):
 
 - Origin: S3 `<bucket-name>` qua OAC.
 - Viewer protocol: **Redirect HTTP to HTTPS**.
 - Allowed methods: `GET, HEAD, OPTIONS`.
-- Cache policy: `CachingOptimized` hoặc policy tương đương cho static assets.
+- Cache policy custom `StaticAssetsLong`: minimum/default/max TTL lần lượt là `0`,
+  `31536000`, `31536000` giây; bật compression.
+- Không gắn CloudFront Function.
+
+Với behavior mặc định `/*`:
+
+- Origin: S3 `<bucket-name>` qua OAC.
+- Viewer protocol: **Redirect HTTP to HTTPS**.
+- Allowed methods: `GET, HEAD, OPTIONS`.
+- Cache policy custom `HtmlShort`: minimum/default/max TTL lần lượt là `0`, `60`, `300`
+  giây; không cache cookie không cần thiết.
 - Gắn `infra/cloudfront-function/index-html-rewrite.js` ở **Viewer request**.
-- Không gắn Function này vào `/api/*`.
+- Không gắn Function này vào `/api/*` hoặc hai behavior asset.
 
 Function biến `/` thành `/index.html`, route không có phần mở rộng thành
 `/route/index.html`, còn asset và API giữ nguyên. Không cấu hình custom error response
@@ -82,13 +99,23 @@ Upload bản build static từ thư mục `frontend/out/` sau khi chạy build:
 cd frontend
 npm ci
 npm run build
-aws s3 sync out/ s3://<bucket-name>/ --delete
+# HTML và file chưa fingerprint: cache ngắn để deploy có hiệu lực nhanh.
+aws s3 sync out/ s3://<bucket-name>/ --delete \
+  --cache-control "public,max-age=60,must-revalidate"
+# Asset fingerprinted: cache lâu, immutable.
+aws s3 sync out/ s3://<bucket-name>/ \
+  --exclude "*" \
+  --include "_next/static/*" \
+  --include "assets/*" \
+  --cache-control "public,max-age=31536000,immutable"
 aws cloudfront create-invalidation \
   --distribution-id <distribution-id> \
   --paths "/*"
 ```
 
-Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường.
+Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường. Invalidation vẫn
+được chạy sau deploy để xóa object cũ còn nằm trong edge cache; `Cache-Control` và TTL policy
+giúp HTML ngắn hạn nhưng asset fingerprinted vẫn được cache lâu.
 
 ## 5. Behavior `/api/*` tới origin EC2
 
