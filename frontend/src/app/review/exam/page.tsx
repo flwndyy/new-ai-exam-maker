@@ -9,16 +9,179 @@ import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
+import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
+
+type ExamVersion = components["schemas"]["ExamVersion"];
+
+/** Bind checklist and note state to one submission round via parent key (`id + submittedAt + status`). */
+function ExamDecisionForm({
+  version,
+  isAdmin,
+  onSuccess,
+  onError,
+}: {
+  version: ExamVersion;
+  isAdmin: boolean;
+  onSuccess: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [checks, setChecks] = useState<boolean[]>(vi.review.checklistItems.map(() => false));
+  const [note, setNote] = useState("");
+
+  const actionMutation = useMutation({
+    mutationFn: async (action: "approve" | "reject" | "publish" | "unpublish" | "archive") => {
+      if (action === "approve") {
+        const { error } = await api.POST("/exam-versions/{vid}/approve", {
+          params: { path: { vid: version.id } },
+          body: { submittedAt: version.submittedAt!, note: note.trim() || null },
+        });
+        if (error) throw new Error(getApiErrorMessage(error));
+        return action;
+      }
+      if (action === "reject") {
+        const { error } = await api.POST("/exam-versions/{vid}/reject", {
+          params: { path: { vid: version.id } },
+          body: { submittedAt: version.submittedAt!, note: note.trim() },
+        });
+        if (error) throw new Error(getApiErrorMessage(error));
+        return action;
+      }
+      const pathMap = {
+        publish: "/exam-versions/{vid}/publish",
+        unpublish: "/exam-versions/{vid}/unpublish",
+        archive: "/exam-versions/{vid}/archive",
+      } as const;
+      const { error } = await api.POST(pathMap[action], { params: { path: { vid: version.id } } });
+      if (error) throw new Error(getApiErrorMessage(error));
+      return action;
+    },
+    onSuccess: (action) => {
+      const messageMap = {
+        approve: vi.review.approvedSuccess,
+        reject: vi.review.rejectedSuccess,
+        publish: vi.review.publishedSuccess,
+        unpublish: vi.review.unpublishedSuccess,
+        archive: vi.review.archivedSuccess,
+      } as const;
+      onSuccess(messageMap[action]);
+      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
+    },
+    onError: (err: Error) => onError(err.message),
+  });
+
+  const allChecked = checks.every(Boolean);
+
+  return (
+    <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
+      {version.status === "Submitted" && (
+        <>
+          <h2 className="text-sm font-semibold text-slate-900">{vi.review.checklistTitle}</h2>
+          <div className="space-y-2">
+            {vi.review.checklistItems.map((label, idx) => (
+              <label key={idx} className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={checks[idx]}
+                  onChange={(e) =>
+                    setChecks((prev) => prev.map((val, i) => (i === idx ? e.target.checked : val)))
+                  }
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          <label className="block text-sm">
+            <span className="font-medium text-slate-700">{vi.review.noteLabel}</span>
+            <textarea
+              rows={3}
+              placeholder={vi.review.notePlaceholder}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 p-2.5 text-sm"
+            />
+          </label>
+        </>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        {version.status === "Submitted" && (
+          <>
+            <button
+              type="button"
+              disabled={actionMutation.isPending}
+              onClick={() => {
+                if (!allChecked) {
+                  onError(vi.review.checklistRequired);
+                  return;
+                }
+                actionMutation.mutate("approve");
+              }}
+              className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {vi.review.approve}
+            </button>
+            <button
+              type="button"
+              disabled={actionMutation.isPending}
+              onClick={() => {
+                if (!note.trim()) {
+                  onError(vi.review.rejectNeedsNote);
+                  return;
+                }
+                actionMutation.mutate("reject");
+              }}
+              className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {vi.review.reject}
+            </button>
+          </>
+        )}
+
+        {isAdmin && version.status === "Approved" && (
+          <button
+            type="button"
+            disabled={actionMutation.isPending}
+            onClick={() => actionMutation.mutate("publish")}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            {vi.review.publish}
+          </button>
+        )}
+
+        {isAdmin && version.status === "Published" && (
+          <button
+            type="button"
+            disabled={actionMutation.isPending}
+            onClick={() => actionMutation.mutate("unpublish")}
+            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+          >
+            {vi.review.unpublish}
+          </button>
+        )}
+
+        {(version.status === "Approved" || version.status === "Rejected") && (
+          <button
+            type="button"
+            disabled={actionMutation.isPending}
+            onClick={() => actionMutation.mutate("archive")}
+            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+          >
+            {vi.review.archive}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ReviewExamInner() {
   const vid = useSearchParams().get("id");
   const { me } = useAuth();
-  const queryClient = useQueryClient();
-
-  const [checks, setChecks] = useState<boolean[]>(vi.review.checklistItems.map(() => false));
-  const [note, setNote] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -34,61 +197,12 @@ function ReviewExamInner() {
     },
   });
 
-  const actionMutation = useMutation({
-    mutationFn: async (action: "approve" | "reject" | "publish" | "unpublish" | "archive") => {
-      const v = versionQuery.data;
-      if (!v) throw new Error(vi.common.requestFailed);
-      if (action === "approve") {
-        const { error } = await api.POST("/exam-versions/{vid}/approve", {
-          params: { path: { vid: v.id } },
-          body: { submittedAt: v.submittedAt!, note: note.trim() || null },
-        });
-        if (error) throw new Error(getApiErrorMessage(error));
-        return action;
-      }
-      if (action === "reject") {
-        const { error } = await api.POST("/exam-versions/{vid}/reject", {
-          params: { path: { vid: v.id } },
-          body: { submittedAt: v.submittedAt!, note: note.trim() },
-        });
-        if (error) throw new Error(getApiErrorMessage(error));
-        return action;
-      }
-      const pathMap = {
-        publish: "/exam-versions/{vid}/publish",
-        unpublish: "/exam-versions/{vid}/unpublish",
-        archive: "/exam-versions/{vid}/archive",
-      } as const;
-      const { error } = await api.POST(pathMap[action], { params: { path: { vid: v.id } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return action;
-    },
-    onSuccess: (action) => {
-      setErrorMsg(null);
-      const messageMap = {
-        approve: vi.review.approvedSuccess,
-        reject: vi.review.rejectedSuccess,
-        publish: vi.review.publishedSuccess,
-        unpublish: vi.review.unpublishedSuccess,
-        archive: vi.review.archivedSuccess,
-      } as const;
-      setFeedback(messageMap[action]);
-      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
-      void queryClient.invalidateQueries({ queryKey: ["exam-version", vid] });
-    },
-    onError: (err: Error) => {
-      setFeedback(null);
-      setErrorMsg(err.message);
-    },
-  });
-
   if (!canReview) {
     return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
   }
   if (!vid) return <p className="text-sm text-rose-600">{vi.review.missingId}</p>;
 
   const v = versionQuery.data;
-  const allChecked = checks.every(Boolean);
 
   return (
     <section className="space-y-6">
@@ -132,7 +246,7 @@ function ReviewExamInner() {
 
           <div className="space-y-3">
             {v.items.map((item) => (
-              <article key={item.sourceQuestionId} className="rounded border border-slate-200 bg-white p-4 space-y-2">
+              <article key={item.sourceQuestionId} className="space-y-2 rounded border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>Câu {item.sortOrder}</span>
                   <span className="font-medium text-slate-700">{item.points} {vi.review.points}</span>
@@ -147,106 +261,19 @@ function ReviewExamInner() {
             ))}
           </div>
 
-          <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
-            {v.status === "Submitted" && (
-              <>
-                <h2 className="text-sm font-semibold text-slate-900">{vi.review.checklistTitle}</h2>
-                <div className="space-y-2">
-                  {vi.review.checklistItems.map((label, idx) => (
-                    <label key={idx} className="flex items-center gap-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={checks[idx]}
-                        onChange={(e) =>
-                          setChecks((prev) => prev.map((val, i) => (i === idx ? e.target.checked : val)))
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-
-                <label className="block text-sm">
-                  <span className="font-medium text-slate-700">{vi.review.noteLabel}</span>
-                  <textarea
-                    rows={3}
-                    placeholder={vi.review.notePlaceholder}
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    className="mt-1 w-full rounded border border-slate-300 p-2.5 text-sm"
-                  />
-                </label>
-              </>
-            )}
-
-            <div className="flex flex-wrap gap-3">
-              {v.status === "Submitted" && (
-                <>
-                  <button
-                    type="button"
-                    disabled={actionMutation.isPending}
-                    onClick={() => {
-                      if (!allChecked) {
-                        setErrorMsg(vi.review.checklistRequired);
-                        return;
-                      }
-                      actionMutation.mutate("approve");
-                    }}
-                    className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                  >
-                    {vi.review.approve}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={actionMutation.isPending}
-                    onClick={() => {
-                      if (!note.trim()) {
-                        setErrorMsg(vi.review.rejectNeedsNote);
-                        return;
-                      }
-                      actionMutation.mutate("reject");
-                    }}
-                    className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-                  >
-                    {vi.review.reject}
-                  </button>
-                </>
-              )}
-
-              {me?.role === "admin" && v.status === "Approved" && (
-                <button
-                  type="button"
-                  disabled={actionMutation.isPending}
-                  onClick={() => actionMutation.mutate("publish")}
-                  className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                >
-                  {vi.review.publish}
-                </button>
-              )}
-
-              {me?.role === "admin" && v.status === "Published" && (
-                <button
-                  type="button"
-                  disabled={actionMutation.isPending}
-                  onClick={() => actionMutation.mutate("unpublish")}
-                  className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  {vi.review.unpublish}
-                </button>
-              )}
-
-              {(v.status === "Approved" || v.status === "Rejected") && (
-                <button
-                  type="button"
-                  disabled={actionMutation.isPending}
-                  onClick={() => actionMutation.mutate("archive")}
-                  className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  {vi.review.archive}
-                </button>
-              )}
-            </div>
-          </div>
+          <ExamDecisionForm
+            key={`${v.id}-${v.submittedAt ?? ""}-${v.status}`}
+            version={v}
+            isAdmin={me?.role === "admin"}
+            onSuccess={(msg) => {
+              setErrorMsg(null);
+              setFeedback(msg);
+            }}
+            onError={(msg) => {
+              setFeedback(null);
+              setErrorMsg(msg);
+            }}
+          />
         </div>
       )}
     </section>

@@ -33,6 +33,13 @@ function initMcOptions(q?: Question): Record<(typeof MC_LABELS)[number], string>
   return map;
 }
 
+function initEssayRubric(q?: Question): { criterion: string; points: string }[] {
+  if (q?.type === "Essay" && "rubric" in q.payload && q.payload.rubric.length > 0) {
+    return q.payload.rubric.map((r) => ({ criterion: r.criterion, points: String(r.points) }));
+  }
+  return [{ criterion: "", points: "1" }];
+}
+
 function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question }) {
   const q = initialQuestion;
   const id = q?.id ?? null;
@@ -66,16 +73,17 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
   const [shortUnit, setShortUnit] = useState(
     q?.type === "ShortAnswer" && "unit" in q.payload ? (q.payload.unit ?? "") : "",
   );
+  const [shortTolerance, setShortTolerance] = useState(
+    q?.type === "ShortAnswer" && "tolerance" in q.payload && q.payload.tolerance != null
+      ? String(q.payload.tolerance)
+      : "",
+  );
   const [essayAnswer, setEssayAnswer] = useState(
     q?.type === "Essay" && "modelAnswer" in q.payload ? q.payload.modelAnswer : "",
   );
-  const [essayCriterion, setEssayCriterion] = useState(
-    q?.type === "Essay" && "rubric" in q.payload ? (q.payload.rubric[0]?.criterion ?? "") : "",
-  );
-  const [essayPoints, setEssayPoints] = useState(
-    q?.type === "Essay" && "rubric" in q.payload ? String(q.payload.rubric[0]?.points ?? 1) : "1",
-  );
+  const [essayRubric, setEssayRubric] = useState(() => initEssayRubric(q));
 
+  const [isDirty, setIsDirty] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -111,40 +119,48 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
       return { statements: tfStatements };
     }
     if (type === "ShortAnswer") {
+      const toleranceTrimmed = shortTolerance.trim();
       return {
         answerType: shortAnswerType,
         acceptedAnswers: shortAnswersText.split("\n").map((s) => s.trim()).filter(Boolean),
         unit: shortUnit.trim() || null,
+        tolerance: shortAnswerType === "number" && toleranceTrimmed !== "" ? Number(toleranceTrimmed) : null,
       };
     }
     return {
       modelAnswer: essayAnswer,
-      rubric: [{ criterion: essayCriterion.trim() || "Đáp án đúng", points: Number(essayPoints) || 1 }],
+      rubric: essayRubric.map((r) => ({
+        criterion: r.criterion.trim() || "Đáp án đúng",
+        points: Number(r.points) || 1,
+      })),
     };
   };
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const body: QuestionInput = {
-        subjectId,
-        topicId,
-        grade,
-        type,
-        difficulty,
-        stem,
-        explanation: explanation.trim() || null,
-        payload: buildPayload(),
-      };
-      if (id) {
-        const { data, error } = await api.PUT("/questions/{id}", { params: { path: { id } }, body });
-        if (error) throw new Error(getApiErrorMessage(error));
-        return data;
-      }
-      const { data, error } = await api.POST("/questions", { body });
+  const persistQuestion = async (): Promise<Question> => {
+    const body: QuestionInput = {
+      subjectId,
+      topicId,
+      grade,
+      type,
+      difficulty,
+      stem,
+      explanation: explanation.trim() || null,
+      payload: buildPayload(),
+    };
+    if (id) {
+      const { data, error } = await api.PUT("/questions/{id}", { params: { path: { id } }, body });
       if (error) throw new Error(getApiErrorMessage(error));
       return data;
-    },
+    }
+    const { data, error } = await api.POST("/questions", { body });
+    if (error) throw new Error(getApiErrorMessage(error));
+    return data;
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: persistQuestion,
     onSuccess: (saved) => {
+      setIsDirty(false);
       setErrorMsg(null);
       setFeedback(vi.questions.savedSuccess);
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
@@ -164,6 +180,11 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
         const { error } = await api.DELETE("/questions/{id}", { params: { path: { id } } });
         if (error) throw new Error(getApiErrorMessage(error));
         return "deleted";
+      }
+      // Save unsaved edits before submitting so reviewers never see stale content and edits are not lost.
+      if (action === "submit" && isDirty) {
+        await persistQuestion();
+        setIsDirty(false);
       }
       const pathMap = {
         submit: "/questions/{id}/submit",
@@ -233,6 +254,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
               onChange={(e) => {
                 setSubjectId(e.target.value);
                 setTopicId("");
+                setIsDirty(true);
               }}
               className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5"
             >
@@ -250,6 +272,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
               onChange={(e) => {
                 setGrade(Number(e.target.value) as Grade);
                 setTopicId("");
+                setIsDirty(true);
               }}
               className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5"
             >
@@ -264,7 +287,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
             <select
               required
               value={topicId}
-              onChange={(e) => setTopicId(e.target.value)}
+              onChange={(e) => {
+                setTopicId(e.target.value);
+                setIsDirty(true);
+              }}
               className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5"
             >
               <option value="">--</option>
@@ -280,7 +306,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
             <span className="font-medium text-slate-700">{vi.questions.type}</span>
             <select
               value={type}
-              onChange={(e) => setType(e.target.value as QuestionType)}
+              onChange={(e) => {
+                setType(e.target.value as QuestionType);
+                setIsDirty(true);
+              }}
               className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5"
             >
               {TYPES.map((t) => (
@@ -293,7 +322,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
             <span className="font-medium text-slate-700">{vi.questions.difficulty}</span>
             <select
               value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+              onChange={(e) => {
+                setDifficulty(e.target.value as Difficulty);
+                setIsDirty(true);
+              }}
               className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5"
             >
               {DIFFICULTIES.map((d) => (
@@ -309,7 +341,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
             required
             rows={4}
             value={stem}
-            onChange={(e) => setStem(e.target.value)}
+            onChange={(e) => {
+              setStem(e.target.value);
+              setIsDirty(true);
+            }}
             className="mt-1 w-full rounded border border-slate-300 p-2.5 font-mono text-sm"
           />
         </label>
@@ -330,14 +365,20 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                   type="radio"
                   name="correctOption"
                   checked={mcCorrect === label}
-                  onChange={() => setMcCorrect(label)}
+                  onChange={() => {
+                    setMcCorrect(label);
+                    setIsDirty(true);
+                  }}
                   aria-label={`${vi.questions.correctOption} ${label}`}
                 />
                 <span className="w-5 font-semibold">{label}.</span>
                 <input
                   required
                   value={mcOptions[label]}
-                  onChange={(e) => setMcOptions((prev) => ({ ...prev, [label]: e.target.value }))}
+                  onChange={(e) => {
+                    setMcOptions((prev) => ({ ...prev, [label]: e.target.value }));
+                    setIsDirty(true);
+                  }}
                   className="flex-1 rounded border border-slate-300 px-2.5 py-1 text-sm"
                 />
               </div>
@@ -354,18 +395,20 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                 <input
                   required
                   value={stmt.text}
-                  onChange={(e) =>
-                    setTfStatements((prev) => prev.map((item, i) => (i === idx ? { ...item, text: e.target.value } : item)))
-                  }
+                  onChange={(e) => {
+                    setTfStatements((prev) => prev.map((item, i) => (i === idx ? { ...item, text: e.target.value } : item)));
+                    setIsDirty(true);
+                  }}
                   className="flex-1 rounded border border-slate-300 px-2.5 py-1 text-sm"
                 />
                 <select
                   value={stmt.isTrue ? "true" : "false"}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setTfStatements((prev) =>
                       prev.map((item, i) => (i === idx ? { ...item, isTrue: e.target.value === "true" } : item))
-                    )
-                  }
+                    );
+                    setIsDirty(true);
+                  }}
                   className="rounded border border-slate-300 px-2 py-1 text-sm"
                 >
                   <option value="true">Đúng</option>
@@ -384,7 +427,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                 required
                 rows={2}
                 value={shortAnswersText}
-                onChange={(e) => setShortAnswersText(e.target.value)}
+                onChange={(e) => {
+                  setShortAnswersText(e.target.value);
+                  setIsDirty(true);
+                }}
                 className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
               />
             </label>
@@ -393,7 +439,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                 <span className="font-medium text-slate-700">Kiểu đáp án</span>
                 <select
                   value={shortAnswerType}
-                  onChange={(e) => setShortAnswerType(e.target.value as "number" | "text")}
+                  onChange={(e) => {
+                    setShortAnswerType(e.target.value as "number" | "text");
+                    setIsDirty(true);
+                  }}
                   className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm"
                 >
                   <option value="number">Số (number)</option>
@@ -403,9 +452,27 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
               <input
                 placeholder="Đơn vị (tùy chọn)"
                 value={shortUnit}
-                onChange={(e) => setShortUnit(e.target.value)}
+                onChange={(e) => {
+                  setShortUnit(e.target.value);
+                  setIsDirty(true);
+                }}
                 className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm"
               />
+              {shortAnswerType === "number" && (
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  aria-label={vi.questions.shortTolerance}
+                  placeholder={vi.questions.shortTolerance}
+                  value={shortTolerance}
+                  onChange={(e) => {
+                    setShortTolerance(e.target.value);
+                    setIsDirty(true);
+                  }}
+                  className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm"
+                />
+              )}
             </div>
           </div>
         )}
@@ -418,27 +485,62 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
                 required
                 rows={3}
                 value={essayAnswer}
-                onChange={(e) => setEssayAnswer(e.target.value)}
+                onChange={(e) => {
+                  setEssayAnswer(e.target.value);
+                  setIsDirty(true);
+                }}
                 className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
               />
             </label>
-            <div className="flex gap-3">
-              <input
-                required
-                placeholder="Tiêu chí chấm"
-                value={essayCriterion}
-                onChange={(e) => setEssayCriterion(e.target.value)}
-                className="flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm"
-              />
-              <input
-                required
-                type="number"
-                step="0.25"
-                min="0.25"
-                value={essayPoints}
-                onChange={(e) => setEssayPoints(e.target.value)}
-                className="w-28 rounded border border-slate-300 px-2.5 py-1.5 text-sm"
-              />
+            <div className="space-y-2">
+              {essayRubric.map((row, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <input
+                    required
+                    placeholder="Tiêu chí chấm"
+                    value={row.criterion}
+                    onChange={(e) => {
+                      setEssayRubric((prev) => prev.map((item, i) => (i === idx ? { ...item, criterion: e.target.value } : item)));
+                      setIsDirty(true);
+                    }}
+                    className="flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm"
+                  />
+                  <input
+                    required
+                    type="number"
+                    step="0.25"
+                    min="0.25"
+                    value={row.points}
+                    onChange={(e) => {
+                      setEssayRubric((prev) => prev.map((item, i) => (i === idx ? { ...item, points: e.target.value } : item)));
+                      setIsDirty(true);
+                    }}
+                    className="w-28 rounded border border-slate-300 px-2.5 py-1.5 text-sm"
+                  />
+                  {essayRubric.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEssayRubric((prev) => prev.filter((_, i) => i !== idx));
+                        setIsDirty(true);
+                      }}
+                      className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
+                    >
+                      {vi.questions.removeCriterion}
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setEssayRubric((prev) => [...prev, { criterion: "", points: "1" }]);
+                  setIsDirty(true);
+                }}
+                className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50"
+              >
+                + {vi.questions.addCriterion}
+              </button>
             </div>
           </div>
         )}
@@ -448,7 +550,10 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           <textarea
             rows={2}
             value={explanation}
-            onChange={(e) => setExplanation(e.target.value)}
+            onChange={(e) => {
+              setExplanation(e.target.value);
+              setIsDirty(true);
+            }}
             className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
           />
         </label>
@@ -457,7 +562,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {isOwner && isEditable && (
             <button
               type="submit"
-              disabled={saveMutation.isPending}
+              disabled={saveMutation.isPending || actionMutation.isPending}
               className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saveMutation.isPending ? vi.common.saving : vi.common.save}
@@ -467,8 +572,9 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {q && isOwner && (q.status === "Draft" || q.status === "Rejected") && (
             <button
               type="button"
+              disabled={actionMutation.isPending || saveMutation.isPending}
               onClick={() => actionMutation.mutate("submit")}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {vi.questions.submit}
             </button>
@@ -477,6 +583,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {q && isOwner && q.status === "Submitted" && (
             <button
               type="button"
+              disabled={actionMutation.isPending}
               onClick={() => actionMutation.mutate("withdraw")}
               className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
             >
@@ -487,6 +594,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {q && isOwner && q.source === "AI" && !q.aiReviewedByAuthor && (
             <button
               type="button"
+              disabled={actionMutation.isPending}
               onClick={() => actionMutation.mutate("mark-reviewed")}
               className="rounded border border-amber-400 bg-amber-50 px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
             >
@@ -497,6 +605,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {q && (q.status === "Approved" || q.status === "Rejected") && (
             <button
               type="button"
+              disabled={actionMutation.isPending}
               onClick={() => actionMutation.mutate("archive")}
               className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
             >
@@ -507,6 +616,7 @@ function QuestionEditorForm({ initialQuestion }: { initialQuestion?: Question })
           {q && isOwner && (q.status === "Draft" || q.status === "Rejected") && (
             <button
               type="button"
+              disabled={actionMutation.isPending}
               onClick={() => {
                 if (window.confirm(vi.common.confirmDelete)) actionMutation.mutate("delete");
               }}
@@ -544,9 +654,22 @@ function QuestionDetailInner() {
         </h1>
       </div>
 
-      {id && questionQuery.isLoading ? (
-        <p className="text-sm text-slate-600">{vi.common.loading}</p>
-      ) : (
+      {id && questionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
+
+      {id && questionQuery.isError && (
+        <div className="space-y-3 rounded border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800">
+          <p>{questionQuery.error.message}</p>
+          <button
+            type="button"
+            onClick={() => void questionQuery.refetch()}
+            className="rounded border border-rose-300 bg-white px-3 py-1 text-xs font-medium text-rose-800 hover:bg-rose-100"
+          >
+            {vi.auth.retry}
+          </button>
+        </div>
+      )}
+
+      {(!id || questionQuery.data) && (
         <QuestionEditorForm
           key={questionQuery.data ? `${questionQuery.data.id}-${questionQuery.data.updatedAt}` : "new"}
           initialQuestion={questionQuery.data}
