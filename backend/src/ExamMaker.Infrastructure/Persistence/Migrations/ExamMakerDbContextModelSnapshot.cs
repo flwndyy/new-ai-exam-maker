@@ -161,6 +161,10 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("department_id");
+
                     b.Property<Guid>("EntityId")
                         .HasColumnType("uuid")
                         .HasColumnName("entity_id");
@@ -187,6 +191,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ActorId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_actor_created");
+
+                    b.HasIndex("DepartmentId", "CreatedAt")
+                        .HasDatabaseName("ix_audit_logs_department_created");
 
                     b.HasIndex("EntityType", "EntityId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_entity_created");

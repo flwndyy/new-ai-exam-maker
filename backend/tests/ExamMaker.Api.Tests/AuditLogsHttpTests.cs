@@ -62,7 +62,7 @@ public sealed class AuditLogsHttpTests
     {
         using var app = new AuditLogsTestFactory();
         app.Directory.User = AuthTestFactory.Teacher with { Role = Roles.Head };
-        app.Reader.Error = new AuditException(400, "ValidationError", "Invalid entityType", "entityType");
+        app.Reader.Error = new AuditException(400, "ValidationFailed", "Invalid entityType", "entityType");
         using var client = app.CreateClient();
         client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
 
@@ -70,7 +70,7 @@ public sealed class AuditLogsHttpTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("ValidationError", body.GetProperty("code").GetString());
+        Assert.Equal("ValidationFailed", body.GetProperty("code").GetString());
         Assert.True(body.GetProperty("errors").TryGetProperty("entityType", out _));
     }
 }

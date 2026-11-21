@@ -17,7 +17,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
     /// <summary>Return paginated audit logs ordered newest first, scoped to the head's department.</summary>
     public async Task<AuditLogPage> ListAsync(Guid actorId, AuditLogQuery query, CancellationToken cancellationToken)
     {
-        var (entityType, action, fromUtc, toUtc) = ValidateQuery(query);
+        var (entityType, action, fromUtc, toUtc, offset) = ValidateQuery(query);
 
         var actor = await database.Users.AsNoTracking()
             .Where(u => u.Id == actorId)
@@ -64,7 +64,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         var items = await logs
             .OrderByDescending(x => x.CreatedAt)
             .ThenByDescending(x => x.Id)
-            .Skip((query.Page - 1) * query.PageSize)
+            .Skip(offset)
             .Take(query.PageSize)
             .Select(x => new AuditLogView(
                 x.Id,
@@ -81,44 +81,46 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         return new AuditLogPage(query.Page, query.PageSize, totalItems, totalPages, items);
     }
 
-    /// <summary>Restrict audit logs to entities belonging to the head's department (or deleted questions/sets acted on by department members).</summary>
+    /// <summary>Restrict audit logs to entities belonging to the head's department using the immutable event department snapshot (with live-table fallback only for pre-migration rows without DepartmentId).</summary>
     private IQueryable<AuditLog> FilterByDepartment(IQueryable<AuditLog> logs, Guid deptId) =>
         logs.Where(log =>
-            (log.EntityType == "Question" && (
-                database.Questions.Any(q => q.Id == log.EntityId && q.DepartmentId == deptId)
-                || (log.Action == "DeleteQuestion" && log.Actor != null && log.Actor.DepartmentId == deptId)))
-            || (log.EntityType == "Exam" && database.Exams.Any(e => e.Id == log.EntityId && e.DepartmentId == deptId))
-            || (log.EntityType == "ExamVersion" && database.ExamVersions.Any(v => v.Id == log.EntityId && v.Exam!.DepartmentId == deptId))
-            || (log.EntityType == "QuestionSet" && (
-                database.QuestionSetItems.Any(i => i.QuestionSetId == log.EntityId && i.Question!.DepartmentId == deptId)
-                || (log.Actor != null && log.Actor.DepartmentId == deptId)))
-            || (log.EntityType == "AiJob" && database.AiGenerationJobs.Any(j =>
-                j.Id == log.EntityId && database.Users.Any(u => u.Id == j.RequestedBy && u.DepartmentId == deptId)))
-            || (log.EntityType == "User" && database.Users.Any(u => u.Id == log.EntityId && u.DepartmentId == deptId))
-            || (log.EntityType == "Department" && log.EntityId == deptId)
-            || (log.EntityType == "Subject" && database.Subjects.Any(s => s.Id == log.EntityId && s.DepartmentId == deptId))
-            || (log.EntityType == "Topic" && database.Topics.Any(t => t.Id == log.EntityId && t.Subject!.DepartmentId == deptId)));
+            log.DepartmentId == deptId
+            || (log.DepartmentId == null && (
+                (log.EntityType == "Question" && database.Questions.Any(q => q.Id == log.EntityId && q.DepartmentId == deptId))
+                || (log.EntityType == "Exam" && database.Exams.Any(e => e.Id == log.EntityId && e.DepartmentId == deptId))
+                || (log.EntityType == "ExamVersion" && database.ExamVersions.Any(v => v.Id == log.EntityId && v.Exam!.DepartmentId == deptId))
+                || (log.EntityType == "QuestionSet" && database.QuestionSetItems.Any(i => i.QuestionSetId == log.EntityId && i.Question!.DepartmentId == deptId))
+                || (log.EntityType == "AiJob" && database.AiGenerationJobs.Any(j =>
+                    j.Id == log.EntityId && database.Users.Any(u => u.Id == j.RequestedBy && u.DepartmentId == deptId)))
+                || (log.EntityType == "User" && database.Users.Any(u => u.Id == log.EntityId && u.DepartmentId == deptId))
+                || (log.EntityType == "Department" && log.EntityId == deptId)
+                || (log.EntityType == "Subject" && database.Subjects.Any(s => s.Id == log.EntityId && s.DepartmentId == deptId))
+                || (log.EntityType == "Topic" && database.Topics.Any(t => t.Id == log.EntityId && t.Subject!.DepartmentId == deptId)))));
 
-    /// <summary>Validate pagination, entityType enum, and UTC time bounds before querying the database.</summary>
-    private static (string? EntityType, string? Action, DateTime? FromUtc, DateTime? ToUtc) ValidateQuery(AuditLogQuery query)
+    /// <summary>Validate pagination, offset overflow, entityType enum, and UTC time bounds before querying the database.</summary>
+    private static (string? EntityType, string? Action, DateTime? FromUtc, DateTime? ToUtc, int Offset) ValidateQuery(AuditLogQuery query)
     {
         if (query.Page < 1)
-            throw new AuditException(400, "ValidationError", "Số trang phải lớn hơn hoặc bằng 1.", "page");
+            throw new AuditException(400, "ValidationFailed", "Số trang phải lớn hơn hoặc bằng 1.", "page");
 
         if (query.PageSize is < 1 or > 100)
-            throw new AuditException(400, "ValidationError", "Kích thước trang phải nằm trong khoảng 1 đến 100.", "pageSize");
+            throw new AuditException(400, "ValidationFailed", "Kích thước trang phải nằm trong khoảng 1 đến 100.", "pageSize");
+
+        long rawOffset = (long)(query.Page - 1) * query.PageSize;
+        if (rawOffset > int.MaxValue)
+            throw new AuditException(400, "ValidationFailed", "Vị trí phân trang vượt quá giới hạn hỗ trợ.", "page");
 
         string? entityType = string.IsNullOrWhiteSpace(query.EntityType) ? null : query.EntityType.Trim();
         if (entityType is not null && !ValidEntityTypes.Contains(entityType))
-            throw new AuditException(400, "ValidationError", "Loại đối tượng audit không hợp lệ.", "entityType");
+            throw new AuditException(400, "ValidationFailed", "Loại đối tượng audit không hợp lệ.", "entityType");
 
         string? action = string.IsNullOrWhiteSpace(query.Action) ? null : query.Action.Trim();
         DateTime? fromUtc = query.From?.UtcDateTime;
         DateTime? toUtc = query.To?.UtcDateTime;
 
         if (fromUtc is not null && toUtc is not null && fromUtc >= toUtc)
-            throw new AuditException(400, "ValidationError", "Thời điểm bắt đầu phải nhỏ hơn thời điểm kết thúc.", "from");
+            throw new AuditException(400, "ValidationFailed", "Thời điểm bắt đầu phải nhỏ hơn thời điểm kết thúc.", "from");
 
-        return (entityType, action, fromUtc, toUtc);
+        return (entityType, action, fromUtc, toUtc, (int)rawOffset);
     }
 }

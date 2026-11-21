@@ -84,7 +84,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
                 IsActive = true
             };
             database.Users.Add(user);
-            Audit(actorId, user.Id, "CreateUser", null, "Active", bootstrap ? "Bootstrap administrator CLI." : "Administrator provisioned an invited account.");
+            Audit(actorId, user.Id, user.DepartmentId, "CreateUser", null, "Active", bootstrap ? "Bootstrap administrator CLI." : "Administrator provisioned an invited account.");
             await database.SaveChangesAsync(cancellationToken);
             commitStarted = true;
             await transaction.CommitAsync(cancellationToken);
@@ -141,7 +141,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         await RequireAdminAsync(actorId, cancellationToken);
         var user = await database.Users.SingleOrDefaultAsync(x => x.Id == id, cancellationToken) ?? throw Missing();
         if (input is not null) await ValidateCatalogAndEmailAsync(input, id, cancellationToken);
-        if (user.IsActive) Audit(actorId, user.Id, "DisableUser", "Active", "Inactive", "Local access denied before Cognito session revocation.");
+        if (user.IsActive) Audit(actorId, user.Id, user.DepartmentId, "DisableUser", "Active", "Inactive", "Local access denied before Cognito session revocation.");
         user.IsActive = false;
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -173,7 +173,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
             if (user.DepartmentId != input.DepartmentId)
                 permissionChanges.Add($"department {user.DepartmentId?.ToString() ?? "none"}->{input.DepartmentId?.ToString() ?? "none"}");
             var auditNote = permissionChanges.Count == 0 ? "User profile and managed role synchronized." : string.Join("; ", permissionChanges);
-            Audit(actorId, user.Id, "UpdateUser", user.IsActive ? "Active" : "Inactive", active ? "Active" : "Inactive", auditNote);
+            Audit(actorId, user.Id, user.DepartmentId, "UpdateUser", user.IsActive ? "Active" : "Inactive", active ? "Active" : "Inactive", auditNote);
             user.Email = input.Email;
             user.FullName = input.FullName;
             user.Role = input.Role;
@@ -293,13 +293,14 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         user.Role, user.DepartmentId, user.IsActive, user.CreatedAt);
 
     /// <summary>Persist user-management audit events in the same database transaction as the local change.</summary>
-    private void Audit(Guid? actorId, Guid id, string action, string? from, string to, string note) =>
+    private void Audit(Guid? actorId, Guid id, Guid? departmentId, string action, string? from, string to, string note) =>
         database.AuditLogs.Add(new AuditLog
         {
             Id = Guid.NewGuid(),
             ActorId = actorId,
             EntityType = "User",
             EntityId = id,
+            DepartmentId = departmentId,
             Action = action,
             FromStatus = from,
             ToStatus = to,

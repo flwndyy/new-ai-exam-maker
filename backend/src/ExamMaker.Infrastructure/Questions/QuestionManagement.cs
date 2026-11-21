@@ -147,6 +147,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                     ActorId = actor.Id,
                     EntityType = "QuestionSet",
                     EntityId = setId,
+                    DepartmentId = question.DepartmentId,
                     Action = "RemoveQuestionFromSet",
                     Note = $"Source question deleted; question={id}; revision={question.Revision}",
                     CreatedAt = DateTime.UtcNow
@@ -276,6 +277,7 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         ActorId = actorId,
         EntityType = "Question",
         EntityId = question.Id,
+        DepartmentId = question.DepartmentId,
         Action = action,
         FromStatus = from,
         ToStatus = action == "DeleteQuestion" ? null : question.Status,
