@@ -16,7 +16,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
     private static readonly Guid SubjectA = Guid.Parse("20000000-0000-0000-0000-000000000001");
     private static readonly Guid SubjectB = Guid.Parse("20000000-0000-0000-0000-000000000002");
     private static readonly Guid TopicA = Guid.Parse("30000000-0000-0000-0000-000000000001");
-    private static readonly Guid TopicB = Guid.Parse("30000000-0000-0000-0000-000000000002");
+    private static readonly Guid TopicB = Guid.Parse("30000000-0000-0000-0000-000000000026");
     private const string Payload = """{"options":[{"label":"A","text":"One"},{"label":"B","text":"Two"},{"label":"C","text":"Three"},{"label":"D","text":"Four"}],"correctLabel":"A"}""";
 
     private readonly Guid headA = Guid.NewGuid();
@@ -39,17 +39,40 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
 
         var qA = new Question
         {
-            Id = Guid.NewGuid(), SubjectId = SubjectA, TopicId = TopicA, Grade = 10, DepartmentId = DeptA,
-            CreatedBy = teacherA, Type = "MultipleChoice", Difficulty = "Recognition", Stem = "Q A", Payload = Payload, Status = "Approved"
+            Id = Guid.NewGuid(),
+            SubjectId = SubjectA,
+            TopicId = TopicA,
+            Grade = 10,
+            DepartmentId = DeptA,
+            CreatedBy = teacherA,
+            Type = "MultipleChoice",
+            Difficulty = "Recognition",
+            Stem = "Q A",
+            Payload = Payload,
+            Status = "Approved"
         };
         var qB = new Question
         {
-            Id = Guid.NewGuid(), SubjectId = SubjectB, TopicId = TopicB, Grade = 10, DepartmentId = DeptB,
-            CreatedBy = teacherB, Type = "MultipleChoice", Difficulty = "Recognition", Stem = "Q B", Payload = Payload, Status = "Draft"
+            Id = Guid.NewGuid(),
+            SubjectId = SubjectB,
+            TopicId = TopicB,
+            Grade = 10,
+            DepartmentId = DeptB,
+            CreatedBy = teacherB,
+            Type = "MultipleChoice",
+            Difficulty = "Recognition",
+            Stem = "Q B",
+            Payload = Payload,
+            Status = "Draft"
         };
         var examA = new Exam
         {
-            Id = Guid.NewGuid(), Title = "Exam A", SubjectId = SubjectA, Grade = 10, DepartmentId = DeptA, CreatedBy = teacherA
+            Id = Guid.NewGuid(),
+            Title = "Exam A",
+            SubjectId = SubjectA,
+            Grade = 10,
+            DepartmentId = DeptA,
+            CreatedBy = teacherA
         };
         db.Questions.AddRange(qA, qB);
         db.Exams.Add(examA);
