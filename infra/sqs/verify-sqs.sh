@@ -7,7 +7,10 @@
 #
 # Usage:
 #   ./infra/sqs/verify-sqs.sh
-#   SMOKE_TEST=1 ./infra/sqs/verify-sqs.sh   # Also test send -> receive -> delete cycle
+#   # ONLY run SMOKE_TEST=1 before Worker (B6) is deployed or while exammaker-worker is stopped!
+#   # Running SMOKE_TEST=1 against an active worker risks the worker consuming the synthetic
+#   # message (no jobId) or smoke test touching a real job and incrementing ApproximateReceiveCount.
+#   SMOKE_TEST=1 ./infra/sqs/verify-sqs.sh
 
 set -euo pipefail
 
@@ -17,6 +20,8 @@ export MSYS2_ARG_CONV_EXCL="*"
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
+MAIN_QUEUE_NAME="${MAIN_QUEUE_NAME:-exammaker-${ENV_NAME}-ai-jobs}"
+DLQ_NAME="${DLQ_NAME:-exammaker-${ENV_NAME}-ai-jobs-dlq}"
 SMOKE_TEST="${SMOKE_TEST:-0}"
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
@@ -69,18 +74,18 @@ DLQ_ATTRS_JSON="$(aws sqs get-queue-attributes \
 LIVE_MAIN_ARN="$(jq -r '.Attributes.QueueArn // empty' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
 LIVE_DLQ_ARN="$(jq -r '.Attributes.QueueArn // empty' <<<"$DLQ_ATTRS_JSON" | tr -d '\r\n')"
 
-# 2. Main Queue ARN in SSM matches live SQS queue
-if [ "$LIVE_MAIN_ARN" = "$MAIN_ARN" ]; then
-  pass "Main Queue SSM ARN matches live SQS queue"
+# 2. Main Queue ARN in SSM matches live SQS queue and expected queue name for this env
+if [ "$LIVE_MAIN_ARN" = "$MAIN_ARN" ] && [[ "$LIVE_MAIN_ARN" == *":${MAIN_QUEUE_NAME}" ]]; then
+  pass "Main Queue SSM ARN matches live SQS queue ':${MAIN_QUEUE_NAME}'"
 else
-  fail "Main Queue ARN mismatch between SSM and live SQS"
+  fail "Main Queue ARN mismatch (SSM vs live SQS or does not end with ':${MAIN_QUEUE_NAME}')"
 fi
 
-# 3. DLQ ARN in SSM matches live SQS DLQ
-if [ "$LIVE_DLQ_ARN" = "$DLQ_ARN" ]; then
-  pass "DLQ SSM ARN matches live SQS Dead-Letter Queue"
+# 3. DLQ ARN in SSM matches live SQS DLQ and expected queue name for this env
+if [ "$LIVE_DLQ_ARN" = "$DLQ_ARN" ] && [[ "$LIVE_DLQ_ARN" == *":${DLQ_NAME}" ]]; then
+  pass "DLQ SSM ARN matches live SQS Dead-Letter Queue ':${DLQ_NAME}'"
 else
-  fail "DLQ ARN mismatch between SSM and live SQS"
+  fail "DLQ ARN mismatch (SSM vs live SQS or does not end with ':${DLQ_NAME}')"
 fi
 
 # 4. Both queues are Standard queues (not FIFO)
@@ -163,10 +168,19 @@ else
   fail "Missing Project=ai-exam-maker tag (main='${MAIN_TAG_PROJ}', dlq='${DLQ_TAG_PROJ}')"
 fi
 
+# Informational DLQ depth check (helpful quick health summary)
+DLQ_VISIBLE="$(jq -r '.Attributes.ApproximateNumberOfMessages // 0' <<<"$DLQ_ATTRS_JSON" | tr -d '\r\n')"
+DLQ_INFLIGHT="$(jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible // 0' <<<"$DLQ_ATTRS_JSON" | tr -d '\r\n')"
+if [ "$DLQ_VISIBLE" -gt 0 ] || [ "$DLQ_INFLIGHT" -gt 0 ]; then
+  echo "[WARNING] DLQ '${DLQ_NAME}' currently has messages (visible=${DLQ_VISIBLE}, in_flight=${DLQ_INFLIGHT}) — inspect per docs/runbooks/sqs.md §6."
+else
+  echo "[INFO] DLQ '${DLQ_NAME}' depth is 0 (visible=0, in_flight=0)."
+fi
+
 # Optional Smoke Test: send -> receive -> delete synthetic test message
 if [ "$SMOKE_TEST" = "1" ]; then
   echo ""
-  echo "==> Running SQS smoke test (send -> receive -> delete)..."
+  echo "==> Running SQS smoke test (ONLY safe before B6 deploy or while exammaker-worker is stopped)..."
   MAIN_VISIBLE="$(jq -r '.Attributes.ApproximateNumberOfMessages // 0' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
   MAIN_INFLIGHT="$(jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible // 0' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
   if [ "$MAIN_VISIBLE" -gt 0 ] || [ "$MAIN_INFLIGHT" -gt 0 ]; then

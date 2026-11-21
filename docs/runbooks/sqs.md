@@ -31,10 +31,10 @@ Tài liệu hướng dẫn dựng, kiểm tra, bàn giao và xử lý sự cố 
 ./infra/sqs/setup-sqs.sh
 ```
 
-**Hành vi `create-if-absent`:**
-- Tạo DLQ `exammaker-dev-ai-jobs-dlq` trước để lấy ARN, sau đó tạo Main Queue `exammaker-dev-ai-jobs` gắn sẵn `RedrivePolicy` (`maxReceiveCount=3`).
-- Nếu queue đã tồn tại: tái sử dụng queue hiện có và cập nhật lại 4 tham số metadata lên SSM Parameter Store. Để kiểm tra độ sai lệch cấu hình (drift), chạy `./infra/sqs/verify-sqs.sh`.
+**Hành vi idempotent:**
+- Tạo (nếu chưa có) và đồng bộ lại cấu hình (`set-queue-attributes`, `tag-queue`) cho cả DLQ `exammaker-dev-ai-jobs-dlq` và Main Queue `exammaker-dev-ai-jobs` — bao gồm `RedrivePolicy` (`maxReceiveCount=3` cố định khớp `AiQuota:MaxAttempts=3`) và `RedriveAllowPolicy` trên DLQ (chỉ cho phép Main Queue trỏ tới).
 - Chỉ coi lỗi `NonExistentQueue` / `QueueDoesNotExist` là chưa có queue; mọi lỗi khác (`AccessDenied`, `Throttling`) sẽ dừng script ngay và in lỗi thật.
+- Cập nhật lại 4 tham số metadata lên SSM Parameter Store. Sau đó chạy `./infra/sqs/verify-sqs.sh` để xác minh toàn bộ 12 tiêu chí.
 
 ---
 
@@ -62,6 +62,10 @@ Tài liệu hướng dẫn dựng, kiểm tra, bàn giao và xử lý sự cố 
 ## 4. Quy ước bàn giao cho DEV-B (`B5`/`B6`) & OPS-1 (`O3`)
 
 - **Backend (.NET 10):** `backend/src/ExamMaker.Infrastructure/Ai/AiServiceCollectionExtensions.cs` đọc cấu hình tại khóa **`Sqs:AiJobsQueueUrl`**. Khi đặt `ParameterStore__Path=/exammaker/dev`, tham số SSM `/exammaker/dev/Sqs/AiJobsQueueUrl` được tự động ánh xạ vào `Sqs:AiJobsQueueUrl`.
+- **Ràng buộc cho Worker (`B6`) theo `docs/context.md` §4.1.1:**
+  - **`VisibilityTimeout = 300s` (5 phút):** Tổng thời gian xử lý tối đa của 1 lần nhận message (timeout gọi Bedrock + số lần thử sửa JSON + bước kiểm chứng đáp án khi bật ở demo) phải **< 300 giây (có biên an toàn)**, hoặc Worker bắt buộc gia hạn lease định kỳ bằng `ChangeMessageVisibility` trước khi hết hạn.
+  - **`maxReceiveCount = 3` (khóa cứng):** Khớp chính xác `AiQuota:MaxAttempts = 3` trong DB.
+  - **Poison message (không parse được `jobId`):** Worker nên coi là non-retryable — ghi log cảnh báo và **xóa message ngay**, tránh để rơi vào vòng lặp 3 lần rồi đẩy vào DLQ làm nổ alarm O13.
 - **Quyền IAM tối thiểu cho EC2 Instance Profile (Task `O3`):**
   - Xem statement `SqsJobQueue` trong [`infra/iam/exammaker-ec2-policy.example.json`](../../infra/iam/exammaker-ec2-policy.example.json): chỉ cấp `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, `sqs:GetQueueAttributes` giới hạn trên `${SQS_QUEUE_ARN}` (giá trị lấy từ `/exammaker/dev/Sqs/AiJobsQueueArn`).
   - **Không** cấp quyền `sqs:PurgeQueue` hay `sqs:DeleteQueue` cho EC2 runtime.
@@ -72,17 +76,19 @@ Tài liệu hướng dẫn dựng, kiểm tra, bàn giao và xử lý sự cố 
 ## 5. Quy trình kiểm thử (Verification)
 
 ```bash
-# Kiểm tra tự động 12 tiêu chí cấu hình, bảo mật & chi phí
+# Kiểm tra tự động 12 tiêu chí cấu hình, bảo mật & chi phí (an toàn chạy mọi lúc)
 ./infra/sqs/verify-sqs.sh
 
-# Kiểm tra 12 tiêu chí + chạy smoke test gửi -> nhận -> xóa message mẫu (chỉ chạy khi Worker chưa poll queue)
+# CHỈ chạy SMOKE_TEST=1 trước khi deploy Worker (B6) hoặc khi đã dừng exammaker-worker!
 SMOKE_TEST=1 ./infra/sqs/verify-sqs.sh
 ```
 
-Script xác minh đầy đủ **12 tiêu chí**:
+> **Cảnh báo với `SMOKE_TEST=1`:** Tuyệt đối **không** chạy `SMOKE_TEST=1` khi Worker (B6) đang chạy trên EC2 (`sudo systemctl stop exammaker-worker` trước nếu cần test lại), vì Worker đang long-poll có thể nhận mất message mẫu không có `jobId` (gây fail hoặc rơi vào DLQ kích hoạt alarm O13), hoặc smoke test nhận nhầm message thật làm tăng `ApproximateReceiveCount`.
+
+Script xác minh đầy đủ **12 tiêu chí** (và in thêm thông tin độ sâu DLQ hiện tại):
 1. Đủ 4 tham số SSM dưới `/exammaker/<env>/Sqs/` (`AiJobsQueueUrl`, `AiJobsQueueArn`, `AiJobsDlqUrl`, `AiJobsDlqArn`).
-2. `AiJobsQueueArn` trong SSM khớp với ARN thực tế của Main Queue.
-3. `AiJobsDlqArn` trong SSM khớp với ARN thực tế của DLQ.
+2. `AiJobsQueueArn` trong SSM khớp với ARN thực tế và kết thúc bằng `:exammaker-<env>-ai-jobs`.
+3. `AiJobsDlqArn` trong SSM khớp với ARN thực tế và kết thúc bằng `:exammaker-<env>-ai-jobs-dlq`.
 4. Cả 2 queue đều là **Standard Queue** (`FifoQueue=false`).
 5. `RedrivePolicy` trên Main Queue trỏ chính xác sang DLQ với `maxReceiveCount = 3`.
 6. `VisibilityTimeout >= 300` giây trên Main Queue.
@@ -95,7 +101,7 @@ Script xác minh đầy đủ **12 tiêu chí**:
 
 ---
 
-## 6. Vận hành & Xử lý khi có message rơi vào DLQ
+## 6. Vận hành & Điều tra khi có message rơi vào DLQ
 
 Khi CloudWatch Alarm (O13) báo `DLQ depth > 0`:
 
@@ -105,11 +111,14 @@ Khi CloudWatch Alarm (O13) báo `DLQ depth > 0`:
    aws sqs get-queue-attributes --region ap-southeast-1 --queue-url "$DLQ_URL" \
      --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
    ```
-2. **Đọc nội dung message mẫu (không xóa) để lấy `jobId` và đối chiếu bảng `ai_generation_jobs` + log Worker:**
+2. **Đọc nội dung message mẫu (không xóa) để lấy `jobId` và đối chiếu bảng `ai_generation_jobs` (`status`, `attempt`, `error_code`, `error_message`) + log Worker:**
    ```bash
    aws sqs receive-message --region ap-southeast-1 --queue-url "$DLQ_URL" \
      --max-number-of-messages 5 --visibility-timeout 30
    ```
-3. **Đẩy lại message về Main Queue (Start DLQ Redrive) sau khi đã khắc phục nguyên nhân gốc:**
-   - Qua AWS Console: *SQS → `exammaker-dev-ai-jobs-dlq` → Start DLQ redrive → Redrive to source queue*.
-   - Lưu ý: Worker có cơ chế idempotent theo `jobId` và kiểm tra `attempt < max_attempts`, vì vậy nếu job đã được đánh dấu `Failed` trong DB thì cần reset trạng thái job hợp lệ trước khi redrive.
+   *(Lưu ý: lệnh trên sẽ tạm ẩn message đã đọc trong **30 giây**; trong khoảng 30 giây này, AWS Console sẽ hiển thị message ở cột **Messages in flight** chứ không phải **Messages available**.)*
+3. **Hướng xử lý sau điều tra (KHÔNG sửa tay DB và KHÔNG redrive mù):**
+   - **DLQ dùng cho điều tra sự cố (forensics):** Theo thiết kế `docs/context.md` §4.1.1 (B6), message chỉ rơi vào DLQ sau 3 lần nhận — khi đó `attempt` trong DB thường đã đạt `max_attempts = 3` (hoặc job đã ở trạng thái `Failed`/`Succeeded`), nên đẩy lại thẳng về Main Queue (redrive) sẽ bị Worker bỏ qua (no-op).
+   - **Cấm sửa tay cột `status`/`attempt` trong PostgreSQL:** Mọi chuyển trạng thái chỉ được đi qua state machine ở tầng `Application` (có audit log và đảm bảo ràng buộc `CHECK` theo `docs/context.md` §8.1, §8.4).
+   - **Chạy lại tác vụ:** Sau khi đã khắc phục nguyên nhân gốc (ví dụ lỗi Bedrock/mạng/IAM), giáo viên tạo một yêu cầu sinh câu mới (có tính quota bình thường), hoặc chờ đội ngũ chốt thêm endpoint admin retry trong B6 (nếu cần, phải cập nhật `docs/context.md` trước).
+   - Sau khi đã ghi nhận đủ thông tin điều tra, có thể xóa message đã xử lý khỏi DLQ (hoặc để tự hết hạn sau 14 ngày) để đưa DLQ depth về `0`.

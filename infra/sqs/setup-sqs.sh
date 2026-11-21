@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Create-if-absent setup script for Amazon SQS + Dead-Letter Queue (AI Exam Maker - Task O11).
-# Creates (if not already present) and publishes configuration for:
-#   - Dead-Letter Queue (Standard): exammaker-${ENV_NAME}-ai-jobs-dlq (14-day retention, SSE-SQS = $0)
+# Idempotent setup script for Amazon SQS + Dead-Letter Queue (AI Exam Maker - Task O11).
+# Creates (if absent) and reconciles attributes, RedrivePolicy, RedriveAllowPolicy, tags, and SSM entries for:
+#   - Dead-Letter Queue (Standard): exammaker-${ENV_NAME}-ai-jobs-dlq (14-day retention, SSE-SQS = $0,
+#     RedriveAllowPolicy restricted to Main Queue ARN)
 #   - Main Queue (Standard): exammaker-${ENV_NAME}-ai-jobs (VisibilityTimeout=300s, Long Polling=20s,
 #     RedrivePolicy maxReceiveCount=3 -> DLQ, SSE-SQS = $0)
 #   - SSM Parameter Store entries under ${SSM_PREFIX}/Sqs/*:
 #       AiJobsQueueUrl (bound by backend Sqs:AiJobsQueueUrl), AiJobsQueueArn, AiJobsDlqUrl, AiJobsDlqArn
 #
-# Note: For drift detection and compliance auditing, run ./infra/sqs/verify-sqs.sh.
+# Note: Run ./infra/sqs/verify-sqs.sh after setup to verify all compliance checks.
 #
 # Dependencies: aws (CLI v2), jq (both pre-installed in AWS CloudShell).
 #
@@ -31,7 +32,9 @@ VISIBILITY_TIMEOUT="${VISIBILITY_TIMEOUT:-300}"
 LONG_POLL_SECONDS="${LONG_POLL_SECONDS:-20}"
 MAIN_RETENTION_SECONDS="${MAIN_RETENTION_SECONDS:-345600}"   # 4 days
 DLQ_RETENTION_SECONDS="${DLQ_RETENTION_SECONDS:-1209600}"    # 14 days
-MAX_RECEIVE_COUNT="${MAX_RECEIVE_COUNT:-3}"
+
+# Fixed to 3 to stay strictly aligned with backend AiQuota:MaxAttempts=3 (docs/context.md §4.1.1).
+readonly MAX_RECEIVE_COUNT=3
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
@@ -86,20 +89,29 @@ put_string_param() {
 
 echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | SSM Prefix: ${SSM_PREFIX}"
 
-# 1. Create-if-absent Dead-Letter Queue (DLQ)
+# 1. Create or reconcile Dead-Letter Queue (DLQ)
+DLQ_ATTRS="$(jq -nc \
+  --arg ret "$DLQ_RETENTION_SECONDS" \
+  --arg wait "$LONG_POLL_SECONDS" \
+  '{
+    MessageRetentionPeriod: $ret,
+    ReceiveMessageWaitTimeSeconds: $wait,
+    SqsManagedSseEnabled: "true"
+  }')"
+
 DLQ_URL="$(get_queue_url_safe "$DLQ_NAME")"
 if [ -n "$DLQ_URL" ]; then
-  echo "==> Reusing existing SQS DLQ '${DLQ_NAME}'."
+  echo "==> Reusing existing SQS DLQ '${DLQ_NAME}' — reconciling attributes and tags..."
+  aws sqs set-queue-attributes \
+    --region "$AWS_REGION" \
+    --queue-url "$DLQ_URL" \
+    --attributes "$DLQ_ATTRS" >/dev/null
+  aws sqs tag-queue \
+    --region "$AWS_REGION" \
+    --queue-url "$DLQ_URL" \
+    --tags "Project=ai-exam-maker,Environment=${ENV_NAME},Task=O11,Role=dlq" >/dev/null
 else
   echo "==> Creating SQS DLQ '${DLQ_NAME}' (retention=${DLQ_RETENTION_SECONDS}s, long-poll=${LONG_POLL_SECONDS}s, SSE-SQS)..."
-  DLQ_ATTRS="$(jq -nc \
-    --arg ret "$DLQ_RETENTION_SECONDS" \
-    --arg wait "$LONG_POLL_SECONDS" \
-    '{
-      MessageRetentionPeriod: $ret,
-      ReceiveMessageWaitTimeSeconds: $wait,
-      SqsManagedSseEnabled: "true"
-    }')"
   DLQ_URL="$(aws sqs create-queue \
     --region "$AWS_REGION" \
     --queue-name "$DLQ_NAME" \
@@ -115,31 +127,40 @@ if [ -z "$DLQ_ARN" ] || [ "$DLQ_ARN" = "None" ]; then
   exit 1
 fi
 
-# 2. Create-if-absent Main Queue with RedrivePolicy pointing to DLQ
+# 2. Create or reconcile Main Queue with RedrivePolicy pointing to DLQ
+REDRIVE_POLICY="$(jq -nc \
+  --arg dlqArn "$DLQ_ARN" \
+  --arg maxRecv "$MAX_RECEIVE_COUNT" \
+  '{
+    deadLetterTargetArn: $dlqArn,
+    maxReceiveCount: $maxRecv
+  }')"
+MAIN_ATTRS="$(jq -nc \
+  --arg vis "$VISIBILITY_TIMEOUT" \
+  --arg wait "$LONG_POLL_SECONDS" \
+  --arg ret "$MAIN_RETENTION_SECONDS" \
+  --arg redrive "$REDRIVE_POLICY" \
+  '{
+    VisibilityTimeout: $vis,
+    ReceiveMessageWaitTimeSeconds: $wait,
+    MessageRetentionPeriod: $ret,
+    SqsManagedSseEnabled: "true",
+    RedrivePolicy: $redrive
+  }')"
+
 MAIN_QUEUE_URL="$(get_queue_url_safe "$MAIN_QUEUE_NAME")"
 if [ -n "$MAIN_QUEUE_URL" ]; then
-  echo "==> Reusing existing SQS Main Queue '${MAIN_QUEUE_NAME}'."
+  echo "==> Reusing existing SQS Main Queue '${MAIN_QUEUE_NAME}' — reconciling attributes, RedrivePolicy, and tags..."
+  aws sqs set-queue-attributes \
+    --region "$AWS_REGION" \
+    --queue-url "$MAIN_QUEUE_URL" \
+    --attributes "$MAIN_ATTRS" >/dev/null
+  aws sqs tag-queue \
+    --region "$AWS_REGION" \
+    --queue-url "$MAIN_QUEUE_URL" \
+    --tags "Project=ai-exam-maker,Environment=${ENV_NAME},Task=O11,Role=main" >/dev/null
 else
   echo "==> Creating SQS Main Queue '${MAIN_QUEUE_NAME}' (visibility=${VISIBILITY_TIMEOUT}s, maxReceiveCount=${MAX_RECEIVE_COUNT}, long-poll=${LONG_POLL_SECONDS}s, SSE-SQS)..."
-  REDRIVE_POLICY="$(jq -nc \
-    --arg dlqArn "$DLQ_ARN" \
-    --arg maxRecv "$MAX_RECEIVE_COUNT" \
-    '{
-      deadLetterTargetArn: $dlqArn,
-      maxReceiveCount: $maxRecv
-    }')"
-  MAIN_ATTRS="$(jq -nc \
-    --arg vis "$VISIBILITY_TIMEOUT" \
-    --arg wait "$LONG_POLL_SECONDS" \
-    --arg ret "$MAIN_RETENTION_SECONDS" \
-    --arg redrive "$REDRIVE_POLICY" \
-    '{
-      VisibilityTimeout: $vis,
-      ReceiveMessageWaitTimeSeconds: $wait,
-      MessageRetentionPeriod: $ret,
-      SqsManagedSseEnabled: "true",
-      RedrivePolicy: $redrive
-    }')"
   MAIN_QUEUE_URL="$(aws sqs create-queue \
     --region "$AWS_REGION" \
     --queue-name "$MAIN_QUEUE_NAME" \
@@ -154,6 +175,15 @@ if [ -z "$MAIN_QUEUE_ARN" ] || [ "$MAIN_QUEUE_ARN" = "None" ]; then
   echo "ERROR: Failed to resolve QueueArn for Main Queue '${MAIN_QUEUE_NAME}'." >&2
   exit 1
 fi
+
+# Restrict DLQ RedriveAllowPolicy so only this Main Queue can use it as a dead-letter target
+REDRIVE_ALLOW_POLICY="$(jq -nc --arg mainArn "$MAIN_QUEUE_ARN" '{redrivePermission:"byQueue",sourceQueueArns:[$mainArn]}')"
+DLQ_ALLOW_ATTRS="$(jq -nc --arg allow "$REDRIVE_ALLOW_POLICY" '{RedriveAllowPolicy:$allow}')"
+aws sqs set-queue-attributes \
+  --region "$AWS_REGION" \
+  --queue-url "$DLQ_URL" \
+  --attributes "$DLQ_ALLOW_ATTRS" >/dev/null
+echo "==> Applied RedriveAllowPolicy on DLQ '${DLQ_NAME}' (byQueue -> '${MAIN_QUEUE_NAME}' only)."
 
 # 3. Publish SQS metadata to SSM Parameter Store (Standard tier = $0)
 echo "==> Writing SQS parameters to SSM Parameter Store under '${SSM_PREFIX}/Sqs/'..."
