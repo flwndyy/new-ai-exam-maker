@@ -101,9 +101,11 @@ npm ci
 npm run build
 # HTML và file chưa fingerprint: cache ngắn để deploy có hiệu lực nhanh.
 aws s3 sync out/ s3://<bucket-name>/ --delete \
+  --exclude "_next/static/*" \
+  --exclude "assets/*" \
   --cache-control "public,max-age=60,must-revalidate"
 # Asset fingerprinted: cache lâu, immutable.
-aws s3 sync out/ s3://<bucket-name>/ \
+aws s3 cp out/ s3://<bucket-name>/ --recursive \
   --exclude "*" \
   --include "_next/static/*" \
   --include "assets/*" \
@@ -113,9 +115,10 @@ aws cloudfront create-invalidation \
   --paths "/*"
 ```
 
-Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường. Invalidation vẫn
-được chạy sau deploy để xóa object cũ còn nằm trong edge cache; `Cache-Control` và TTL policy
-giúp HTML ngắn hạn nhưng asset fingerprinted vẫn được cache lâu.
+Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường. Lượt `sync` đầu
+không đụng vào asset fingerprinted; lượt `cp --recursive` luôn ghi lại metadata của nhóm
+asset để bảo đảm `Cache-Control: immutable`, kể cả khi nội dung asset không đổi. Invalidation
+vẫn được chạy sau deploy để xóa object cũ còn nằm trong edge cache.
 
 ## 5. Behavior `/api/*` tới origin EC2
 
