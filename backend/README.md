@@ -183,3 +183,10 @@ access token as described in `docs/a3-auth.md`. The automated tests in
 `AiEndpointsTests`, `EfAiJobStoreTests`, `EfAiJobReaderTests` and
 `EfAiUsageReaderTests` cover the endpoints, quota reservation under concurrency
 and job reads against PostgreSQL.
+
+## Question workflow (A6)
+
+See `docs/a6-question-workflow.md` for bank CRUD, payload validation, review
+transitions, department/ownership policies, AI author review and atomic audit.
+A6 reuses the existing question schema. Run the API and Infrastructure test
+projects with `A2_TEST_PG_ADMIN` to include real PostgreSQL workflow tests.

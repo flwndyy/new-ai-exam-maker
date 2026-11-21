@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.9** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.13** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -81,7 +81,7 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 | Sửa/xóa câu hỏi `Draft`/`Rejected` của mình (xóa chỉ khi chưa được đề nào tham chiếu) | ✓                                  | ✓                                | –                       |
 | Gửi duyệt / rút lại câu hỏi của mình (`Draft`/`Rejected` → `Submitted`)               | ✓                                  | ✓                                | –                       |
 | Đánh dấu "Đã rà soát" câu AI của mình (`mark-reviewed`)                               | ✓                                  | ✓                                | –                       |
-| Archive câu hỏi `Approved`                                                            | của mình                           | cùng tổ                          | tất cả                  |
+| Archive câu hỏi `Approved`                                                            | của mình                           | của mình hoặc cùng tổ | tất cả                  |
 | Duyệt/từ chối câu hỏi                                                                 | –                                  | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
 | Xem câu hỏi `Approved`                                                                | cùng tổ                            | cùng tổ                          | tất cả                  |
 | Tạo đề, ghép câu (của mình hoặc `Approved` cùng tổ)                                   | ✓                                  | ✓                                | –                       |
@@ -198,6 +198,29 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 - **Xóa**: chỉ xóa được câu `Draft`/`Rejected` **chưa được đề nào tham chiếu**; câu đã `Approved` thì dùng `Archive`, không xóa.
 - Mọi chuyển trạng thái ghi `AuditLog`.
 
+#### Chi tiết triển khai A6
+
+- UpdatedAt của thay đổi thực sự được chuẩn hóa theo micro giây PostgreSQL và tăng ít nhất 1 micro giây so với mốc đã lưu; thao tác no-op giữ nguyên timestamp. Thiếu submittedAt được kiểm trong service sau quyền và trạng thái, không dùng Required ở DTO review; lỗi định dạng JSON vẫn do MVC xử lý trước action.
+- Giữ chặn sửa/archive khi đề Draft/Rejected/Submitted tham chiếu. Lỗi 409 QuestionReferenced trả references (totalItems và tối đa 20 items: examId, versionId, status, createdBy.id/fullName) để liên hệ chủ đề gỡ câu; không lộ tiêu đề/nội dung đề hoặc email, chỉ trả sau kiểm quyền nhìn thấy/thao tác trên câu.
+- Approve/reject câu hỏi và contract A7 bắt buộc gửi submittedAt đã đọc. So UTC tới mili giây để hỗ trợ JavaScript Date; lượt submit mới lưu đúng mili giây và vượt mốc mili giây của sự kiện trước, nên hai lượt gửi cách nhau ít nhất 1ms dù cùng giờ hệ thống. Thiếu trả 400 errors[submittedAt], lệch lượt trả 409 Conflict; không thay trạng thái/audit. Quyền và trạng thái được kiểm trước token lượt duyệt. Frontend phải đọc lại sau Conflict, không tự thay token rồi retry.
+- Points và tolerance dùng chung bộ kiểm số JSON: số mũ tường minh trong [-1000, 1000], dạng thập phân PostgreSQL sẽ lưu tối đa 1024 ký tự (kể cả dấu và dấu chấm). Không giới hạn theo độ dài token khoa học ban đầu; nội dung đã nhận phải vẫn validate được sau jsonb chuẩn hóa. Points > 0, tolerance >= 0, không làm tròn qua decimal. Explanation trim/blank thành null trước kiểm giới hạn 10000 ký tự; vẫn cấm NUL.
+- Đọc câu không khóa và kiểm CanRead trước FOR UPDATE; sau khi khóa phải reload và kiểm lại quyền. Câu riêng tư của người khác trả 404 ngay cả khi hàng đang bị khóa, không trả 409 theo tình trạng khóa.
+
+- Model validation và lỗi binding dùng key JSON camelCase (stem/type/subjectId/grade), bỏ tiền tố $. của JSON path. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind MVC vẫn được kiểm trước action. Điểm rubric Essay kiểm dương trên số JSON gốc, không làm tròn qua decimal, nên số dương rất nhỏ vẫn hợp lệ theo OpenAPI.
+
+- API dùng schema A2, không thêm migration. State machine, quyền và payload ở Application; transaction và khóa ở Infrastructure. Creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
+- Teacher/head đọc câu của mình kể cả Archived, hoặc Approved cùng tổ; head còn đọc Submitted cùng tổ để duyệt. Admin đọc tất cả. GET và endpoint ghi che câu ngoài phạm vi bằng 404 trước kiểm quyền/trạng thái. Hàng đợi chỉ head/admin, loại câu của mình, sắp submittedAt tăng dần.
+- Department câu cố định theo môn lúc tạo, phải thuộc tổ tác giả. Sửa chỉ chọn môn/chương cùng department cố định và đúng khối. PUT kiểm trạng thái trước validation/catalog; Submitted phải withdraw, Archived không khôi phục.
+- So nội dung sau chuẩn hóa stem trim, explanation trim và blank thành null, payload theo cấu trúc JSON. PUT không đổi nội dung giữ nguyên trạng thái/revision/AI flags/updatedAt và không ghi audit. Sửa Approved mở Draft và revision+1; sửa Draft/Rejected giữ trạng thái/revision. Sửa nội dung AI reset rà soát, kiểm chứng và note.
+- Khi đề Draft/Rejected/Submitted tham chiếu câu, chặn đổi môn/chương/khối, sửa nội dung làm Approved mở lại và archive bằng 409 QuestionReferenced. Submitted có thể withdraw/reject nên cần bảo vệ nguồn như đề đang sửa. Khóa các phiên bản tham chiếu FOR SHARE tới commit. Chỉ có tham chiếu Approved/Published/Archived thì cho sửa/archive nguồn, giữ nguyên snapshot.
+- Archive chỉ từ Approved: teacher/head được archive câu của mình kể cả sau chuyển tổ; head còn được archive câu cùng tổ, admin tất cả. Kiểm quyền và trạng thái trước kiểm tham chiếu đề.
+- DELETE chỉ cho creator xóa Draft/Rejected khi không có exam_version_questions tham chiếu. Tự gỡ question_set_items kể cả bộ người khác; ghi audit QuestionSet cho từng bộ thực sự mất liên kết và DeleteQuestion trong cùng transaction. Lỗi phải rollback câu, liên kết và audit.
+- Mỗi ghi giữ FOR SHARE trên hàng user của actor, đọc lại active/role/tổ, sau đó shared catalog lock 48683402 và FOR UPDATE trên câu tới commit; không dùng khóa quản trị toàn cục A4. Actor mất/bị khóa trả 401 Unauthorized kèm WWW-Authenticate: Bearer; hợp lệ nhưng thiếu quyền trả 403. lock_timeout 2 giây, deadlock/lock timeout trả 409 Conflict.
+- A7 khi thêm item phải giữ FOR SHARE trên câu nguồn trong cùng transaction trước kiểm Approved/revision/môn/khối và chèn liên kết, phối hợp với FOR UPDATE của A6; không thả khóa trước khi chèn.
+- Payload đúng bốn dạng, không cho giả mạo creator/provenance/trạng thái hoặc field ngoài hợp đồng. Text tối đa 10000 ký tự; acceptedAnswers/rubric tối đa 20 phần tử; surrogate lẻ trả 400 errors[payload]. Số ShortAnswer chỉ dạng -?[0-9]+([.,][0-9]+)?, giữ nguyên chuỗi; không khoảng trắng, dấu cộng, số mũ, NaN/Infinity. Options theo A–D, statements a–d.
+- Submit xóa quyết định cũ và đặt submittedAt; withdraw xóa submittedAt và quyết định. Approve/reject ghi reviewer/reviewedAt, chỉ hai action này dùng ReviewNote trong audit; reject bắt buộc note. Admin/head không tự duyệt (403 SelfReview). Mọi thay đổi cùng audit dùng UTC; câu mới có createdAt = updatedAt.
+- AI phải mark-reviewed trước submit. Retry mark-reviewed đã true là no-op sau kiểm quyền/trạng thái, không đổi updatedAt hoặc ghi audit. Schema QuestionApproveRequest/QuestionRejectRequest từ chối field thừa, độc lập với contract exam-version A7; submit/approve khai báo cả response 400 ValidationFailed.
+
 ### 4.3 Đề thi: phiên bản & snapshot
 
 `Exam` là "danh tính" của đề; nội dung và trạng thái nằm ở **`ExamVersion`**.
@@ -211,7 +234,7 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──publ
                                   └─ sửa rồi submit lại → Submitted
 ```
 
-- `Draft`: người tạo chọn/sắp xếp câu hỏi, đặt điểm. Nội dung hiển thị là nội dung **hiện tại** của câu hỏi nguồn (có cảnh báo nếu câu nguồn đã đổi `revision`). Khi ghép có thể chọn câu của mình hoặc câu `Approved` cùng tổ, **nhưng khi `Submit` mọi câu phải đang `Approved`** (duyệt đề không thay cho duyệt câu).
+- `Draft`: người tạo chọn/sắp xếp câu hỏi, đặt điểm. Nội dung hiển thị là nội dung **hiện tại** của câu hỏi nguồn (giữ revision của câu Approved bằng guard A6; cảnh báo revision chỉ dành cho liên kết cũ hoặc dữ liệu import). Khi ghép có thể chọn câu của mình hoặc câu `Approved` cùng tổ, **nhưng khi `Submit` mọi câu phải đang `Approved`** (duyệt đề không thay cho duyệt câu).
 - **Khi gửi duyệt (`Submit`) → đóng băng**: sao chép **nội dung, đáp án, lời giải, điểm, dạng, mức độ** của từng câu vào `exam_version_questions` (snapshot) kèm `source_question_id`, `source_revision`; tính `content_hash` của cả phiên bản. Từ `Submitted` trở đi **không sửa được**.
 - Muốn sửa: người tạo **rút lại** (`Submitted → Draft`) trước khi có quyết định, hoặc **tạo phiên bản mới** (`POST /exams/{id}/versions`) sao chép từ phiên bản cũ.
 - `Rejected` luôn kèm lý do; người tạo **sửa được** (phiên bản được mở khóa), rồi `submit` lại trực tiếp — mỗi lần `Submit` lại **chụp snapshot mới** và tính lại `content_hash`. Hoặc tạo phiên bản mới.
@@ -349,7 +372,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 | Tầng     | Công nghệ                                                                                                           |
 | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | Frontend | **Next.js** (App Router, TypeScript, static export), Tailwind CSS, TanStack Query, React Hook Form + Zod, **KaTeX** |
-| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, FluentValidation, Serilog → CloudWatch                   |
+| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, validation thuần ở Application, Serilog → CloudWatch |
 | CSDL     | PostgreSQL, EF Core migrations                                                                                      |
 | AWS SDK  | SQS, SimpleSystemsManagement, BedrockRuntime, CognitoIdentityProvider (admin)                                       |
 | CI/CD    | GitHub Actions (mục 11)                                                                                             |
@@ -382,7 +405,7 @@ Cấu trúc repo (monorepo):
 - **questions**: id, subject_id, topic_id, **department_id** (lưu cố định lúc tạo, dùng cho phân quyền "cùng tổ"), grade, **type**, difficulty, **stem** (Markdown+LaTeX), **payload** (jsonb, theo dạng — mục 8.2), explanation, **status**, **revision**, source (`AI`/`Manual`), ai_job_id, ai_ordinal, **ai_verification** (`NotChecked/Agree/Disagree` + note), ai_reviewed_by_author (bool), created_by, submitted_at, reviewed_by, reviewed_at, review_note, timestamps
   - unique `(ai_job_id, ai_ordinal)` chống ghi trùng khi worker chạy lại
   - `difficulty`: `Recognition`, `Understanding`, `Application`, `HighApplication`
-  - CHECK: `type` thuộc enum; `payload` không null; kiểm tra sâu bằng FluentValidation theo từng dạng
+  - CHECK: `type` thuộc enum; `payload` không null; Application kiểm tra sâu bằng các hàm thuần theo từng dạng (QuestionRules/QuestionPayloadRules), không dùng FluentValidation. MVC chỉ kiểm binding/DataAnnotations, chuẩn hóa key lỗi theo tên JSON camelCase.
 - **question_sets** + **question_set_items**: bộ câu hỏi của giáo viên
 - **exams**: id, title, subject_id, grade, department_id, created_by
 - **exam_versions**: id, exam_id, **version_no**, status, duration_minutes, total_points, content_hash, submitted_at, reviewed_by, reviewed_at, review_note, published_by, published_at · unique `(exam_id, version_no)`; partial unique index: tối đa 1 version `Published` / exam
@@ -588,9 +611,32 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 ## Lịch sử thay đổi
 
-**0.9 — 21/11/2026**
+**0.13 — 21/11/2026**
 - Triển khai đăng nhập frontend B2: Authorization Code + PKCE với Cognito, access token trong bộ nhớ, refresh token trong `sessionStorage`, xử lý 401 (`signedOut`/`denied`) và đăng xuất. Bổ sung mục "Chi tiết triển khai B2" ở 9.2 và `docs/b2-auth-frontend.md`.
 - CSP meta sinh lúc build bằng hash script inline; đề xuất header bổ sung cho O5. Chưa xác nhận smoke test Cognito thật (checklist trong `docs/b2-auth-frontend.md`).
+
+**0.12 — 21/11/2026**
+
+- Thống nhất kiểm points/tolerance theo dạng thập phân jsonb sẽ lưu; token lượt duyệt tương thích mili giây JavaScript và tăng qua các lần submit. Kiểm CanRead cả trước và sau khóa câu; bổ sung test chu trình lưu/đọc/submit, timestamp và tranh chấp khóa riêng tư.
+
+**0.11 — 21/11/2026**
+
+- Giữ guard câu đang được đề tham chiếu và bổ sung metadata liên hệ chủ đề; thống nhất mục 4.3. Approve/reject bắt buộc submittedAt chống duyệt tab cũ, gồm contract A7. Giới hạn token/số mũ rubric theo khả năng jsonb, kiểm explanation sau trim và xác nhận quy tắc key lỗi camelCase toàn API.
+
+**0.10 — 21/11/2026**
+
+- Chuẩn hóa key lỗi MVC về JSON camelCase, kiểm actor trước validation Create và kiểm dấu rubric trên JSON gốc. Chốt validator thuần ở Application thay FluentValidation trong tech stack và quy tắc dữ liệu.
+
+**0.9 — 20/11/2026**
+
+- Thống nhất A6: bảo vệ nguồn của đề Submitted cho cả sửa nội dung/archive; head giữ quyền archive câu của mình sau chuyển tổ. Gộp spec A6 thành một bộ quy tắc, bỏ nhật ký review trong phần spec.
+
+- A6 bảo vệ câu Approved đang được đề Draft/Rejected tham chiếu, dùng khóa hàng actor thay khóa quản trị chung, bổ sung response 400 submit/approve và thống nhất tài liệu kết quả hiện tại.
+
+- Làm rõ A6: thu hồi tài khoản trả 401 sau chờ khóa, audit từng bộ khi tự gỡ liên kết và tách schema duyệt câu hỏi khỏi A7; chỉ tham chiếu đề chặn xóa.
+- Review lần 3: tự gỡ liên kết bộ khi xóa câu, bảo vệ phân loại khi đề Submitted, từ chối surrogate lỗi, đáp án số/nhãn chặt, mark-reviewed idempotent và timestamp tạo bằng nhau.
+- Sửa review A6: dấu phẩy thập phân, shared lock, bảo vệ phân loại trong đề editable, che ID ngoài phạm vi, audit đúng hành động, chuẩn hóa nội dung và giới hạn payload.
+- Triển khai A6: ngân hàng câu hỏi, state machine ở Application, payload validation, review queue, audit và khóa chống chuyển trạng thái đồng thời.
 
 **0.8 — 20/11/2026**
 - Sửa review: bảo vệ tham chiếu job AI đang chờ/chạy, khóa phối hợp với B5, audit xóa có metadata, tên NFC và bộ lọc đúng endpoint.
