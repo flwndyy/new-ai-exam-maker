@@ -94,8 +94,12 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
   - Kiểm thử Release: 162/162 pass, không skip (96 API, 66 Infrastructure; gồm 40 test PostgreSQL). A5 bổ sung 27 test, trong đó 10 test PostgreSQL. Whitespace và `git diff --check` đạt; formatter toàn solution chưa chạy được trong môi trường agent do quyền named pipe, cần xác nhận bằng terminal/CI. Chờ PR, CI và merge vào dev trước khi tick hoàn tất.
 
 **Chặng 2 (25–29/11) — Quy trình**
-- [ ] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
+- [x] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
+  - PR #69 đã merge vào dev ngày 21/11/2026 (commit `904d1ac`). Không thêm migration. Local A6: **509/509 test backend Release pass, không skip** (335 API/quy tắc, 38 Application, 136 Infrastructure; có PostgreSQL thật); schema frontend đồng bộ. Xem `docs/a6-question-workflow.md`.
 - [ ] A7. `Exam`, `ExamVersion`, **snapshot khi Submit** + `content_hash`, kiểm tra mọi câu `Approved`, tổng điểm; state machine phiên bản (4.3): `submit/withdraw/approve/reject/archive/publish/unpublish`, partial unique 1 bản `Published`; `POST /exams/{id}/versions`; `GET /review/exam-versions`.
+  - Triển khai local: đủ identity/composition API dùng chung B9, snapshot SHA-256, workflow/token duyệt, clone và warning, phân quyền đáp án, source locks phối hợp A6 và audit transaction. Không thêm migration/AWS. Xem `docs/a7-exam-workflow.md`; chờ CI/review và merge trước khi tick hoàn tất.
+  - Kiểm tra local 21/11/2026: **600/600 test backend Release pass, không skip** (411 API/quy tắc, 38 Application, 151 Infrastructure); A7 có 91 test mới, gồm 15 PostgreSQL. Frontend typecheck và 148/148 test pass. Format whitespace và đồng bộ schema frontend đạt; CI của commit mới cần xác nhận sau push.
+  - Approve/reject nhận submittedAt của lượt reviewer đã đọc theo OpenAPI; so UTC theo mili giây, sinh token không trùng khi submit lại nhanh, kiểm dưới khóa hàng. Lệch lượt trả 409 Conflict và buộc đọc lại, không tự đổi token để retry. Giữ guard nguồn A6 và metadata liên hệ chủ đề khi cần gỡ câu.
 - [ ] A8. Audit log mọi chuyển trạng thái + `GET /audit-logs` (Head: trong tổ).
 - [ ] A9. **Test**: unit cho mọi chuyển trạng thái hợp lệ/không hợp lệ và ma trận quyền (mục 3.2); integration với PostgreSQL thật.
 - [ ] A10. Frontend: màn admin (user, tổ, môn, chương), ngân hàng câu hỏi (danh sách/lọc/sửa), màn **duyệt** câu và đề (checklist, cờ `ai_verification`, nhập lý do từ chối), hàng đợi duyệt.
@@ -131,15 +135,19 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 ## OPS-2 — Dữ liệu, danh tính, giám sát, chi phí (@TranGiaBao2005)
 
 - [x] O9. **Cognito** (E4): tắt self sign-up, 3 group `teacher/head/admin`, app client PKCE, mật khẩu tạm + đổi lần đầu, quên mật khẩu. Giao `UserPoolId/ClientId` cho dev qua Parameter Store, không qua chat công khai. **Chặn A4 và B2 → ưu tiên sớm.**
-- [ ] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
-- [ ] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+- [x] O10. **RDS PostgreSQL** Single-AZ, private subnet, mã hóa, backup tự động ngắn, thử khôi phục một lần (E5, mục 12).
+  - Hoàn thành 20/11/2026: Dựng PostgreSQL 16.13 (`db.t4g.micro`, Single-AZ, private subnet, gp3 20GB, KMS `alias/aws/rds`, backup 3 ngày, `rds.force_ssl=1`). Lưu ConnectionString dạng `SecureString` lên Parameter Store (`/exammaker/dev/ConnectionStrings/ExamMaker`) và metadata (`/exammaker/dev/Rds/*`).
+  - Kiểm thử: 15/15 tiêu chí pass trong `infra/rds/verify-rds.sh`; đã chạy thành công kịch bản Infrastructure Restore Drill trong `infra/rds/restore-drill.sh` (chụp snapshot, khôi phục instance test, kiểm tra guardrails và xoá dọn dẹp sạch sẽ qua trap). Kiểm tra toàn vẹn dữ liệu ứng dụng (departments/subjects/topics/users) sẽ tiếp tục thực hiện tại Chặng 3 / O16 sau khi EC2 O3 và migration bundle sẵn sàng. Xem `docs/runbooks/rds.md`.
+- [x] O11. **SQS + DLQ** (`maxReceiveCount=3`, visibility timeout > thời gian xử lý tối đa) (C4, mục 4.1.1).
+  - Hoàn thành 21/11/2026: Dựng Standard Queue `exammaker-dev-ai-jobs` (`VisibilityTimeout=300s`, Long Polling `20s`, retention 4 ngày, `RedrivePolicy` `maxReceiveCount=3`) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày), bật SSE-SQS ($0). Lưu 4 tham số lên Parameter Store (`/exammaker/dev/Sqs/AiJobsQueueUrl` khớp `Sqs:AiJobsQueueUrl` của B5, `AiJobsQueueArn`, `AiJobsDlqUrl`, `AiJobsDlqArn`).
+  - Kiểm thử: 13/13 tiêu chí (12 check + smoke test gửi/nhận/xóa message) pass trong `infra/sqs/verify-sqs.sh`. Xem `docs/runbooks/sqs.md`.
 - [x] O12. **Parameter Store**: quy ước đặt tên, connection string, ModelId, quota, ID Cognito, origin secret; dùng key AWS-managed.
   - Hoàn thành 21/11/2026: Chuẩn hóa toàn bộ cây `/exammaker/dev/*` (32 tham số tổng cộng gồm O9 Cognito, O10 RDS, O11 SQS và 16 tham số mới của O12: `AWS/Region`, `Bedrock/*`, `AiQuota/*` khớp `AiQuotaOptions.cs`, `AiRateLimit/*` khớp `AiRateLimitOptions`, `Origin/VerifySecret` SecureString 64 hex ký tự, `CloudWatch/*`). 100% Standard tier ($0) và khóa AWS-managed `alias/aws/ssm` ($0).
   - Kiểm thử: 15/15 tiêu chí pass trong `infra/ssm/verify-ssm.sh` (kiểm tra idempotency, mã hóa SecureString, Standard tier, không in/lưu secret dạng thuần). Xem `docs/runbooks/parameter-store.md`.
 - [ ] O13. **CloudWatch** (E6): log retention 7 ngày; alarm DLQ depth, tuổi message cũ nhất, 5xx, CPU/EBS, RDS storage/connections, **heartbeat worker**, số job `Running` quá lease; giới hạn số alarm/metric.
 - [ ] O14. **AWS Budgets** 50/80/100% của $200, gửi email cả nhóm (E7).
 - [ ] O15. CI/CD **backend** (E8): build/publish theo kiến trúc đã chọn, giải nén vào `/opt/exammaker/releases/<id>`, đổi symlink, restart systemd (API + Worker), kiểm tra health, giữ N bản để rollback; **EF migration bundle** chạy trước, tương thích ngược, snapshot RDS thủ công trước migration lớn. *Cần A1.*
-- [ ] O16. Dọn tài nguyên sau demo: snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng.
+- [ ] O16. **Thử khôi phục RDS + kiểm tra dữ liệu** (đếm 4/4/82 departments/subjects/topics, `users`, `__EFMigrationsHistory` qua EC2 SSM) trước demo; dọn tài nguyên sau demo (snapshot, EBS rời, Elastic IP không gắn; nhắc RDS tự khởi động lại sau 7 ngày dừng).
 
 ---
 

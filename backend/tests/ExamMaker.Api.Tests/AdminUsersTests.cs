@@ -13,6 +13,19 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class AdminUsersTests
 {
+    [Fact]
+    // Global MVC validation returns the same camelCase field keys for admin profiles as for questions.
+    public async Task Admin_binding_errors_use_json_field_names()
+    {
+        using var app = new AdminTestFactory(); app.Directory.User = AuthTestFactory.Teacher with { Role = "admin" };
+        using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.PostAsJsonAsync("/api/v1/admin/users", new
+        { email = "invalid-email", fullName = "Synthetic", role = "teacher", departmentId = AuthTestFactory.DepartmentId });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty("email", out _)); Assert.Equal(0, app.Management.Calls);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("teacher")]

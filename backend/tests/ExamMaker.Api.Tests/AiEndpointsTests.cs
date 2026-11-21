@@ -13,6 +13,17 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class AiEndpointsTests : IDisposable
 {
+    [Fact]
+    // AI JSON conversion failures use camelCase keys without the serializer's $. prefix.
+    public async Task Ai_binding_errors_use_json_field_names()
+    {
+        using var client = Client();
+        using var response = await client.PostAsJsonAsync("/api/v1/ai/generate", new { subjectId = "invalid-guid" });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty("subjectId", out _));
+    }
+
     private readonly AuthTestFactory _auth = new();
     private readonly InMemoryAi _ai = new();
     private readonly WebApplicationFactory<Program> _host;
