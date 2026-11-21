@@ -3,6 +3,9 @@ using ExamMaker.Api.Authentication;
 using ExamMaker.Api.Catalog;
 using ExamMaker.Api.Questions;
 using ExamMaker.Api.Users;
+using ExamMaker.Api.Exams;
+using ExamMaker.Application.Exams;
+using ExamMaker.Infrastructure.Exams;
 using ExamMaker.Application.Catalog;
 using ExamMaker.Application.Questions;
 using ExamMaker.Infrastructure;
@@ -40,6 +43,9 @@ builder.Services.AddExceptionHandler<CatalogExceptionHandler>();
 // Keep the question workflow scoped so its row changes and audit share one DbContext transaction.
 builder.Services.AddScoped<IQuestionManagement, QuestionManagement>();
 builder.Services.AddExceptionHandler<QuestionExceptionHandler>();
+// Keep exam snapshots, transitions and audit writes inside one request-scoped transaction.
+builder.Services.AddScoped<IExamManagement, ExamManagement>();
+builder.Services.AddExceptionHandler<ExamExceptionHandler>();
 builder.Services.AddControllers(options =>
     options.ModelMetadataDetailsProviders.Add(new SystemTextJsonValidationMetadataProvider()))
     .ConfigureApiBehaviorOptions(options =>

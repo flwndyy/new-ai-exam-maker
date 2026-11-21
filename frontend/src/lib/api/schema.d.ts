@@ -2235,6 +2235,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExamVersionSummaryPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2582,6 +2583,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getExam: {
@@ -2636,6 +2638,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listExamVersions: {
@@ -2769,6 +2772,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["ExamVersionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

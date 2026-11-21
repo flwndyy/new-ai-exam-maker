@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.13** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.14** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -241,6 +241,15 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──publ
 - `Published`: admin chọn. **Bất biến.** `Unpublish` đưa phiên bản về `Approved` (thu hồi, vẫn lưu lịch sử trong `audit_logs`; **không** có trạng thái `Unpublished` riêng). Một đề có tối đa **một phiên bản Published** tại một thời điểm; publish phiên bản khác khi đã có bản `Published` bị **từ chối (409)** — admin phải `Unpublish` bản cũ trước.
 - `Archived`: dành cho phiên bản `Approved`/`Rejected` không dùng nữa; không khôi phục trong MVP. Trigger DB chặn mọi chuyển từ Archived sang trạng thái khác; cập nhật metadata không thuộc nội dung vẫn phải giữ nguyên trạng thái Archived.
 - Xuất đề luôn lấy từ **snapshot**, không đọc câu hỏi gốc.
+
+#### Chi tiết triển khai A7
+
+- Tạo Exam kèm phiên bản Draft số 1, thời gian mặc định 45 phút. Môn/khối/tổ cố định; chỉ tác giả teacher/head được đổi tiêu đề, ghép câu và tạo phiên bản mới. Không tạo thêm khi còn Draft; bản mới sao chép liên kết từ phiên bản được chọn trong cùng Exam (mặc định mới nhất), dùng revision/nội dung nguồn hiện tại; bỏ nguồn Archived hoặc không còn phù hợp/quyền chọn và trả warnings. Rejected vẫn cho phép tạo bản mới.
+- Tạo/sửa danh sách tối đa 200 câu, không trùng nguồn; điểm decimal dương, tổng không tràn decimal. Draft được rỗng; Submit bắt buộc có câu. Mỗi câu được chọn phải thuộc tác giả hoặc Approved cùng tổ, đúng môn/khối/tổ đề, không Archived. Khi Submit tất cả phải Approved; lưu snapshot toàn bộ nội dung và SHA-256 canonical JSON gồm duration, thứ tự, điểm, source id/revision và nội dung. Không đưa thời gian/người duyệt vào hash.
+- Mutation giữ khóa hàng actor FOR SHARE và catalog shared 48683402; khóa Exam FOR UPDATE trước ExamVersion để serialize tạo số phiên bản và publish. Khóa nguồn FOR SHARE theo id trước kiểm lại quyền/trạng thái/phân loại và ghi liên kết/snapshot, giữ tới commit. A6 có thứ tự khóa nguồn rồi phiên bản nên deadlock có thể xảy ra; rollback và trả 409, không tự retry mutation. Chờ khóa tối đa 2 giây.
+- Đọc/ghi kiểm visibility trước khóa rồi kiểm lại sau khóa. Admin thấy tất cả; head thấy đề cùng tổ hoặc của mình; teacher thấy đề của mình và metadata phiên bản Published cùng tổ. Chi tiết chứa đáp án chỉ tác giả/head cùng tổ/admin; teacher đọc phiên bản Published của người khác nhận 403, không lộ phiên bản riêng tư qua list/detail. Xuất đề thuộc B10.
+- Quyền/trạng thái được kiểm trước token duyệt; submittedAt bắt buộc trong service, so UTC mili giây và mỗi lượt submit tăng tối thiểu 1ms. UpdatedAt tăng theo micro giây; mọi thay đổi và audit nằm trong cùng transaction. Approve/reject cấm tự duyệt, reject cần note. Withdraw xóa snapshot/hash/quyết định sau khi mở Draft; Rejected dùng nội dung nguồn hiện tại và chụp lại ở lần submit sau. Archive Rejected chụp nội dung hiện tại để giữ bản bỏ dở (không yêu cầu nguồn Approved), rồi khóa nội dung như các bản Archived khác.
+- Publish/unpublish chỉ admin; từ Approved/Published tương ứng, giữ snapshot/hash và metadata lịch sử publish; bản Published khác trong cùng đề gây 409 PublishedVersionExists. Archive chỉ Approved/Rejected, tác giả/head cùng tổ/admin, không khôi phục. Không thay đổi schema A2.
 
 ### 4.4 Xuất đề
 
@@ -610,6 +619,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.14 — 21/11/2026**
+
+- Triển khai A7: API đề/phiên bản và composition dùng chung B9; snapshot/hash khi submit, token lượt duyệt mili giây, publish duy nhất và audit atomic. Bổ sung quy tắc khóa nguồn phối hợp A6, clone có warning, bảo vệ đáp án và lưu snapshot khi archive bản Rejected.
 
 **0.13 — 21/11/2026**
 - Triển khai đăng nhập frontend B2: Authorization Code + PKCE với Cognito, access token trong bộ nhớ, refresh token trong `sessionStorage`, xử lý 401 (`signedOut`/`denied`) và đăng xuất. Bổ sung mục "Chi tiết triển khai B2" ở 9.2 và `docs/b2-auth-frontend.md`.
