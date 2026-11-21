@@ -168,8 +168,9 @@ if [ "$SMOKE_TEST" = "1" ]; then
   echo ""
   echo "==> Running SQS smoke test (send -> receive -> delete)..."
   MAIN_VISIBLE="$(jq -r '.Attributes.ApproximateNumberOfMessages // 0' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
-  if [ "$MAIN_VISIBLE" -gt 0 ]; then
-    fail "Refusing SMOKE_TEST=1 while Main Queue already has ${MAIN_VISIBLE} visible message(s) (avoid consuming real AI jobs)"
+  MAIN_INFLIGHT="$(jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible // 0' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
+  if [ "$MAIN_VISIBLE" -gt 0 ] || [ "$MAIN_INFLIGHT" -gt 0 ]; then
+    fail "Refusing SMOKE_TEST=1 while Main Queue has active messages (visible=${MAIN_VISIBLE}, in_flight=${MAIN_INFLIGHT})"
   else
     SMOKE_TOKEN="o11-smoke-$(date -u +%Y%m%d%H%M%S)"
     SMOKE_BODY="$(jq -nc --arg token "$SMOKE_TOKEN" '{smokeTest:true,token:$token}')"
@@ -196,6 +197,13 @@ if [ "$SMOKE_TEST" = "1" ]; then
         --receipt-handle "$RECV_HANDLE" >/dev/null
       pass "Smoke test succeeded: sent, received, and deleted synthetic message cleanly"
     else
+      if [ -n "$RECV_HANDLE" ]; then
+        aws sqs change-message-visibility \
+          --region "$AWS_REGION" \
+          --queue-url "$MAIN_URL" \
+          --receipt-handle "$RECV_HANDLE" \
+          --visibility-timeout 0 >/dev/null 2>&1 || true
+      fi
       fail "Smoke test failed: could not receive matching test message (token=${SMOKE_TOKEN})"
     fi
   fi
