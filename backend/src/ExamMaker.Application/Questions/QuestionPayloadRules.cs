@@ -54,11 +54,25 @@ public static class QuestionPayloadRules
                     Object(item, ["criterion", "points"]);
                     Text(item.GetProperty("criterion"));
                     var points = item.GetProperty("points");
-                    if (points.ValueKind != JsonValueKind.Number || !points.TryGetDecimal(out var value) || value <= 0) Fail();
+                    if (!IsPositiveNumber(points)) Fail();
                 }
                 break;
             default: Fail(); break;
         }
+    }
+
+    /// <summary>Check the sign and nonzero significand without rounding tiny JSON numbers to decimal zero.</summary>
+    private static bool IsPositiveNumber(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Number) return false;
+        var raw = value.GetRawText();
+        if (raw[0] == '-') return false;
+        foreach (var digit in raw)
+        {
+            if (digit is 'e' or 'E') break;
+            if (digit is >= '1' and <= '9') return true;
+        }
+        return false;
     }
 
     /// <summary>Reject extra, missing and duplicate JSON properties instead of silently choosing one value.</summary>

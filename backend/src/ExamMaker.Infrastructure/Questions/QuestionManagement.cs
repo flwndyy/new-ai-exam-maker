@@ -47,10 +47,10 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
     /// <summary>Create a manual draft with catalog-derived department and immutable author/provenance fields.</summary>
     public async Task<QuestionView> CreateAsync(Guid actorId, QuestionInput input, CancellationToken cancellationToken)
     {
-        input = QuestionRules.Validate(input);
         return (await MutateAsync(actorId, async actor =>
         {
             if (actor.Role is not (Roles.Teacher or Roles.Head)) throw QuestionRules.Forbidden();
+            input = QuestionRules.Validate(input);
             var department = await CatalogAsync(input, cancellationToken);
             if (actor.DepartmentId != department) throw QuestionRules.Forbidden();
             var now = DateTime.UtcNow;

@@ -95,7 +95,7 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 
 **Chặng 2 (25–29/11) — Quy trình**
 - [ ] A6. State machine **câu hỏi** (mục 4.2) + endpoint `submit/withdraw/approve/reject/archive/mark-reviewed`, quy tắc "không tự duyệt", duyệt thay (3.1), xóa có điều kiện, `revision`; `GET /review/questions`.
-  - PR #69: đã triển khai ngân hàng câu hỏi, workflow và xử lý review; không thêm migration. Local 20/11/2026: **451/451 test backend Release pass, không skip** (286 API/quy tắc, 38 Application, 127 Infrastructure; có PostgreSQL thật); schema frontend đồng bộ. Xem `docs/a6-question-workflow.md`. Giữ task chưa tick tới khi review/CI đạt và merge vào dev.
+  - PR #69: đã triển khai ngân hàng câu hỏi, workflow và xử lý review; không thêm migration. Local 21/11/2026: **466/466 test backend Release pass, không skip** (300 API/quy tắc, 38 Application, 128 Infrastructure; có PostgreSQL thật); schema frontend đồng bộ. Xem `docs/a6-question-workflow.md`. Giữ task chưa tick tới khi review/CI đạt và merge vào dev.
 - [ ] A7. `Exam`, `ExamVersion`, **snapshot khi Submit** + `content_hash`, kiểm tra mọi câu `Approved`, tổng điểm; state machine phiên bản (4.3): `submit/withdraw/approve/reject/archive/publish/unpublish`, partial unique 1 bản `Published`; `POST /exams/{id}/versions`; `GET /review/exam-versions`.
 - [ ] A8. Audit log mọi chuyển trạng thái + `GET /audit-logs` (Head: trong tổ).
 - [ ] A9. **Test**: unit cho mọi chuyển trạng thái hợp lệ/không hợp lệ và ma trận quyền (mục 3.2); integration với PostgreSQL thật.

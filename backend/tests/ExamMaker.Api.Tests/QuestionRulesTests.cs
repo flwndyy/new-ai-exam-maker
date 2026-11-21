@@ -8,6 +8,23 @@ namespace ExamMaker.Api.Tests;
 
 public sealed class QuestionRulesTests
 {
+    [Theory]
+    [InlineData("1e-30", true)]
+    [InlineData("1e-1000", true)]
+    [InlineData("1e30", true)]
+    [InlineData("0.000000000000000000000000000001", true)]
+    [InlineData("-1e-30", false)]
+    [InlineData("0e100", false)]
+    [InlineData("0.000e-20", false)]
+    [InlineData("-0e20", false)]
+    // Positive rubric numbers remain valid below decimal precision; exponent digits cannot make zero positive.
+    public void Essay_rubric_positivity_uses_the_original_json_number(string number, bool allowed)
+    {
+        var payload = JsonSerializer.Deserialize<JsonElement>("{\"modelAnswer\":\"\",\"rubric\":[{\"criterion\":\"Synthetic\",\"points\":" + number + "}]}");
+        if (allowed) QuestionPayloadRules.Validate("Essay", payload);
+        else Assert.Equal("payload", Assert.Throws<QuestionException>(() => QuestionPayloadRules.Validate("Essay", payload)).Field);
+    }
+
     public const string ValidPayload = """{"options":[{"label":"A","text":"One"},{"label":"B","text":"Two"},{"label":"C","text":"Three"},{"label":"D","text":"Four"}],"correctLabel":"A"}""";
     private static readonly Guid Owner = Guid.NewGuid();
     private static readonly Guid Department = Guid.NewGuid();

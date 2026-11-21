@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ExamMaker.Application.Questions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -134,6 +135,35 @@ public sealed class QuestionsHttpTests
         using var response = await client.PostAsync("/api/v1/questions", new StringContent(body, Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode); Assert.Equal(0, app.Management.Calls);
     }
+    [Theory]
+    [InlineData("stem", "   ", "stem")]
+    [InlineData("type", null, "type")]
+    [InlineData("subjectId", "null", "subjectId")]
+    [InlineData("subjectId", "invalid-guid", "subjectId")]
+    [InlineData("grade", "invalid-number", "grade")]
+    [InlineData("Grade", "invalid-number", "grade")]
+    // Binding and Required errors must target the same JSON keys that frontend field validation reads.
+    public async Task Model_binding_and_validation_errors_use_json_field_names(string field, string? value, string expected)
+    {
+        using var app = new QuestionsTestFactory();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        var body = JsonNode.Parse(JsonSerializer.Serialize(app.Management.Input, JsonSerializerOptions.Web))!.AsObject();
+        body.Remove(JsonNamingPolicy.CamelCase.ConvertName(field));
+        if (value is not null) body[field] = value == "null" ? null : JsonValue.Create(value);
+        using var response = await client.PostAsync("/api/v1/questions", new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ValidationFailed", problem.GetProperty("code").GetString());
+        Assert.True(problem.GetProperty("errors").TryGetProperty(expected, out _));
+        Assert.All(problem.GetProperty("errors").EnumerateObject(), error =>
+        {
+            Assert.False(error.Name.StartsWith("$.", StringComparison.Ordinal));
+            Assert.Equal(JsonNamingPolicy.CamelCase.ConvertName(error.Name), error.Name);
+        });
+        Assert.Equal(0, app.Management.Calls);
+    }
+
     [Theory]
     [InlineData(@"\ud800")]
     [InlineData(@"\udc00")]

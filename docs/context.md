@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.9** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.10** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -200,6 +200,8 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──arch
 
 #### Chi tiết triển khai A6
 
+- Model validation và lỗi binding dùng key JSON camelCase (stem/type/subjectId/grade), bỏ tiền tố $. của JSON path. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind MVC vẫn được kiểm trước action. Điểm rubric Essay kiểm dương trên số JSON gốc, không làm tròn qua decimal, nên số dương rất nhỏ vẫn hợp lệ theo OpenAPI.
+
 - API dùng schema A2, không thêm migration. State machine, quyền và payload ở Application; transaction và khóa ở Infrastructure. Creator teacher/head được tạo/sửa/xóa/submit/withdraw/mark-reviewed; admin chỉ đọc, duyệt thay và archive theo ma trận 3.2.
 - Teacher/head đọc câu của mình kể cả Archived, hoặc Approved cùng tổ; head còn đọc Submitted cùng tổ để duyệt. Admin đọc tất cả. GET và endpoint ghi che câu ngoài phạm vi bằng 404 trước kiểm quyền/trạng thái. Hàng đợi chỉ head/admin, loại câu của mình, sắp submittedAt tăng dần.
 - Department câu cố định theo môn lúc tạo, phải thuộc tổ tác giả. Sửa chỉ chọn môn/chương cùng department cố định và đúng khối. PUT kiểm trạng thái trước validation/catalog; Submitted phải withdraw, Archived không khôi phục.
@@ -358,7 +360,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 | Tầng     | Công nghệ                                                                                                           |
 | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | Frontend | **Next.js** (App Router, TypeScript, static export), Tailwind CSS, TanStack Query, React Hook Form + Zod, **KaTeX** |
-| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, FluentValidation, Serilog → CloudWatch                   |
+| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, validation thuần ở Application, Serilog → CloudWatch |
 | CSDL     | PostgreSQL, EF Core migrations                                                                                      |
 | AWS SDK  | SQS, SimpleSystemsManagement, BedrockRuntime, CognitoIdentityProvider (admin)                                       |
 | CI/CD    | GitHub Actions (mục 11)                                                                                             |
@@ -391,7 +393,7 @@ Cấu trúc repo (monorepo):
 - **questions**: id, subject_id, topic_id, **department_id** (lưu cố định lúc tạo, dùng cho phân quyền "cùng tổ"), grade, **type**, difficulty, **stem** (Markdown+LaTeX), **payload** (jsonb, theo dạng — mục 8.2), explanation, **status**, **revision**, source (`AI`/`Manual`), ai_job_id, ai_ordinal, **ai_verification** (`NotChecked/Agree/Disagree` + note), ai_reviewed_by_author (bool), created_by, submitted_at, reviewed_by, reviewed_at, review_note, timestamps
   - unique `(ai_job_id, ai_ordinal)` chống ghi trùng khi worker chạy lại
   - `difficulty`: `Recognition`, `Understanding`, `Application`, `HighApplication`
-  - CHECK: `type` thuộc enum; `payload` không null; kiểm tra sâu bằng FluentValidation theo từng dạng
+  - CHECK: `type` thuộc enum; `payload` không null; Application kiểm tra sâu bằng các hàm thuần theo từng dạng (QuestionRules/QuestionPayloadRules), không dùng FluentValidation. MVC chỉ kiểm binding/DataAnnotations, chuẩn hóa key lỗi theo tên JSON camelCase.
 - **question_sets** + **question_set_items**: bộ câu hỏi của giáo viên
 - **exams**: id, title, subject_id, grade, department_id, created_by
 - **exam_versions**: id, exam_id, **version_no**, status, duration_minutes, total_points, content_hash, submitted_at, reviewed_by, reviewed_at, review_note, published_by, published_at · unique `(exam_id, version_no)`; partial unique index: tối đa 1 version `Published` / exam
@@ -585,6 +587,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.10 — 21/11/2026**
+
+- Chuẩn hóa key lỗi MVC về JSON camelCase, kiểm actor trước validation Create và kiểm dấu rubric trên JSON gốc. Chốt validator thuần ở Application thay FluentValidation trong tech stack và quy tắc dữ liệu.
 
 **0.9 — 20/11/2026**
 

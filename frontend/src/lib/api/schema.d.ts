@@ -1201,6 +1201,7 @@ export interface components {
             modelAnswer: string;
             rubric: {
                 criterion: string;
+                /** @description Điểm dương theo số JSON gốc; không làm tròn về độ chính xác decimal khi kiểm dấu. */
                 points: number;
             }[];
         };

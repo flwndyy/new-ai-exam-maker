@@ -1750,7 +1750,10 @@ components:
             additionalProperties: false
             properties:
               criterion: { type: string, minLength: 1, maxLength: 10000 }
-              points: { type: number, exclusiveMinimum: 0 }
+              points:
+                type: number
+                exclusiveMinimum: 0
+                description: Điểm dương theo số JSON gốc; không làm tròn về độ chính xác decimal khi kiểm dấu.
     QuestionPayload:
       description: |
         Cấu trúc theo `type` của câu chứa nó. Backend validate `payload` khớp `type`

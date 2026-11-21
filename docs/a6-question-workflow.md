@@ -27,6 +27,8 @@ Danh sách ngân hàng sắp createdAt giảm dần, thêm id để thứ tự �
 
 Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải thích tiếng Việt:
 
+Validation nghiệp vụ dùng các hàm thuần ở Application (QuestionRules/QuestionPayloadRules), không dùng FluentValidation. MVC giữ kiểm binding/DataAnnotations và dùng tên JSON cho lỗi field.
+
 | Hàm / thành phần | Tác dụng |
 |---|---|
 | `QuestionRules.CanRead` | Kiểm quyền đọc theo role, trạng thái, tổ và người tạo; dùng cho GET chi tiết. |
@@ -74,6 +76,8 @@ Code dùng comment kỹ thuật tiếng Anh theo quy ước dự án. Giải th�
 - Mỗi bộ thực sự mất liên kết có một audit `QuestionSet` / `RemoveQuestionFromSet`, ghi actor và id/revision câu bị xóa. Dùng `DELETE ... RETURNING` để ghi đúng các bộ bị ảnh hưởng; các audit này commit hoặc rollback cùng `DeleteQuestion` và dữ liệu.
 - Approve/reject câu hỏi dùng schema riêng `QuestionApproveRequest` / `QuestionRejectRequest`, từ chối field ngoài hợp đồng. Schema `ApproveRequest` / `RejectRequest` dùng cho exam-version giữ nguyên contract A7.
 - Validation trả 400 `ValidationFailed` với errors[field]; body không cho field ngoài hợp đồng. Bốn dạng payload đều kiểm: MC đúng 4 nhãn A–D/1 correctLabel; TrueFalse 4 nhãn a–d và boolean; ShortAnswer có đáp án, tolerance chỉ cho number; Essay có rubric điểm dương. Tổng rubric bằng điểm câu kiểm khi ghép đề ở A7.
+- Lỗi binding/DataAnnotations cũng dùng key camelCase như `stem`, `type`, `subjectId`, `grade`, bỏ tiền tố `$.` của JSON path và giữ code/traceId. Create kiểm actor live và role trước validation nghiệp vụ; lỗi bind/Required của MVC vẫn trả trước action.
+- Điểm rubric kiểm dấu và phần định trị trên số JSON gốc, không ép qua decimal; `1e-30` hợp lệ, số âm và mọi dạng số 0 đều không hợp lệ. JSON payload được giữ nguyên trong Application, không đổi thành số 0 do làm tròn.
 - Options/statements phải theo thứ tự A–D/a–d. ShortAnswer number chỉ nhận `-?[0-9]+([.,][0-9]+)?`, giữ nguyên chuỗi đáp án; không nhận khoảng trắng, dấu cộng, số mũ, NaN/Infinity. Text payload tối đa 10000 ký tự, acceptedAnswers/rubric tối đa 20 phần tử; surrogate lẻ trả 400 `errors[payload]`.
 - Mark-reviewed đã hoàn tất là no-op sau kiểm quyền/trạng thái: không thêm audit hoặc đổi updatedAt. Câu mới dùng cùng mốc UTC cho createdAt/updatedAt.
 
@@ -106,9 +110,10 @@ Test gồm bảng 30 cặp trạng thái/hành động, ma trận quyền đọc
 
 ## Kết quả kiểm tra hiện tại
 
-- Kiểm tra local ngày 20/11/2026: toàn solution backend Release **451/451 test pass, 0 failed, 0 skipped** (286 API/quy tắc, 38 Application, 127 Infrastructure), gồm các integration test PostgreSQL thật.
+- Kiểm tra local ngày 21/11/2026: toàn solution backend Release **466/466 test pass, 0 failed, 0 skipped** (300 API/quy tắc, 38 Application, 128 Infrastructure), gồm các integration test PostgreSQL thật.
 - Test xác nhận: sửa stem/payload/difficulty/explanation và archive bị chặn khi còn đề Draft/Rejected/Submitted của người khác; PUT không đổi nội dung vẫn thành công. Đề Approved/Published/Archived giữ nguyên snapshot khi nguồn bị archive. Head đã chuyển tổ vẫn archive được câu của mình. Các test quyền sau chờ khóa, audit rollback, payload và đồng thời tiếp tục pass.
 - Schema TypeScript đã sinh lại và kiểm đồng bộ OpenAPI đạt. Formatter whitespace và `git diff --check` đạt. Kết quả CI của commit mới cần xác nhận sau khi push.
+- Có test hồi quy HTTP cho key lỗi Required/binding (kể cả `$.grade`), test rubric cực nhỏ/zero/số âm và test PostgreSQL cho actor bị khóa hoặc không tồn tại gửi payload sai. Validation nghiệp vụ của Create chỉ chạy sau actor/role; toàn bộ test các vòng trước tiếp tục đạt.
 
 ## Kiểm tra trước merge
 

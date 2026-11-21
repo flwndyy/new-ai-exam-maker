@@ -11,7 +11,10 @@ using ExamMaker.Infrastructure.Catalog;
 using ExamMaker.Infrastructure.Persistence;
 using ExamMaker.Infrastructure.Questions;
 using ExamMaker.Infrastructure.Users;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Metadata;
 using Serilog;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,7 +38,27 @@ builder.Services.AddExceptionHandler<CatalogExceptionHandler>();
 // Keep the question workflow scoped so its row changes and audit share one DbContext transaction.
 builder.Services.AddScoped<IQuestionManagement, QuestionManagement>();
 builder.Services.AddExceptionHandler<QuestionExceptionHandler>();
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+    options.ModelMetadataDetailsProviders.Add(new SystemTextJsonValidationMetadataProvider()))
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        var defaultFactory = options.InvalidModelStateResponseFactory;
+        // Preserve standard ProblemDetails while giving binding and attribute validation the same JSON field keys.
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var result = defaultFactory(context);
+            if (result is ObjectResult { Value: ValidationProblemDetails problem })
+            {
+                problem.Extensions.TryAdd("code", "ValidationFailed");
+                problem.Extensions.TryAdd("traceId", context.HttpContext.TraceIdentifier);
+                var normalized = problem.Errors.GroupBy(x => NormalizeValidationKey(x.Key))
+                    .ToDictionary(x => x.Key, x => x.SelectMany(e => e.Value).ToArray());
+                problem.Errors.Clear();
+                foreach (var error in normalized) problem.Errors.Add(error.Key, error.Value);
+            }
+            return result;
+        };
+    });
 // Include stable error codes and trace identifiers, including for database failures.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
 {
@@ -70,6 +93,14 @@ app.MapHealthChecks("/health").AllowAnonymous();
 app.MapControllers();
 
 app.Run();
+
+// JSON converter errors use paths such as $.grade; clients use the same camelCase keys as application validation.
+static string NormalizeValidationKey(string key)
+{
+    if (key is "" or "$") return "body";
+    if (key.StartsWith("$.", StringComparison.Ordinal)) key = key[2..];
+    return string.Join('.', key.Split('.').Select(JsonNamingPolicy.CamelCase.ConvertName));
+}
 
 public partial class Program
 {

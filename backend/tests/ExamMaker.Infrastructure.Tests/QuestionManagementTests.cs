@@ -718,6 +718,26 @@ public sealed class QuestionManagementTests : IAsyncLifetime
         Assert.Equal(1, await db.AuditLogs.CountAsync(x => x.EntityId == q.Id && x.Action == "ArchiveQuestion" && x.ActorId == head));
     }
 
+    [PostgresFact]
+    // Invalid business payload must not disclose validation detail to a revoked account or an unauthorized creator.
+    public async Task Creation_checks_live_actor_before_business_payload_validation()
+    {
+        await SeedAsync();
+        var invalid = Input() with { Payload = JsonSerializer.Deserialize<JsonElement>("{}") };
+        await using var db = fixture.CreateContext();
+        await db.Users.Where(x => x.Id == owner).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, false));
+        foreach (var actor in new[] { owner, Guid.NewGuid() })
+        {
+            var error = await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(actor, invalid, default));
+            Assert.Equal(401, error.StatusCode); Assert.Equal("Unauthorized", error.Code);
+        }
+        Assert.Equal(403, (await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(admin, invalid, default))).StatusCode);
+        await db.Users.Where(x => x.Id == owner).ExecuteUpdateAsync(x => x.SetProperty(u => u.IsActive, true));
+        var validation = await Assert.ThrowsAsync<QuestionException>(() => Service(db).CreateAsync(owner, invalid, default));
+        Assert.Equal(400, validation.StatusCode); Assert.Equal("payload", validation.Field);
+        Assert.False(await db.Questions.AnyAsync()); Assert.False(await db.AuditLogs.AnyAsync());
+    }
+
     private sealed class FailAudit : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
     {
         public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
