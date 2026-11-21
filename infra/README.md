@@ -12,6 +12,8 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
 - `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
+- `cognito/`: script dựng và xác minh Cognito User Pool, nhóm người dùng và App Client (Task O9 — xem [`../docs/runbooks/cognito.md`](../docs/runbooks/cognito.md)).
+- `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
 
 ## Quy tắc placeholder
 
@@ -19,5 +21,7 @@ Các file có đuôi `.example` chỉ chứa placeholder. Thay thế trong lúc 
 trị từ AWS Systems Manager Parameter Store. Không commit secret, account ID, resource ID,
 ARN, private key hoặc domain production thật vào thư mục này.
 
-VPC, subnet, Security Group, EC2, RDS, S3, CloudFront và DNS thật được tạo trên AWS Console
-ở O2–O5. O1 không tự provision tài nguyên AWS.
+VPC, subnet, Security Group, EC2, S3, CloudFront và DNS thật được tạo theo hướng dẫn ở O2–O5.
+Cognito (O9) và RDS PostgreSQL (O10) được triển khai và kiểm tra tự động thông qua các script
+trong `infra/cognito/` và `infra/rds/` kết hợp lưu trữ tham số an toàn trong SSM Parameter Store.
+O1 không tự provision tài nguyên AWS.
