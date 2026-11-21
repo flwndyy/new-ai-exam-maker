@@ -42,74 +42,86 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    private static QuestionManagement Questions(ExamMakerDbContext db) => new(db, NullLogger<QuestionManagement>.Instance);
-    private static ExamManagement Exams(ExamMakerDbContext db) => new(db, NullLogger<ExamManagement>.Instance);
+    // Use a fresh DbContext per operation to mirror HTTP request-scoped tracking and ExecuteUpdateAsync behavior.
+    private async Task<T> RunQuestionAsync<T>(Func<QuestionManagement, Task<T>> action)
+    {
+        await using var db = fixture.CreateContext();
+        return await action(new QuestionManagement(db, NullLogger<QuestionManagement>.Instance));
+    }
+
+    private async Task<T> RunExamAsync<T>(Func<ExamManagement, Task<T>> action)
+    {
+        await using var db = fixture.CreateContext();
+        return await action(new ExamManagement(db, NullLogger<ExamManagement>.Instance));
+    }
 
     [PostgresFact]
     /// <summary>Exercise the full Question state machine (Draft -> Submitted -> Rejected -> Approved -> Archived) and permission denials against PostgreSQL.</summary>
     public async Task Question_full_lifecycle_transitions_and_permission_denials_persist_on_postgres()
     {
         await SeedUsersAsync();
-        await using var db = fixture.CreateContext();
-        var questions = Questions(db);
 
         // Admin cannot create content.
-        var adminCreate = await Assert.ThrowsAsync<QuestionException>(() => questions.CreateAsync(
-            admin, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Blocked", ValidPayload), CancellationToken.None));
+        var adminCreate = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.CreateAsync(
+            admin, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Blocked", ValidPayload), CancellationToken.None)));
         Assert.Equal(403, adminCreate.StatusCode);
 
         // Create Draft.
-        var created = await questions.CreateAsync(
-            teacherA, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Initial stem", ValidPayload), CancellationToken.None);
+        var created = await RunQuestionAsync(q => q.CreateAsync(
+            teacherA, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Initial stem", ValidPayload), CancellationToken.None));
         Assert.Equal("Draft", created.Status);
 
         // Invalid transition from Draft: Approve/Withdraw/Archive must fail.
-        await Assert.ThrowsAsync<QuestionException>(() => questions.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None));
-        await Assert.ThrowsAsync<QuestionException>(() => questions.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None));
-        await Assert.ThrowsAsync<QuestionException>(() => questions.TransitionAsync(teacherA, created.Id, QuestionAction.Archive, null, CancellationToken.None));
+        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None)));
+        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None)));
+        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Archive, null, CancellationToken.None)));
 
         // Submit -> Withdraw -> Submit.
-        var submitted = await questions.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None);
+        var submitted = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
         Assert.Equal("Submitted", submitted.Status);
-        var withdrawn = await questions.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None);
+        var withdrawn = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None));
         Assert.Equal("Draft", withdrawn.Status);
-        submitted = await questions.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None);
+        submitted = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
         Assert.Equal("Submitted", submitted.Status);
 
-        // Peer teacher and out-of-department head cannot approve.
-        var peerApprove = await Assert.ThrowsAsync<QuestionException>(() =>
-            questions.TransitionAsync(peerA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value)));
-        Assert.Equal(403, peerApprove.StatusCode);
-        var otherHeadApprove = await Assert.ThrowsAsync<QuestionException>(() =>
-            questions.TransitionAsync(headB, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value)));
-        Assert.Equal(403, otherHeadApprove.StatusCode);
+        // Peer teacher and out-of-department head cannot see private Submitted questions (404 NotFound hides resource existence).
+        var peerApprove = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(peerA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value))));
+        Assert.Equal(404, peerApprove.StatusCode);
+        Assert.Equal("NotFound", peerApprove.Code);
+
+        var otherHeadApprove = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(headB, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value))));
+        Assert.Equal(404, otherHeadApprove.StatusCode);
+        Assert.Equal("NotFound", otherHeadApprove.Code);
 
         // Reject by Head A (requires note) -> Resubmit -> Approve by Head A -> Archive by Head A.
-        var rejected = await questions.TransitionAsync(headA, created.Id, QuestionAction.Reject, "Need clearer stem", CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value));
+        var rejected = await RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Reject, "Need clearer stem", CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value)));
         Assert.Equal("Rejected", rejected.Status);
 
-        submitted = await questions.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None);
-        var approved = await questions.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value));
+        submitted = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
+        var approved = await RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value)));
         Assert.Equal("Approved", approved.Status);
 
         // Editing Approved content reopens to Draft and increments Revision; resubmit and approve before archiving.
-        var reopened = await questions.UpdateAsync(
-            teacherA, created.Id, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Updated stem", ValidPayload), CancellationToken.None);
+        var reopened = await RunQuestionAsync(q => q.UpdateAsync(
+            teacherA, created.Id, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Updated stem", ValidPayload), CancellationToken.None));
         Assert.Equal("Draft", reopened.Status);
         Assert.Equal(2, reopened.Revision);
 
-        submitted = await questions.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None);
-        approved = await questions.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value));
-        var archived = await questions.TransitionAsync(headA, created.Id, QuestionAction.Archive, null, CancellationToken.None);
+        submitted = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
+        approved = await RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(submitted.SubmittedAt!.Value)));
+        var archived = await RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Archive, null, CancellationToken.None));
         Assert.Equal("Archived", archived.Status);
 
         // Terminal Archived rejects further transitions.
-        var afterArchive = await Assert.ThrowsAsync<QuestionException>(() =>
-            questions.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
+        var afterArchive = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None)));
         Assert.Equal(409, afterArchive.StatusCode);
 
         // Every successful transition left an audit trail.
-        var auditCount = await db.AuditLogs.CountAsync(x => x.EntityType == "Question" && x.EntityId == created.Id);
+        await using var verifyDb = fixture.CreateContext();
+        var auditCount = await verifyDb.AuditLogs.CountAsync(x => x.EntityType == "Question" && x.EntityId == created.Id);
         Assert.Equal(11, auditCount);
     }
 
@@ -118,54 +130,51 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
     public async Task ExamVersion_full_lifecycle_transitions_and_permission_denials_persist_on_postgres()
     {
         await SeedUsersAsync();
-        await using var db = fixture.CreateContext();
-        var questions = Questions(db);
-        var exams = Exams(db);
 
         // Prepare one Approved source question in DeptA.
-        var q = await questions.CreateAsync(
-            teacherA, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Exam source", ValidPayload), CancellationToken.None);
-        var qSub = await questions.TransitionAsync(teacherA, q.Id, QuestionAction.Submit, null, CancellationToken.None);
-        await questions.TransitionAsync(headA, q.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(qSub.SubmittedAt!.Value));
+        var q = await RunQuestionAsync(svc => svc.CreateAsync(
+            teacherA, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Exam source", ValidPayload), CancellationToken.None));
+        var qSub = await RunQuestionAsync(svc => svc.TransitionAsync(teacherA, q.Id, QuestionAction.Submit, null, CancellationToken.None));
+        await RunQuestionAsync(svc => svc.TransitionAsync(headA, q.Id, QuestionAction.Approve, null, CancellationToken.None, new DateTimeOffset(qSub.SubmittedAt!.Value)));
 
         // Create Exam + Draft v1 and compose.
-        var examDetail = await exams.CreateAsync(teacherA, new("Midterm A9", SubjectA, 10), CancellationToken.None);
+        var examDetail = await RunExamAsync(e => e.CreateAsync(teacherA, new("Midterm A9", SubjectA, 10), CancellationToken.None));
         var v1Id = examDetail.Versions[0].Id;
-        await exams.UpdateVersionAsync(teacherA, v1Id, new(45, [new(q.Id, 1.0m)]), CancellationToken.None);
+        await RunExamAsync(e => e.UpdateVersionAsync(teacherA, v1Id, new(45, [new(q.Id, 1.0m)]), CancellationToken.None));
 
         // Submit -> Withdraw -> Submit -> Reject -> Submit -> Approve (Admin).
-        var v1 = await exams.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None);
+        var v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None));
         Assert.Equal("Submitted", v1.Status);
 
-        v1 = await exams.TransitionAsync(teacherA, v1Id, ExamAction.Withdraw, null, CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Withdraw, null, CancellationToken.None));
         Assert.Equal("Draft", v1.Status);
 
-        v1 = await exams.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None);
-        v1 = await exams.TransitionAsync(headA, v1Id, ExamAction.Reject, new(new DateTimeOffset(v1.SubmittedAt!.Value), "Fix rubric"), CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None));
+        v1 = await RunExamAsync(e => e.TransitionAsync(headA, v1Id, ExamAction.Reject, new(new DateTimeOffset(v1.SubmittedAt!.Value), "Fix rubric"), CancellationToken.None));
         Assert.Equal("Rejected", v1.Status);
 
-        v1 = await exams.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None);
-        v1 = await exams.TransitionAsync(admin, v1Id, ExamAction.Approve, new(new DateTimeOffset(v1.SubmittedAt!.Value), null), CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None));
+        v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Approve, new(new DateTimeOffset(v1.SubmittedAt!.Value), null), CancellationToken.None));
         Assert.Equal("Approved", v1.Status);
 
         // Only Admin may Publish/Unpublish; Teacher and Head receive 403.
-        var headPublish = await Assert.ThrowsAsync<ExamException>(() =>
-            exams.TransitionAsync(headA, v1Id, ExamAction.Publish, null, CancellationToken.None));
+        var headPublish = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(headA, v1Id, ExamAction.Publish, null, CancellationToken.None)));
         Assert.Equal(403, headPublish.StatusCode);
 
-        v1 = await exams.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None));
         Assert.Equal("Published", v1.Status);
 
         // Unpublish returns to Approved (there is no Unpublished state), then Archive.
-        v1 = await exams.TransitionAsync(admin, v1Id, ExamAction.Unpublish, null, CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Unpublish, null, CancellationToken.None));
         Assert.Equal("Approved", v1.Status);
 
-        v1 = await exams.TransitionAsync(headA, v1Id, ExamAction.Archive, null, CancellationToken.None);
+        v1 = await RunExamAsync(e => e.TransitionAsync(headA, v1Id, ExamAction.Archive, null, CancellationToken.None));
         Assert.Equal("Archived", v1.Status);
 
         // Terminal Archived rejects transitions.
-        var afterArchive = await Assert.ThrowsAsync<ExamException>(() =>
-            exams.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None));
+        var afterArchive = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None)));
         Assert.Equal(409, afterArchive.StatusCode);
     }
 }
