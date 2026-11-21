@@ -130,6 +130,9 @@ Hướng dẫn thao tác Console/SSM và checklist chi tiết: [aws-o4-domain-ht
 
 ### O5 — S3 và CloudFront
 
+Chi tiết thao tác và checklist nằm ở [`aws-o5-s3-cloudfront.md`](aws-o5-s3-cloudfront.md).
+Phần dưới đây là tóm tắt để giữ thứ tự triển khai trong runbook chung.
+
 1. Tạo S3 bucket private trong region đã chọn. Bật Block Public Access và dùng CloudFront
    Origin Access Control (OAC), không dùng S3 website endpoint.
 2. Upload static export của Next.js.
@@ -137,7 +140,8 @@ Hướng dẫn thao tác Console/SSM và checklist chi tiết: [aws-o4-domain-ht
    - behavior mặc định `/*` → S3, cache bình thường;
    - behavior `/api/*` → `origin.<domain>` qua HTTPS only;
    - `/api/*` dùng `CachingDisabled`;
-   - `/api/*` dùng `AllViewerExceptHostHeader`;
+   - `/api/*` dùng `AllViewerExceptHostHeader` hoặc custom policy tương đương có thêm
+     `CloudFront-Viewer-Address`, không forward `Host`;
    - cho phép các HTTP method cần trong OpenAPI;
    - thêm custom origin header `X-Origin-Verify` cùng giá trị được lưu ở Parameter Store;
    - dùng ACM certificate ở `us-east-1`;
