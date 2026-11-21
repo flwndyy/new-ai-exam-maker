@@ -163,7 +163,7 @@ SQS standard queue giao **at-least-once** nên có thể giao lại cùng messag
   `UPDATE jobs SET status='Running', attempt=attempt+1, lease_expires_at=now()+@lease WHERE id=@id AND attempt<@max AND (status='Queued' OR (status='Running' AND lease_expires_at<now()))`
 - Job đã `Succeeded`/`Failed` → xóa message, không làm gì.
 - **Chống ghi trùng**: câu sinh ra có khóa duy nhất `(ai_job_id, ordinal)`; lưu kết quả + đổi trạng thái job trong **một transaction**; chỉ xóa message SQS **sau khi commit**.
-- **Visibility timeout** > thời gian xử lý tối đa (timeout Bedrock × số lần thử trong một lần nhận); worker gia hạn bằng heartbeat khi cần.
+- **Visibility timeout** = **300 giây (5 phút)** (chốt ở O11) > thời gian xử lý tối đa (timeout Bedrock × số lần thử trong một lần nhận, kể cả bước kiểm chứng đáp án khi bật ở demo); nếu vượt hoặc tiệm cận 300s, worker (B6) bắt buộc gia hạn bằng heartbeat `ChangeMessageVisibility`.
 - **Giới hạn retry**: `maxReceiveCount` = 3 rồi chuyển **DLQ**; `max_attempts` trong DB khớp con số này.
 - **Phân loại lỗi**:
   - _Retryable_ (throttling, timeout, 5xx Bedrock, lỗi mạng) → không xóa message; SQS standard **không tự có backoff**, nên worker gọi `ChangeMessageVisibility` để tăng dần thời gian chờ (vd 30s → 120s → 300s) trước khi message được giao lại.
@@ -622,6 +622,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.16 — 21/11/2026**
+- Triển khai Amazon SQS + DLQ (O11): Standard queue `exammaker-dev-ai-jobs` (`VisibilityTimeout = 300s`, Long Polling `20s`, `maxReceiveCount = 3`, SSE-SQS $0) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày, `RedriveAllowPolicy`); ghi rõ ràng buộc timeout Bedrock / heartbeat của Worker B6 trong mục 4.1.1.
 
 **0.15 — 21/11/2026**
 
