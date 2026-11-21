@@ -100,8 +100,8 @@ Tạo behavior mới và đặt **trên** behavior mặc định:
 - Viewer protocol: **Redirect HTTP to HTTPS**.
 - Allowed methods: `GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE`.
 - Cache policy: **CachingDisabled**.
-- Origin request policy: dùng `AllViewerExceptHostHeader` hoặc custom policy tương đương
-  nhưng phải thêm `CloudFront-Viewer-Address`. Không forward `Host` của viewer.
+- Origin request policy: tạo **custom origin request policy**; không forward `Host` của viewer,
+  nhưng bắt buộc forward `CloudFront-Viewer-Address` cùng các header/query cần cho API.
 - Không dùng CloudFront Function ở behavior này.
 
 ### Header và origin secret
@@ -118,7 +118,7 @@ AWS Console; không ghi vào repository. Nginx kiểm tra header này rồi xóa
 sang Kestrel. CloudFront phải chuyển tiếp `CloudFront-Viewer-Address` để O4 chuẩn hóa IP
 người dùng.
 
-Nếu Console không cho sửa managed origin request policy, tạo **custom origin request policy**:
+Custom origin request policy cần có các thành phần sau:
 
 - Query strings: **All**.
 - Headers: `Authorization`, `Content-Type`, `Accept`, `Origin`, các header CORS cần dùng và

@@ -101,6 +101,8 @@ jobs:
       # Keep --if-present only for `test` until frontend/package.json defines a test script.
       - name: Test
         run: npm test --if-present
+      - name: CloudFront Function test
+        run: node --test ../infra/cloudfront-function/index-html-rewrite.test.mjs
       - name: Build
         run: npm run build
 

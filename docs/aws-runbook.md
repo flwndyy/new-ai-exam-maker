@@ -140,8 +140,8 @@ Phần dưới đây là tóm tắt để giữ thứ tự triển khai trong ru
    - behavior mặc định `/*` → S3, cache bình thường;
    - behavior `/api/*` → `origin.<domain>` qua HTTPS only;
    - `/api/*` dùng `CachingDisabled`;
-   - `/api/*` dùng `AllViewerExceptHostHeader` hoặc custom policy tương đương có thêm
-     `CloudFront-Viewer-Address`, không forward `Host`;
+   - `/api/*` dùng custom origin request policy: forward `CloudFront-Viewer-Address` nhưng
+     không forward `Host`;
    - cho phép các HTTP method cần trong OpenAPI;
    - thêm custom origin header `X-Origin-Verify` cùng giá trị được lưu ở Parameter Store;
    - dùng ACM certificate ở `us-east-1`;
