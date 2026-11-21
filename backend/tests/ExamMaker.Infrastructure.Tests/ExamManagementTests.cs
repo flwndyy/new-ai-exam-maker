@@ -69,6 +69,91 @@ public sealed class ExamManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    // A head may inspect an exam without inheriting access to the author's live private question or its answers.
+    public async Task Editable_versions_redact_unreadable_sources_without_hiding_exam_metadata()
+    {
+        await SeedAsync(); var privateQuestion = await SourceAsync("Draft"); var approved = await SourceAsync();
+        var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        foreach (var stage in new[] { "Draft", "Rejected" })
+        {
+            if (stage == "Rejected")
+            {
+                await ComposeAsync(id, new ExamItemInput(approved.Id, 1)); await ActAsync(owner, id, ExamAction.Submit);
+                await ActAsync(head, id, ExamAction.Reject, "Reason");
+                await using var change = fixture.CreateContext();
+                await change.Questions.Where(q => q.Id == privateQuestion.Id).ExecuteUpdateAsync(s => s
+                    .SetProperty(q => q.Status, "Rejected").SetProperty(q => q.ReviewedBy, head)
+                    .SetProperty(q => q.ReviewedAt, DateTime.UtcNow).SetProperty(q => q.ReviewNote, "Private reason"));
+            }
+            await ComposeAsync(id, new ExamItemInput(privateQuestion.Id, 1), new ExamItemInput(approved.Id, 2));
+            await using var read = fixture.CreateContext();
+            var hidden = await Service(read).GetVersionAsync(head, id, default);
+            Assert.Equal(stage, hidden.Status); Assert.Equal(2, hidden.QuestionCount);
+            var item = hidden.Items[0];
+            Assert.Null(item.Stem); Assert.Null(item.Payload); Assert.Null(item.Explanation);
+            Assert.Null(item.Type); Assert.Null(item.Difficulty); Assert.Null(item.CurrentSourceRevision);
+            Assert.Equal("SourceContentUnavailable", Assert.Single(hidden.Warnings).Code);
+            Assert.NotNull(hidden.Items[1].Payload); Assert.Null(hidden.ContentHash);
+            Assert.NotNull((await Service(read).GetVersionAsync(owner, id, default)).Items[0].Payload);
+            Assert.NotNull((await Service(read).GetVersionAsync(admin, id, default)).Items[0].Payload);
+            Assert.Equal("NotFound", (await Assert.ThrowsAsync<QuestionException>(() =>
+                new QuestionManagement(read, NullLogger<QuestionManagement>.Instance).GetAsync(head, privateQuestion.Id, default))).Code);
+        }
+    }
+
+    [PostgresFact]
+    // Source selection remains scoped to the exam's immutable department after its author transfers to another department.
+    public async Task Transferred_author_can_compose_clone_and_submit_their_original_department_exam()
+    {
+        await SeedAsync(); var q = await SourceAsync(creator: peer); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        await ComposeAsync(id, new ExamItemInput(q.Id, 1));
+        await using (var db = fixture.CreateContext()) await db.Users.Where(u => u.Id == owner).ExecuteUpdateAsync(s =>
+            s.SetProperty(u => u.DepartmentId, Guid.Parse("10000000-0000-0000-0000-000000000002")));
+        await ComposeAsync(id, new ExamItemInput(q.Id, 2));
+        var submitted = await ActAsync(owner, id, ExamAction.Submit); Assert.Equal("Submitted", submitted.Status);
+        Assert.Equal(Department, submitted.DepartmentId); await ActAsync(head, id, ExamAction.Approve);
+        await using var clone = fixture.CreateContext();
+        var next = await Service(clone).CreateVersionAsync(owner, exam.Id, new(), default);
+        Assert.Equal(q.Id, Assert.Single(next.Items).SourceQuestionId); Assert.Empty(next.Warnings);
+        Assert.Equal("Submitted", (await ActAsync(owner, next.Id, ExamAction.Submit)).Status);
+    }
+
+    [PostgresFact]
+    public async Task Invalid_authorization_profiles_challenge_both_reads_and_mutations()
+    {
+        await SeedAsync(); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        await using var corrupt = fixture.CreateContext();
+        // Simulate legacy/corrupted profiles only in the disposable test database, where normal CHECKs would prevent them.
+        await corrupt.Database.ExecuteSqlRawAsync("ALTER TABLE users DROP CONSTRAINT ck_users_role; ALTER TABLE users DROP CONSTRAINT ck_users_department;");
+        foreach (var invalidRole in new[] { true, false })
+        {
+            await corrupt.Users.Where(u => u.Id == owner).ExecuteUpdateAsync(s => s
+                .SetProperty(u => u.Role, invalidRole ? "unknown" : "teacher")
+                .SetProperty(u => u.DepartmentId, invalidRole ? Department : (Guid?)null));
+            await using var read = fixture.CreateContext();
+            Assert.Equal(401, (await Assert.ThrowsAsync<ExamException>(() => Service(read).GetVersionAsync(owner, id, default))).StatusCode);
+            Assert.Equal(401, (await Assert.ThrowsAsync<ExamException>(() => ActAsync(owner, id, ExamAction.Submit))).StatusCode);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Editable_responses_hide_old_snapshot_hashes_in_detail_and_summary_queries()
+    {
+        await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        await ComposeAsync(id, new ExamItemInput(q.Id, 1)); var frozen = await ActAsync(owner, id, ExamAction.Submit);
+        var rejected = await ActAsync(head, id, ExamAction.Reject, "Reason"); Assert.Null(rejected.ContentHash);
+        await using var read = fixture.CreateContext();
+        Assert.Equal(frozen.ContentHash, (await read.ExamVersions.AsNoTracking().SingleAsync(v => v.Id == id)).ContentHash);
+        var detail = await Service(read).GetAsync(owner, exam.Id, default);
+        Assert.Null(Assert.Single(detail.Versions).ContentHash); Assert.Equal(1, detail.Versions[0].QuestionCount);
+        var page = await Service(read).VersionsAsync(owner, exam.Id, 1, 20, default);
+        Assert.Null(Assert.Single(page.Items).ContentHash); Assert.Equal(1, page.Items[0].QuestionCount);
+        var archived = await ActAsync(owner, id, ExamAction.Archive);
+        Assert.Equal(frozen.ContentHash, archived.ContentHash); Assert.NotNull(archived.Items[0].Payload);
+        Assert.Equal(archived.ContentHash, Assert.Single((await Service(read).VersionsAsync(head, exam.Id, 1, 20, default)).Items).ContentHash);
+    }
+
+    [PostgresFact]
     public async Task Full_workflow_freezes_snapshots_reopens_and_preserves_publication_history()
     {
         await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var id = Assert.Single(exam.Versions).Id;
@@ -77,7 +162,7 @@ public sealed class ExamManagementTests : IAsyncLifetime
         var first = await ActAsync(owner, id, ExamAction.Submit);
         Assert.Equal("Submitted", first.Status); Assert.NotNull(first.ContentHash); Assert.Null(first.Items[0].CurrentSourceRevision);
         Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(Payload),
-            System.Text.Json.Nodes.JsonNode.Parse(first.Items[0].Payload.GetRawText())));
+            System.Text.Json.Nodes.JsonNode.Parse(first.Items[0].Payload!.Value.GetRawText())));
         var draft = await ActAsync(owner, id, ExamAction.Withdraw); Assert.Null(draft.ContentHash); Assert.Null(draft.SubmittedAt);
         await using (var db = fixture.CreateContext())
             Assert.All(await db.ExamVersionQuestions.Where(i => i.ExamVersionId == id).ToListAsync(), i => Assert.Null(i.PayloadSnapshot));
@@ -192,12 +277,18 @@ public sealed class ExamManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    public async Task Rejected_archival_preserves_edited_abandoned_content_and_is_terminal()
+    public async Task Rejected_archival_preserves_existing_data_without_capturing_private_sources()
     {
         await SeedAsync(); var q = await SourceAsync(); var ownDraft = await SourceAsync("Draft"); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
         await ComposeAsync(id, new ExamItemInput(q.Id, 1)); await ActAsync(owner, id, ExamAction.Submit); await ActAsync(head, id, ExamAction.Reject, "Reason");
         await ComposeAsync(id, new ExamItemInput(ownDraft.Id, 3)); var archived = await ActAsync(owner, id, ExamAction.Archive);
-        Assert.Equal("Archived", archived.Status); Assert.Equal("Synthetic question", archived.Items[0].Stem); Assert.NotNull(archived.ContentHash);
+        Assert.Equal("Archived", archived.Status); Assert.Null(archived.Items[0].Stem); Assert.Null(archived.ContentHash);
+        Assert.Null(archived.Items[0].Payload); Assert.Equal("SnapshotUnavailable", Assert.Single(archived.Warnings).Code);
+        await using (var db = fixture.CreateContext())
+        {
+            Assert.Null((await db.ExamVersionQuestions.SingleAsync(i => i.ExamVersionId == id)).PayloadSnapshot);
+            Assert.Null((await Service(db).GetVersionAsync(head, id, default)).Items[0].Payload);
+        }
         Assert.Equal("InvalidStateTransition", (await Assert.ThrowsAsync<ExamException>(() => ComposeAsync(id, new ExamItemInput(q.Id, 1)))).Code);
     }
 

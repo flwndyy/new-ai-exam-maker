@@ -119,7 +119,7 @@ public static class ExamRules
     /// <summary>Keep source selection rules identical for copying, composing and resubmitting an exam.</summary>
     public static bool CanSelect(AuthenticatedUser actor, Exam exam, Question question) => question.Status != "Archived"
         && question.SubjectId == exam.SubjectId && question.Grade == exam.Grade && question.DepartmentId == exam.DepartmentId
-        && (question.CreatedBy == actor.Id || question.Status == "Approved" && question.DepartmentId == actor.DepartmentId);
+        && (question.CreatedBy == actor.Id || question.Status == "Approved" && question.DepartmentId == exam.DepartmentId);
 
     /// <summary>Hash deterministic content only; JSON object property order and decimal scale cannot change the digest.</summary>
     public static string ContentHash(ExamVersion version)

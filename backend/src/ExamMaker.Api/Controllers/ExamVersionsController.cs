@@ -3,6 +3,7 @@ using ExamMaker.Application.Authentication;
 using ExamMaker.Application.Exams;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace ExamMaker.Api.Controllers;
 
@@ -33,12 +34,14 @@ public sealed class ExamVersionsController(IExamManagement exams, ICurrentUser c
     /// <summary>Approve exactly the submission round the reviewer has read, never their own content.</summary>
     [HttpPost("{vid:guid}/approve")]
     [Authorize(Roles = Roles.Head + "," + Roles.Admin)]
-    public Task<ExamVersionView> Approve(Guid vid, ExamReviewInput input, CancellationToken cancellationToken) => Act(vid, ExamAction.Approve, input, cancellationToken);
+    public Task<ExamVersionView> Approve(Guid vid,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ExamReviewInput? input, CancellationToken cancellationToken) => Act(vid, ExamAction.Approve, input, cancellationToken);
 
     /// <summary>Reject the current review round with a mandatory explanation.</summary>
     [HttpPost("{vid:guid}/reject")]
     [Authorize(Roles = Roles.Head + "," + Roles.Admin)]
-    public Task<ExamVersionView> Reject(Guid vid, ExamReviewInput input, CancellationToken cancellationToken) => Act(vid, ExamAction.Reject, input, cancellationToken);
+    public Task<ExamVersionView> Reject(Guid vid,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ExamReviewInput? input, CancellationToken cancellationToken) => Act(vid, ExamAction.Reject, input, cancellationToken);
 
     /// <summary>Archive an approved or rejected version permanently under the resource permission matrix.</summary>
     [HttpPost("{vid:guid}/archive")]

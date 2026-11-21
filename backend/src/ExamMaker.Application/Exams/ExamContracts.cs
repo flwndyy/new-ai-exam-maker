@@ -26,7 +26,7 @@ public record ExamVersionSummary(Guid Id, Guid ExamId, string ExamTitle, Guid Su
     QuestionUser? ReviewedBy, DateTime? ReviewedAt, string? ReviewNote,
     QuestionUser? PublishedBy, DateTime? PublishedAt, DateTime CreatedAt, DateTime UpdatedAt);
 public sealed record ExamItemView(int SortOrder, decimal Points, Guid SourceQuestionId, int SourceRevision,
-    int? CurrentSourceRevision, string Type, string Difficulty, string Stem, JsonElement Payload, string? Explanation);
+    int? CurrentSourceRevision, string? Type, string? Difficulty, string? Stem, JsonElement? Payload, string? Explanation);
 public sealed record ExamWarning(string Code, string Message, Guid? SourceQuestionId = null);
 public sealed record ExamVersionView : ExamVersionSummary
 {

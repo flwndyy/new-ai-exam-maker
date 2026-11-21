@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.14** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.15** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -244,11 +244,14 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──publ
 
 #### Chi tiết triển khai A7
 
+- Nội dung nguồn hiện tại trong Draft/Rejected phải qua QuestionRules.CanRead theo từng câu. Item không được đọc giữ metadata liên kết/điểm, còn type/difficulty/stem/payload/explanation/currentSourceRevision trả null với warning SourceContentUnavailable; không tiết lộ đáp án qua đề. Head/admin vẫn xem được metadata phiên bản theo ma trận. Tác giả chuyển tổ giữ quyền ghép/submit nguồn Approved trong tổ cố định của đề, không dùng tổ hiện tại của actor để đổi phạm vi đề cũ.
+- Ngoại lệ cho tác giả chuyển tổ: trong chính đề cũ của mình, vẫn xem được nguồn Approved đủ điều kiện CanSelect theo tổ cố định của đề. Ngoại lệ không áp dụng cho nguồn Draft/Rejected riêng của người khác và không mở quyền GET trực tiếp câu hỏi ngoài tổ.
+- Archive Rejected giữ nguyên snapshot và hash đang lưu như A2, không chụp thêm nội dung nguồn riêng tư. Item thiếu snapshot trả nội dung null và warning SnapshotUnavailable; không thay bằng nguồn hiện tại. ContentHash trên response luôn null khi Draft/Rejected hoặc snapshot chưa đầy đủ; hash trong DB vẫn giữ lịch sử tới lần submit lại.
 - Tạo Exam kèm phiên bản Draft số 1, thời gian mặc định 45 phút. Môn/khối/tổ cố định; chỉ tác giả teacher/head được đổi tiêu đề, ghép câu và tạo phiên bản mới. Không tạo thêm khi còn Draft; bản mới sao chép liên kết từ phiên bản được chọn trong cùng Exam (mặc định mới nhất), dùng revision/nội dung nguồn hiện tại; bỏ nguồn Archived hoặc không còn phù hợp/quyền chọn và trả warnings. Rejected vẫn cho phép tạo bản mới.
 - Tạo/sửa danh sách tối đa 200 câu, không trùng nguồn; điểm decimal dương, tổng không tràn decimal. Draft được rỗng; Submit bắt buộc có câu. Mỗi câu được chọn phải thuộc tác giả hoặc Approved cùng tổ, đúng môn/khối/tổ đề, không Archived. Khi Submit tất cả phải Approved; lưu snapshot toàn bộ nội dung và SHA-256 canonical JSON gồm duration, thứ tự, điểm, source id/revision và nội dung. Không đưa thời gian/người duyệt vào hash.
 - Mutation giữ khóa hàng actor FOR SHARE và catalog shared 48683402; khóa Exam FOR UPDATE trước ExamVersion để serialize tạo số phiên bản và publish. Khóa nguồn FOR SHARE theo id trước kiểm lại quyền/trạng thái/phân loại và ghi liên kết/snapshot, giữ tới commit. A6 có thứ tự khóa nguồn rồi phiên bản nên deadlock có thể xảy ra; rollback và trả 409, không tự retry mutation. Chờ khóa tối đa 2 giây.
 - Đọc/ghi kiểm visibility trước khóa rồi kiểm lại sau khóa. Admin thấy tất cả; head thấy đề cùng tổ hoặc của mình; teacher thấy đề của mình và metadata phiên bản Published cùng tổ. Chi tiết chứa đáp án chỉ tác giả/head cùng tổ/admin; teacher đọc phiên bản Published của người khác nhận 403, không lộ phiên bản riêng tư qua list/detail. Xuất đề thuộc B10.
-- Quyền/trạng thái được kiểm trước token duyệt; submittedAt bắt buộc trong service, so UTC mili giây và mỗi lượt submit tăng tối thiểu 1ms. UpdatedAt tăng theo micro giây; mọi thay đổi và audit nằm trong cùng transaction. Approve/reject cấm tự duyệt, reject cần note. Withdraw xóa snapshot/hash/quyết định sau khi mở Draft; Rejected dùng nội dung nguồn hiện tại và chụp lại ở lần submit sau. Archive Rejected chụp nội dung hiện tại để giữ bản bỏ dở (không yêu cầu nguồn Approved), rồi khóa nội dung như các bản Archived khác.
+- Quyền/trạng thái được kiểm trước token duyệt, kể cả body rỗng; submittedAt bắt buộc trong service, so UTC mili giây và mỗi lượt submit tăng tối thiểu 1ms. UpdatedAt tăng theo micro giây; mọi thay đổi và audit nằm trong cùng transaction. Approve/reject cấm tự duyệt, reject cần note. Withdraw xóa snapshot/hash/quyết định sau khi mở Draft; Rejected dùng nội dung nguồn hiện tại trong phạm vi quyền xem và chụp lại ở lần submit sau. Archive Rejected giữ dữ liệu hiện có theo A2 và khóa nội dung như các bản Archived khác.
 - Publish/unpublish chỉ admin; từ Approved/Published tương ứng, giữ snapshot/hash và metadata lịch sử publish; bản Published khác trong cùng đề gây 409 PublishedVersionExists. Archive chỉ Approved/Rejected, tác giả/head cùng tổ/admin, không khôi phục. Không thay đổi schema A2.
 
 ### 4.4 Xuất đề
@@ -619,6 +622,10 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.15 — 21/11/2026**
+
+- Sửa review A7: kiểm quyền từng nguồn hiện tại và ẩn nội dung không được xem; giữ tổ cố định của đề khi tác giả chuyển tổ. Thống nhất archive Rejected với A2 (không chụp thêm nguồn), ẩn hash không khớp response editable/thiếu snapshot, summary dùng SQL count. Hồ sơ không hợp lệ trả 401; body review rỗng đi qua kiểm quyền/trạng thái trước token.
 
 **0.14 — 21/11/2026**
 

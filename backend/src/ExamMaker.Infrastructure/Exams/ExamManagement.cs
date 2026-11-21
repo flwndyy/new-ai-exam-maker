@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Linq.Expressions;
 using ExamMaker.Application.Authentication;
 using ExamMaker.Application.Exams;
+using ExamMaker.Application.Questions;
 using ExamMaker.Domain.Auditing;
 using ExamMaker.Domain.Exams;
 using ExamMaker.Domain.Questions;
@@ -150,9 +152,9 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
             ExamRules.RequireAction(actor, exam, version, action); var before = version.Status;
             if (action == ExamAction.Publish && await database.ExamVersions.AnyAsync(v => v.ExamId == exam.Id && v.Status == "Published" && v.Id != id, cancellationToken))
                 throw new ExamException(409, "PublishedVersionExists", "Đề đã có phiên bản Published. Hãy thu hồi bản cũ trước.");
-            if (action == ExamAction.Submit || action == ExamAction.Archive && before == "Rejected")
+            if (action == ExamAction.Submit)
             {
-                await SnapshotAsync(actor, exam, version, action == ExamAction.Submit, cancellationToken);
+                await SnapshotAsync(actor, exam, version, cancellationToken);
                 // Snapshot items must be saved while their parent is still editable; the database trigger freezes them afterwards.
                 await database.SaveChangesAsync(cancellationToken);
             }
@@ -240,13 +242,13 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
     }
 
     /// <summary>Refresh each source revision and copy every answer-bearing field before freezing the parent version.</summary>
-    private async Task SnapshotAsync(AuthenticatedUser actor, Exam exam, ExamVersion version, bool requireApproved, CancellationToken cancellationToken)
+    private async Task SnapshotAsync(AuthenticatedUser actor, Exam exam, ExamVersion version, CancellationToken cancellationToken)
     {
         var items = await database.ExamVersionQuestions.Where(i => i.ExamVersionId == version.Id).OrderBy(i => i.SortOrder).ToListAsync(cancellationToken);
-        if (requireApproved && items.Count == 0) throw ExamRules.Invalid("items");
+        if (items.Count == 0) throw ExamRules.Invalid("items");
         var sources = await LockSourcesAsync(items.Select(i => i.SourceQuestionId), cancellationToken);
         var invalid = items.Where(i => !sources.TryGetValue(i.SourceQuestionId, out var q)
-            || requireApproved && (q.Status != "Approved" || !ExamRules.CanSelect(actor, exam, q))).Select(i => i.SourceQuestionId).ToArray();
+            || q.Status != "Approved" || !ExamRules.CanSelect(actor, exam, q)).Select(i => i.SourceQuestionId).ToArray();
         if (invalid.Length > 0) throw new ExamException(409, "QuestionsNotApproved", "Mọi câu trong đề phải được duyệt và đúng phân loại.", invalidQuestionIds: invalid);
         foreach (var item in items)
         {
@@ -263,7 +265,8 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
         var users = locking ? database.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {id} FOR SHARE") : database.Users;
         var user = await users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == id, cancellationToken);
         if (user is null || !user.IsActive) throw new ExamException(401, "Unauthorized", "Chưa xác thực.");
-        if (user.Role is not (Roles.Admin or Roles.Teacher or Roles.Head) || user.Role != Roles.Admin && user.DepartmentId == null) throw ExamRules.Forbidden();
+        if (user.Role is not (Roles.Admin or Roles.Teacher or Roles.Head) || user.Role != Roles.Admin && user.DepartmentId == null)
+            throw new ExamException(401, "Unauthorized", "Hồ sơ xác thực không hợp lệ.");
         return new(user.Id, user.CognitoSub, user.Email, user.FullName, user.Role, user.DepartmentId, null, true);
     }
 
@@ -275,11 +278,11 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
     /// <summary>Materialize exam metadata and filter every summary before computing visible version counters.</summary>
     private async Task<ExamDetail> DetailAsync(AuthenticatedUser actor, Guid id, CancellationToken cancellationToken)
     {
-        var exam = await VisibleExams(actor).Include(e => e.Creator).Include(e => e.Versions).ThenInclude(v => v.Questions)
-            .Include(e => e.Versions).ThenInclude(v => v.Reviewer).Include(e => e.Versions).ThenInclude(v => v.Publisher)
+        var exam = await VisibleExams(actor).Include(e => e.Creator).Include(e => e.Versions)
             .SingleOrDefaultAsync(e => e.Id == id, cancellationToken) ?? throw ExamRules.Missing();
-        return new(ExamView(exam, actor), exam.Versions.Where(v => ExamRules.CanRead(actor, exam, v.Status))
-            .OrderByDescending(v => v.VersionNo).Select(v => Summary(v, exam)).ToArray());
+        var summaries = await VisibleVersions(actor).Where(v => v.ExamId == id).OrderByDescending(v => v.VersionNo)
+            .Select(SummaryProjection).ToListAsync(cancellationToken);
+        return new(ExamView(exam, actor), summaries);
     }
 
     /// <summary>Build answer-bearing version responses from snapshots unless the version is explicitly editable.</summary>
@@ -294,31 +297,44 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
         var items = v.Questions.OrderBy(i => i.SortOrder).Select(i =>
         {
             var q = i.SourceQuestion!;
-            if (!editable && (i.Type is null || i.Difficulty is null || i.StemSnapshot is null || i.PayloadSnapshot is null))
-                throw Conflict("Phiên bản cũ chưa có snapshot đầy đủ; cần kiểm tra dữ liệu trước khi sử dụng.");
+            // Exam-level answer access must never grant access to another author's live private question.
+            var canReadSource = QuestionRules.CanRead(actor, q)
+                || q.Status == "Approved" && v.Exam!.CreatedBy == actor.Id && ExamRules.CanSelect(actor, v.Exam, q);
+            var unavailable = editable ? !canReadSource
+                : i.Type is null || i.Difficulty is null || i.StemSnapshot is null || i.PayloadSnapshot is null;
+            if (unavailable)
+            {
+                resultWarnings.Add(new(editable ? "SourceContentUnavailable" : "SnapshotUnavailable",
+                    "Nội dung câu không khả dụng trong phiên bản này.", i.SourceQuestionId));
+                return new ExamItemView(i.SortOrder, i.Points, i.SourceQuestionId, i.SourceRevision, null, null, null, null, null, null);
+            }
             if (editable && i.SourceRevision != q.Revision) resultWarnings.Add(new("SourceRevisionChanged", "Câu nguồn đã đổi phiên bản.", q.Id));
             return new ExamItemView(i.SortOrder, i.Points, i.SourceQuestionId, i.SourceRevision, editable ? q.Revision : null,
                 editable ? q.Type : i.Type!, editable ? q.Difficulty : i.Difficulty!, editable ? q.Stem : i.StemSnapshot!,
                 JsonSerializer.Deserialize<JsonElement>(editable ? q.Payload : i.PayloadSnapshot!), editable ? q.Explanation : i.ExplanationSnapshot);
         }).ToArray();
-        return new(Summary(v, v.Exam!), items, resultWarnings);
+        return new(Summarize(v), items, resultWarnings);
     }
 
     /// <summary>Project summaries without reading payload content or serializing persistence navigations.</summary>
     private async Task<ExamVersionPage> PageVersionsAsync(IQueryable<ExamVersion> source, int page, int size, CancellationToken cancellationToken)
     {
         var count = await source.CountAsync(cancellationToken);
-        var versions = await source.Include(v => v.Exam).ThenInclude(e => e!.Creator).Include(v => v.Reviewer).Include(v => v.Publisher)
-            .Include(v => v.Questions).Skip((page - 1) * size).Take(size).ToListAsync(cancellationToken);
-        return new(page, size, count, Pages(count, size), versions.Select(v => Summary(v, v.Exam!)).ToArray());
+        var summaries = await source.Skip((page - 1) * size).Take(size).Select(SummaryProjection).ToListAsync(cancellationToken);
+        return new(page, size, count, Pages(count, size), summaries);
     }
 
     private IQueryable<ExamVersion> VersionSource() => database.ExamVersions.AsNoTracking()
         .Include(v => v.Exam).ThenInclude(e => e!.Creator).Include(v => v.Reviewer).Include(v => v.Publisher);
-    private static ExamVersionSummary Summary(ExamVersion v, Exam e) => new(v.Id, e.Id, e.Title, e.SubjectId, e.Grade, e.DepartmentId,
-        new(e.CreatedBy, e.Creator!.FullName), v.VersionNo, v.Status, v.DurationMinutes, v.TotalPoints, v.Questions.Count, v.ContentHash, v.SubmittedAt,
-        v.ReviewedBy is Guid reviewer ? new(reviewer, v.Reviewer!.FullName) : null, v.ReviewedAt, v.ReviewNote,
-        v.PublishedBy is Guid publisher ? new(publisher, v.Publisher!.FullName) : null, v.PublishedAt, v.CreatedAt, v.UpdatedAt);
+    // This expression is translated to SQL: summaries count items without loading their stems, answers or payload snapshots.
+    private static readonly Expression<Func<ExamVersion, ExamVersionSummary>> SummaryProjection = v => new(v.Id, v.ExamId,
+        v.Exam!.Title, v.Exam.SubjectId, v.Exam.Grade, v.Exam.DepartmentId,
+        new(v.Exam.CreatedBy, v.Exam.Creator!.FullName), v.VersionNo, v.Status, v.DurationMinutes, v.TotalPoints, v.Questions.Count,
+        v.Status != "Draft" && v.Status != "Rejected" && v.Questions.All(i => i.Type != null && i.Difficulty != null && i.StemSnapshot != null && i.PayloadSnapshot != null)
+            ? v.ContentHash : null, v.SubmittedAt,
+        v.ReviewedBy != null ? new(v.ReviewedBy.Value, v.Reviewer!.FullName) : null, v.ReviewedAt, v.ReviewNote,
+        v.PublishedBy != null ? new(v.PublishedBy.Value, v.Publisher!.FullName) : null, v.PublishedAt, v.CreatedAt, v.UpdatedAt);
+    private static readonly Func<ExamVersion, ExamVersionSummary> Summarize = SummaryProjection.Compile();
     private static ExamView ExamView(Exam e, AuthenticatedUser actor)
     {
         var visible = e.Versions.Where(v => ExamRules.CanRead(actor, e, v.Status)).ToArray();
