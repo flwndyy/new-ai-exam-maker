@@ -176,7 +176,13 @@ Theo O16: tạo snapshot cần thiết, dừng RDS/EC2 khi không dùng, xóa EB
 release Elastic IP không dùng, đồng thời kiểm tra không còn NAT Gateway, load balancer,
 public IP idle hoặc CloudFront distribution thử nghiệm.
 
-## 5. Tài liệu AWS tham khảo
+## 5. Tài liệu runbook dịch vụ liên quan
+
+- Runbook Amazon Cognito User Pool (O9): [`runbooks/cognito.md`](runbooks/cognito.md)
+- Runbook Amazon RDS PostgreSQL 16 & Restore Drill (O10): [`runbooks/rds.md`](runbooks/rds.md)
+- Runbook cấu hình AWS CLI cục bộ cho thành viên: [`runbooks/aws-local-cli.md`](runbooks/aws-local-cli.md)
+
+## 6. Tài liệu AWS tham khảo
 
 - VPC public/private subnet và Internet Gateway: <https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html>
 - AWS-managed prefix lists: <https://docs.aws.amazon.com/vpc/latest/userguide/working-with-aws-managed-prefix-lists.html>
