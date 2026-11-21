@@ -45,13 +45,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                                 ORDER BY i.question_id
                                 LIMIT 1
                             )
-                            WHEN 'AiJob' THEN (
-                                SELECT u.department_id
-                                FROM ai_generation_jobs j
-                                JOIN users u ON u.id = j.requested_by
-                                WHERE j.id = a2.entity_id
-                            )
-                            WHEN 'User' THEN (SELECT u.department_id FROM users u WHERE u.id = a2.entity_id)
                             WHEN 'Department' THEN (SELECT d.id FROM departments d WHERE d.id = a2.entity_id)
                             WHEN 'Subject' THEN (SELECT s.department_id FROM subjects s WHERE s.id = a2.entity_id)
                             WHEN 'Topic' THEN (
