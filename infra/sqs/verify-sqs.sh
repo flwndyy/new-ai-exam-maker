@@ -167,32 +167,37 @@ fi
 if [ "$SMOKE_TEST" = "1" ]; then
   echo ""
   echo "==> Running SQS smoke test (send -> receive -> delete)..."
-  SMOKE_TOKEN="o11-smoke-$(date -u +%Y%m%d%H%M%S)"
-  SMOKE_BODY="$(jq -nc --arg token "$SMOKE_TOKEN" '{smokeTest:true,token:$token}')"
+  MAIN_VISIBLE="$(jq -r '.Attributes.ApproximateNumberOfMessages // 0' <<<"$MAIN_ATTRS_JSON" | tr -d '\r\n')"
+  if [ "$MAIN_VISIBLE" -gt 0 ]; then
+    fail "Refusing SMOKE_TEST=1 while Main Queue already has ${MAIN_VISIBLE} visible message(s) (avoid consuming real AI jobs)"
+  else
+    SMOKE_TOKEN="o11-smoke-$(date -u +%Y%m%d%H%M%S)"
+    SMOKE_BODY="$(jq -nc --arg token "$SMOKE_TOKEN" '{smokeTest:true,token:$token}')"
 
-  aws sqs send-message \
-    --region "$AWS_REGION" \
-    --queue-url "$MAIN_URL" \
-    --message-body "$SMOKE_BODY" >/dev/null
-
-  RECV_JSON="$(aws sqs receive-message \
-    --region "$AWS_REGION" \
-    --queue-url "$MAIN_URL" \
-    --max-number-of-messages 1 \
-    --wait-time-seconds 5 \
-    --output json)"
-
-  RECV_BODY="$(jq -r '.Messages[0].Body // empty' <<<"$RECV_JSON" | tr -d '\r\n')"
-  RECV_HANDLE="$(jq -r '.Messages[0].ReceiptHandle // empty' <<<"$RECV_JSON" | tr -d '\r\n')"
-
-  if [ -n "$RECV_HANDLE" ] && grep -q "$SMOKE_TOKEN" <<<"$RECV_BODY"; then
-    aws sqs delete-message \
+    aws sqs send-message \
       --region "$AWS_REGION" \
       --queue-url "$MAIN_URL" \
-      --receipt-handle "$RECV_HANDLE" >/dev/null
-    pass "Smoke test succeeded: sent, received, and deleted synthetic message cleanly"
-  else
-    fail "Smoke test failed: could not receive matching test message (token=${SMOKE_TOKEN})"
+      --message-body "$SMOKE_BODY" >/dev/null
+
+    RECV_JSON="$(aws sqs receive-message \
+      --region "$AWS_REGION" \
+      --queue-url "$MAIN_URL" \
+      --max-number-of-messages 1 \
+      --wait-time-seconds 5 \
+      --output json)"
+
+    RECV_BODY="$(jq -r '.Messages[0].Body // empty' <<<"$RECV_JSON" | tr -d '\r\n')"
+    RECV_HANDLE="$(jq -r '.Messages[0].ReceiptHandle // empty' <<<"$RECV_JSON" | tr -d '\r\n')"
+
+    if [ -n "$RECV_HANDLE" ] && grep -q "$SMOKE_TOKEN" <<<"$RECV_BODY"; then
+      aws sqs delete-message \
+        --region "$AWS_REGION" \
+        --queue-url "$MAIN_URL" \
+        --receipt-handle "$RECV_HANDLE" >/dev/null
+      pass "Smoke test succeeded: sent, received, and deleted synthetic message cleanly"
+    else
+      fail "Smoke test failed: could not receive matching test message (token=${SMOKE_TOKEN})"
+    fi
   fi
 fi
 
