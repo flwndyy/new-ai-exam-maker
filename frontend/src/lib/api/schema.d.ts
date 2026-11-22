@@ -2971,9 +2971,9 @@ export interface operations {
                 entityId?: string;
                 actorId?: string;
                 action?: string;
-                /** @description Từ thời điểm (UTC, gồm). */
+                /** @description Từ thời điểm (UTC, gồm; chuỗi chỉ có ngày `YYYY-MM-DD` tính từ đầu ngày `00:00:00Z`). */
                 from?: string;
-                /** @description Đến thời điểm (UTC, không gồm). */
+                /** @description Đến thời điểm (UTC, gồm; cho phép `from == to`, chuỗi chỉ có ngày `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`). */
                 to?: string;
             };
             header?: never;
