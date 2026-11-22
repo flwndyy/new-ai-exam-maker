@@ -566,6 +566,7 @@ public sealed class QuestionManagementTests : IAsyncLifetime
             Assert.All(setAudits, audit =>
             {
                 Assert.Equal(owner, audit.ActorId);
+                Assert.Equal(Department, audit.DepartmentId);
                 Assert.Equal("RemoveQuestionFromSet", audit.Action);
                 Assert.Contains($"question={q.Id}", audit.Note);
             });
