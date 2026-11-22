@@ -109,7 +109,8 @@ Quy tắc chặn nhau (ưu tiên làm sớm):
 **Chặng 1 (20–24/11) — Làm song song, không phụ thuộc DEV-A**
 - [x] B1. Next.js static export: `trailingSlash`, Tailwind, TanStack Query, React Hook Form + Zod, KaTeX; client gọi API sinh từ OpenAPI; layout + chuỗi tiếng Việt tách file; route động bằng query string (mục 9.2).
 - [ ] B2. Luồng đăng nhập Cognito Authorization Code + PKCE: callback, refresh token, hết hạn, đăng xuất, auth guard (UX); CSP chặt. *Cần Cognito + domain từ OPS.*
-- [ ] B3. **Lõi AI (thuần logic, test được ngay)**: prompt template có `prompt_version`; JSON schema + validator theo từng dạng (mục 8.2); phân loại lỗi retryable/non-retryable; interface Bedrock + **fake** cho test.
+- [x] B3. **Lõi AI (thuần logic, test được ngay)**: prompt template có `prompt_version`; JSON schema + validator theo từng dạng (mục 8.2); phân loại lỗi retryable/non-retryable; interface Bedrock + **fake** cho test.
+  - Hoàn thành 22/11/2026: `Application/Ai/Generation` gồm `AiPromptBuilder` (`question-gen-v1`), `AiOutputParser` (dùng lại `QuestionRules`), `AiQuestionGenerator` (1 vòng sửa lại, callback token từng lần gọi), `AiErrorClassifier` + `AiRetryPolicy`, `IAiModelClient`. Fake model ở Application.Tests; adapter Bedrock thật để B6. Application.Tests 133/133, toàn solution xanh local. Chi tiết ở `docs/context.md` mục 4.1.2 "Chi tiết triển khai B3".
 - [ ] B4. Kiểm chứng đáp án (tùy chọn, mục 4.1.2) và loại trùng bằng so khớp chuỗi.
 
 **Chặng 2 (25–29/11) — Pipeline và tính năng** · B11 thuộc **Chặng 3 (30/11–01/12)**
