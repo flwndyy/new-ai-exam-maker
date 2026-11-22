@@ -1372,6 +1372,8 @@ export interface components {
             promptVersion?: string | null;
             inputTokens: number;
             outputTokens: number;
+            /** @description Số câu AI sinh ra bị bỏ vì trùng (trong lô hoặc với ngân hàng cùng môn + chương). */
+            duplicatesDropped: number;
             /** @description Các câu `Draft` đã sinh, theo `aiOrdinal`; rỗng nếu chưa `Succeeded`. */
             questionIds?: string[];
             /** Format: date-time */

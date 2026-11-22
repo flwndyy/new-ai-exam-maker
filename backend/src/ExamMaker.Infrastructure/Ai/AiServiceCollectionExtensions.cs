@@ -51,6 +51,7 @@ public static class AiServiceCollectionExtensions
         services.AddScoped<IAiUsageReader, EfAiUsageReader>();
         services.AddScoped<IAiJobStore, EfAiJobStore>();
         services.AddScoped<IAiJobReader, EfAiJobReader>();
+        services.AddScoped<IAiDuplicateKeySource, EfAiDuplicateKeySource>();
         services.AddScoped<AiGenerationService>();
         services.AddScoped<AiJobQueries>();
 

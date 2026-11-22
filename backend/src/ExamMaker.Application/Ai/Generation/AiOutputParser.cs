@@ -72,14 +72,14 @@ public static class AiOutputParser
         return new AiGeneratedQuestion(index + 1, input.Stem, input.Payload.Clone(), input.Explanation);
     }
 
-    private static string StripFence(string text)
+    internal static string StripFence(string text)
     {
         var trimmed = text.Trim();
         var match = Fence.Match(trimmed);
         return match.Success ? match.Groups["body"].Value : trimmed;
     }
 
-    private static JsonDocument ParseJson(string text)
+    internal static JsonDocument ParseJson(string text)
     {
         try
         {
@@ -106,7 +106,7 @@ public static class AiOutputParser
     }
 
     /// <summary>Reject missing, unknown and duplicate properties instead of silently picking one value.</summary>
-    private static bool HasExactKeys(JsonElement value, string[] required, string[] optional)
+    internal static bool HasExactKeys(JsonElement value, string[] required, string[] optional)
     {
         if (value.ValueKind != JsonValueKind.Object) return false;
         var keys = value.EnumerateObject().Select(x => x.Name).ToArray();

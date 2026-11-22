@@ -29,6 +29,9 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 table.HasCheckConstraint(
                     "ck_ai_generation_jobs_tokens",
                     "input_tokens >= 0 AND output_tokens >= 0");
+                table.HasCheckConstraint(
+                    "ck_ai_generation_jobs_duplicates_dropped",
+                    "duplicates_dropped >= 0");
             });
 
             builder.HasKey(x => x.Id)
@@ -83,6 +86,10 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
 
             builder.Property(x => x.OutputTokens)
                 .HasColumnName("output_tokens");
+
+            builder.Property(x => x.DuplicatesDropped)
+                .HasColumnName("duplicates_dropped")
+                .HasDefaultValue(0);
 
             builder.Property(x => x.CreatedAt)
                 .HasColumnName("created_at")
