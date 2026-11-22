@@ -20,6 +20,9 @@ using Microsoft.AspNetCore.Mvc.ModelBinding.Metadata;
 using Serilog;
 using System.Net;
 using System.Text.Json;
+using ExamMaker.Api.Auditing;
+using ExamMaker.Application.Auditing;
+using ExamMaker.Infrastructure.Auditing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -45,6 +48,8 @@ builder.Services.AddScoped<IQuestionManagement, QuestionManagement>();
 builder.Services.AddExceptionHandler<QuestionExceptionHandler>();
 // Keep exam snapshots, transitions and audit writes inside one request-scoped transaction.
 builder.Services.AddScoped<IExamManagement, ExamManagement>();
+builder.Services.AddScoped<IAuditLogReader, AuditLogReader>();
+builder.Services.AddExceptionHandler<AuditExceptionHandler>();
 builder.Services.AddExceptionHandler<ExamExceptionHandler>();
 builder.Services.AddControllers(options =>
     options.ModelMetadataDetailsProviders.Add(new SystemTextJsonValidationMetadataProvider()))
