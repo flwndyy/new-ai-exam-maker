@@ -37,12 +37,13 @@ ROTATE_ORIGIN_SECRET="${ROTATE_ORIGIN_SECRET:-0}"
 ORIGIN_VERIFY_SECRET="${ORIGIN_VERIFY_SECRET:-}"
 
 # Bedrock defaults (docs/context.md §6, §14 & docs/aws-o3-ec2-ssm.md §2.1)
-# Verified against `aws bedrock list-inference-profiles --region ap-southeast-1`:
-# APAC supports Claude 3 Haiku (`apac.anthropic.claude-3-haiku-20240307-v1:0`), not Claude 3.5 Haiku.
+# Verified against `aws bedrock list-inference-profiles` & `get-foundation-model` in ap-southeast-1:
+# Claude 3 Haiku and Claude 3.5 Sonnet v2 foundation models have reached EOL;
+# Claude Haiku 4.5 and Claude Sonnet 4.6 global inference profiles are ACTIVE.
 BEDROCK_REGION="${BEDROCK_REGION:-ap-southeast-1}"
-BEDROCK_DEV_MODEL_ID="${BEDROCK_DEV_MODEL_ID:-apac.anthropic.claude-3-haiku-20240307-v1:0}"
+BEDROCK_DEV_MODEL_ID="${BEDROCK_DEV_MODEL_ID:-global.anthropic.claude-haiku-4-5-20251001-v1:0}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-$BEDROCK_DEV_MODEL_ID}"
-BEDROCK_DEMO_MODEL_ID="${BEDROCK_DEMO_MODEL_ID:-apac.anthropic.claude-3-5-sonnet-20241022-v2:0}"
+BEDROCK_DEMO_MODEL_ID="${BEDROCK_DEMO_MODEL_ID:-global.anthropic.claude-sonnet-4-6}"
 BEDROCK_ENABLE_VERIFICATION="${BEDROCK_ENABLE_VERIFICATION:-false}"
 
 # AI Quota defaults (exact match with ExamMaker.Application.Ai.AiQuotaOptions)
@@ -157,10 +158,16 @@ put_origin_secret_param() {
   fi
 
   # Write parameter payload via temporary file (0600) so the secret is never exposed in process argv (`ps`).
+  # Convert POSIX path via `cygpath -m` on Git Bash (Windows) because MSYS_NO_PATHCONV=1 disables auto-conversion for aws.exe.
   local tmp_json=""
+  local param_file=""
   tmp_json="$(mktemp)"
   chmod 600 "$tmp_json"
   trap 'rm -f "$tmp_json"' RETURN
+  param_file="$tmp_json"
+  if command -v cygpath >/dev/null 2>&1; then
+    param_file="$(cygpath -m "$tmp_json")"
+  fi
 
   if [ "$status" = "exists" ]; then
     jq -nc \
@@ -178,8 +185,8 @@ put_origin_secret_param() {
       }' >"$tmp_json"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --cli-input-json "file://${tmp_json}" >/dev/null
-    echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — follow 2-step Nginx -> CloudFront rotation in runbook!)"
+      --cli-input-json "file://${param_file}" >/dev/null
+    echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
     jq -nc \
       --arg name "$name" \
@@ -201,7 +208,7 @@ put_origin_secret_param() {
       }' >"$tmp_json"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --cli-input-json "file://${tmp_json}" >/dev/null
+      --cli-input-json "file://${param_file}" >/dev/null
     echo "    [CREATED]  ${name} (SecureString via alias/aws/ssm; value not printed)"
   fi
 }
@@ -216,9 +223,9 @@ put_string_param "${SSM_PREFIX}/AWS/Region" "$AWS_REGION" "Default AWS region fo
 echo ""
 echo "==> 2. Amazon Bedrock parameters..."
 put_string_param "${SSM_PREFIX}/Bedrock/Region" "$BEDROCK_REGION" "AWS region for Amazon Bedrock invocation (Bedrock:Region)"
-put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bedrock model/inference profile ID (Claude 3 Haiku for dev, Sonnet v2 for demo)"
-put_string_param "${SSM_PREFIX}/Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID" "Target Bedrock model/inference profile ID for dev/cost-saving rollback (Claude 3 Haiku)"
-put_string_param "${SSM_PREFIX}/Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID" "Target Bedrock model/inference profile ID for demo (Claude 3.5 Sonnet v2)"
+put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bedrock model/inference profile ID (Claude Haiku 4.5 for dev, Claude Sonnet 4.6 for demo)"
+put_string_param "${SSM_PREFIX}/Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID" "Target Bedrock model/inference profile ID for dev/cost-saving rollback (Claude Haiku 4.5)"
+put_string_param "${SSM_PREFIX}/Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID" "Target Bedrock model/inference profile ID for demo (Claude Sonnet 4.6)"
 put_string_param "${SSM_PREFIX}/Bedrock/EnableAnswerVerification" "$BEDROCK_ENABLE_VERIFICATION" "Toggle optional AI answer verification pass (false for dev, true for demo)"
 
 echo ""

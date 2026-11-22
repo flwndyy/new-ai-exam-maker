@@ -35,11 +35,11 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 | | `/exammaker/dev/Rds/{InstanceId,Endpoint,Port,Database,Username}` | `String` | Do O10 tạo | OPS / CD migration (O15) |
 | **SQS (O11)** | `/exammaker/dev/Sqs/AiJobsQueueUrl` | `String` | Do O11 tạo | `Sqs:AiJobsQueueUrl` (`AiServiceCollectionExtensions.cs`) |
 | | `/exammaker/dev/Sqs/{AiJobsQueueArn,AiJobsDlqUrl,AiJobsDlqArn}` | `String` | Do O11 tạo | EC2 IAM (O3), CloudWatch (O13) |
-| **Bedrock (O12)** | `/exammaker/dev/Bedrock/Region` | `String` | `ap-southeast-1` | `Bedrock:Region` (Worker B6) |
-| | `/exammaker/dev/Bedrock/ModelId` | `String` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | `Bedrock:ModelId` (model đang chạy: Claude 3 Haiku cho dev, đổi sang Sonnet v2 khi demo) |
-| | `/exammaker/dev/Bedrock/DevModelId` | `String` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | Tham chiếu model dev/tiết kiệm chi phí (Claude 3 Haiku) để rollback sau demo |
-| | `/exammaker/dev/Bedrock/DemoModelId` | `String` | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | Tham chiếu model demo (Claude 3.5 Sonnet v2) |
-| | `/exammaker/dev/Bedrock/EnableAnswerVerification` | `String` | `false` (`true` khi demo) | `Bedrock:EnableAnswerVerification` (`docs/context.md` §14) |
+| **Bedrock (O12)** | `/exammaker/dev/Bedrock/Region` | `String` | `ap-southeast-1` | Worker B6 (chưa có code đọc ở hiện tại) |
+| | `/exammaker/dev/Bedrock/ModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Worker B6 (chưa có code đọc ở hiện tại; Haiku 4.5 cho dev, đổi sang Sonnet 4.6 khi demo) |
+| | `/exammaker/dev/Bedrock/DevModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Tham chiếu model dev/tiết kiệm chi phí (Claude Haiku 4.5) để rollback sau demo (B6) |
+| | `/exammaker/dev/Bedrock/DemoModelId` | `String` | `global.anthropic.claude-sonnet-4-6` | Tham chiếu model demo (Claude Sonnet 4.6) (B6) |
+| | `/exammaker/dev/Bedrock/EnableAnswerVerification` | `String` | `false` (`true` khi demo) | Worker B6 (chưa có code đọc ở hiện tại; `docs/context.md` §14) |
 | **AI Quota (O12)** | `/exammaker/dev/AiQuota/JobsPerUserPerDay` | `String` | `10` | `AiQuota:JobsPerUserPerDay` (`AiQuotaOptions.cs`) |
 | | `/exammaker/dev/AiQuota/MaxQuestionsPerJob` | `String` | `10` | `AiQuota:MaxQuestionsPerJob` (`AiQuotaOptions.cs`) |
 | | `/exammaker/dev/AiQuota/TokensPerUserPerDay` | `String` | `100000` | `AiQuota:TokensPerUserPerDay` (`AiQuotaOptions.cs`) |
@@ -72,9 +72,9 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 ./infra/ssm/verify-ssm.sh
 ```
 
-Script kiểm tra tự động **18 tiêu chí** cho **32 tham số chuẩn hóa** (5 O9 + 6 O10 + 4 O11 + 17 O12; riêng `Rds/MasterPassword` của O10 là tham số nội bộ OPS nên không liệt kê vào danh sách app config):
+Script kiểm tra tự động **19 tiêu chí** cho **32 tham số chuẩn hóa** (5 O9 + 6 O10 + 4 O11 + 17 O12; riêng `Rds/MasterPassword` của O10 là tham số nội bộ OPS nên không liệt kê vào danh sách app config). Lưu ý chạy bằng danh tính **OPS** có quyền `bedrock:ListInferenceProfiles`, `bedrock:ListFoundationModels` và `bedrock:GetFoundationModel` (role runtime EC2 không cần các quyền này):
 1. Đủ nhóm tham số O9 (Cognito), O10 (RDS connection string + metadata), O11 (SQS + DLQ), O12 (AWS, Bedrock gồm `ModelId`/`DevModelId`/`DemoModelId`, AI Quota, AI Rate Limit, Origin Secret, CloudWatch).
-2. Xác thực trực tiếp `Bedrock/ModelId`, `Bedrock/DevModelId`, `Bedrock/DemoModelId` là inference profile `ACTIVE` (hoặc foundation model `ON_DEMAND`) tại `Bedrock/Region`.
+2. Xác thực trực tiếp `Bedrock/ModelId`, `Bedrock/DevModelId`, `Bedrock/DemoModelId` là inference profile `ACTIVE` (hoặc foundation model `ON_DEMAND`) và **vòng đời `modelLifecycle.status == "ACTIVE"`** (từ chối `LEGACY`/EOL) tại `Bedrock/Region`, đồng thời `ModelId` khớp `DevModelId` hoặc `DemoModelId`.
 3. `ConnectionStrings/ExamMaker` và `Origin/VerifySecret` bắt buộc là `SecureString` (và `Origin/VerifySecret` ≥ 32 ký tự); tuyệt đối không in giá trị secret ra terminal.
 4. Các giá trị quota là số nguyên dương hợp lệ, `MaxAttempts == 3` khớp SQS `maxReceiveCount=3`, `SystemTokensPerDay >= TokensPerUserPerDay`, và `AiRateLimit/Window` là `.NET TimeSpan > 0`.
 5. **Kiểm soát chi phí ($0):** 100% tham số dưới `/exammaker/dev/` dùng **Standard tier** và 100% `SecureString` dùng khóa AWS-managed `alias/aws/ssm`.
@@ -135,7 +135,7 @@ unset SECRET
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> **Quy trình xoay vòng secret không downtime (2 bước — khi chạy `ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh`):**
-> 1. Trên Nginx (EC2), cập nhật `/etc/exammaker/origin-secret.conf` để tạm thời chấp nhận **cả secret cũ và secret mới** (`"${OLD_SECRET}" 1;` và `"${NEW_SECRET}" 1;`) rồi `sudo nginx -t && sudo systemctl reload nginx`.
-> 2. Cập nhật custom header `X-Origin-Verify` trên CloudFront Origin (O5) sang secret mới và chờ CloudFront chuyển sang trạng thái `Deployed`.
-> 3. Gỡ dòng `"${OLD_SECRET}" 1;` khỏi `/etc/exammaker/origin-secret.conf` và reload Nginx lại.
+> **Quy trình xoay vòng secret không downtime (3 bước — bắt buộc lưu secret cũ trước khi xoay):**
+> 1. **Lưu secret cũ và sinh secret mới:** Trước khi chạy lệnh xoay, đọc và giữ giá trị cũ trong phiên shell (`OLD_SECRET` — nếu lỡ xoay rồi có thể lấy lại bản trước bằng `aws ssm get-parameter --name /exammaker/dev/Origin/VerifySecret:<version> --with-decryption`), sau đó chạy `ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh` và đọc `NEW_SECRET`.
+> 2. **Cập nhật Nginx (EC2) nhận cả 2 secret:** Ghi đồng thời `"${OLD_SECRET}" 1;` và `"${NEW_SECRET}" 1;` vào `/etc/exammaker/origin-secret.conf`, chạy `sudo nginx -t && sudo systemctl reload nginx` rồi `unset OLD_SECRET NEW_SECRET`.
+> 3. **Đổi CloudFront và dọn secret cũ:** Cập nhật custom header `X-Origin-Verify` trên CloudFront Origin (O5) sang secret mới, chờ CloudFront chuyển sang trạng thái `Deployed`, rồi gỡ dòng secret cũ khỏi `/etc/exammaker/origin-secret.conf` và reload Nginx lại.

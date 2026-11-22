@@ -141,34 +141,73 @@ BEDROCK_ACTIVE_MODEL="$(param_val "Bedrock/ModelId")"
 BEDROCK_DEV_MODEL="$(param_val "Bedrock/DevModelId")"
 BEDROCK_DEMO_MODEL="$(param_val "Bedrock/DemoModelId")"
 
-PROFILES_JSON="$(aws bedrock list-inference-profiles \
-  --region "$BEDROCK_REGION_VAL" \
-  --output json)"
-FOUNDATION_JSON="$(aws bedrock list-foundation-models \
-  --region "$BEDROCK_REGION_VAL" \
-  --output json)"
+PROFILES_JSON="{}"
+FOUNDATION_JSON="{}"
+BEDROCK_QUERY_OK=1
+if ! PROFILES_OUT="$(aws bedrock list-inference-profiles --region "$BEDROCK_REGION_VAL" --output json 2>&1)"; then
+  BEDROCK_QUERY_OK=0
+  fail "O12 Bedrock: failed to list inference profiles in '${BEDROCK_REGION_VAL}' (requires bedrock:ListInferenceProfiles): ${PROFILES_OUT}"
+else
+  PROFILES_JSON="$PROFILES_OUT"
+fi
+
+if ! FOUNDATION_OUT="$(aws bedrock list-foundation-models --region "$BEDROCK_REGION_VAL" --output json 2>&1)"; then
+  BEDROCK_QUERY_OK=0
+  fail "O12 Bedrock: failed to list foundation models in '${BEDROCK_REGION_VAL}' (requires bedrock:ListFoundationModels): ${FOUNDATION_OUT}"
+else
+  FOUNDATION_JSON="$FOUNDATION_OUT"
+fi
+
+is_foundation_model_active() {
+  local fm_id="$1"
+  local fm_json=""
+  local lifecycle=""
+  if ! fm_json="$(aws bedrock get-foundation-model --region "$BEDROCK_REGION_VAL" --model-identifier "$fm_id" --output json 2>/dev/null)"; then
+    return 1
+  fi
+  lifecycle="$(jq -r '.modelDetails.modelLifecycle.status // empty' <<<"$fm_json" | tr -d '\r\n')"
+  [ "$lifecycle" = "ACTIVE" ]
+}
 
 is_valid_bedrock_id() {
   local mid="$1"
-  local active_profile=""
-  local on_demand_fm=""
-  active_profile="$(jq -r --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE") | .inferenceProfileId' <<<"$PROFILES_JSON" | tr -d '\r\n')"
-  if [ -n "$active_profile" ]; then
+  local profile_json=""
+  profile_json="$(jq -c --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE")' <<<"$PROFILES_JSON")"
+  if [ -n "$profile_json" ]; then
+    local fm_ids=""
+    fm_ids="$(jq -r '.models[]?.modelArn | split("/") | last' <<<"$profile_json" | sort -u)"
+    [ -n "$fm_ids" ] || return 1
+    while IFS= read -r fm; do
+      [ -z "$fm" ] && continue
+      if ! is_foundation_model_active "$fm"; then
+        return 1
+      fi
+    done <<<"$fm_ids"
     return 0
   fi
-  on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null)) | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
+
+  local on_demand_fm=""
+  on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null) and (.modelLifecycle.status // "") == "ACTIVE") | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
   [ -n "$on_demand_fm" ]
 }
 
-for label_id in "ModelId:${BEDROCK_ACTIVE_MODEL}" "DevModelId:${BEDROCK_DEV_MODEL}" "DemoModelId:${BEDROCK_DEMO_MODEL}"; do
-  key_name="${label_id%%:*}"
-  model_val="${label_id#*:}"
-  if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
-    pass "O12 Bedrock: ${key_name} ('${model_val}') is valid & ACTIVE in '${BEDROCK_REGION_VAL}'"
-  else
-    fail "O12 Bedrock: ${key_name} ('${model_val}') not found as ACTIVE inference profile or ON_DEMAND model in '${BEDROCK_REGION_VAL}'"
-  fi
-done
+if [ "$BEDROCK_QUERY_OK" -eq 1 ]; then
+  for label_id in "ModelId:${BEDROCK_ACTIVE_MODEL}" "DevModelId:${BEDROCK_DEV_MODEL}" "DemoModelId:${BEDROCK_DEMO_MODEL}"; do
+    key_name="${label_id%%:*}"
+    model_val="${label_id#*:}"
+    if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
+      pass "O12 Bedrock: ${key_name} ('${model_val}') is ACTIVE and underlying foundation model lifecycle is ACTIVE in '${BEDROCK_REGION_VAL}'"
+    else
+      fail "O12 Bedrock: ${key_name} ('${model_val}') is missing, LEGACY/EOL, or not ACTIVE in '${BEDROCK_REGION_VAL}'"
+    fi
+  done
+fi
+
+if [ -n "$BEDROCK_ACTIVE_MODEL" ] && { [ "$BEDROCK_ACTIVE_MODEL" = "$BEDROCK_DEV_MODEL" ] || [ "$BEDROCK_ACTIVE_MODEL" = "$BEDROCK_DEMO_MODEL" ]; }; then
+  pass "O12 Bedrock: ModelId matches DevModelId or DemoModelId"
+else
+  fail "O12 Bedrock: ModelId ('${BEDROCK_ACTIVE_MODEL}') does not match DevModelId ('${BEDROCK_DEV_MODEL}') or DemoModelId ('${BEDROCK_DEMO_MODEL}')"
+fi
 
 BEDROCK_VERIFY="$(param_val "Bedrock/EnableAnswerVerification")"
 if [ "$BEDROCK_VERIFY" = "true" ] || [ "$BEDROCK_VERIFY" = "false" ]; then
