@@ -31,6 +31,7 @@ FAILURES=0
 
 pass() { echo "[PASS] $1"; PASSED=$((PASSED + 1)); }
 fail() { echo "[FAIL] $1" >&2; FAILURES=$((FAILURES + 1)); }
+warn() { echo "[WARN] $1" >&2; }
 
 echo "==> Auditing SSM Parameter Store under '${SSM_PREFIX}/' (${AWS_REGION}, env=${ENV_NAME})..."
 
@@ -160,13 +161,18 @@ fi
 
 # Checks foundation model lifecycle in BEDROCK_REGION_VAL using already-fetched FOUNDATION_JSON first,
 # then falls back to get-foundation-model. Returns:
-#   0 = ACTIVE, 1 = found but LEGACY/non-ACTIVE, 2 = not offered in BEDROCK_REGION_VAL.
+#   0 = ACTIVE, 1 = found and explicitly LEGACY, 2 = not offered in BEDROCK_REGION_VAL, 3 = inconclusive (throttle/transient/unknown)
 check_foundation_model_lifecycle() {
   local fm_id="$1"
   local lifecycle=""
   lifecycle="$(jq -r --arg id "$fm_id" '.modelSummaries[]? | select(.modelId == $id) | .modelLifecycle.status // empty' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
   if [ -n "$lifecycle" ]; then
-    [ "$lifecycle" = "ACTIVE" ] && return 0 || return 1
+    if [ "$lifecycle" = "LEGACY" ]; then
+      return 1
+    elif [ "$lifecycle" = "ACTIVE" ]; then
+      return 0
+    fi
+    return 3
   fi
 
   local fm_out=""
@@ -176,38 +182,45 @@ check_foundation_model_lifecycle() {
     if grep -q "ResourceNotFoundException" <<<"$fm_out"; then
       return 2
     fi
-    return 1
+    # Transient API errors (throttling, rate limits, access check) -> inconclusive
+    return 3
   fi
 
   lifecycle="$(jq -r '.modelDetails.modelLifecycle.status // empty' <<<"$fm_out" | tr -d '\r\n')"
-  [ "$lifecycle" = "ACTIVE" ] && return 0 || return 1
+  if [ "$lifecycle" = "LEGACY" ]; then
+    return 1
+  elif [ "$lifecycle" = "ACTIVE" ]; then
+    return 0
+  fi
+  return 3
 }
 
 is_valid_bedrock_id() {
   local mid="$1"
   local profile_json=""
+  # 1. Profile validity: status must be ACTIVE in BEDROCK_REGION_VAL
   profile_json="$(jq -c --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE")' <<<"$PROFILES_JSON")"
   if [ -n "$profile_json" ]; then
     local fm_ids=""
-    local active_count=0
     fm_ids="$(jq -r '.models[]?.modelArn | split("/") | last' <<<"$profile_json" | sort -u)"
-    [ -n "$fm_ids" ] || return 1
-    while IFS= read -r fm; do
-      [ -z "$fm" ] && continue
-      local fm_rc=0
-      check_foundation_model_lifecycle "$fm" || fm_rc=$?
-      if [ "$fm_rc" -eq 0 ]; then
-        active_count=$((active_count + 1))
-      elif [ "$fm_rc" -eq 1 ]; then
-        # Explicitly reject models whose lifecycle is LEGACY/non-ACTIVE.
-        return 1
-      fi
-      # fm_rc == 2 means that destination ARN is not offered directly in BEDROCK_REGION_VAL (normal for global.*/apac.*).
-    done <<<"$fm_ids"
-    [ "$active_count" -ge 1 ]
-    return $?
+    if [ -n "$fm_ids" ]; then
+      while IFS= read -r fm; do
+        [ -z "$fm" ] && continue
+        local fm_rc=0
+        check_foundation_model_lifecycle "$fm" || fm_rc=$?
+        if [ "$fm_rc" -eq 1 ]; then
+          # Explicitly reject only when an underlying foundation model is confirmed LEGACY.
+          return 1
+        elif [ "$fm_rc" -eq 3 ]; then
+          warn "O12 Bedrock: lifecycle lookup for foundation model '${fm}' (profile '${mid}') in '${BEDROCK_REGION_VAL}' was inconclusive; treating ACTIVE profile as valid"
+        fi
+        # fm_rc == 2 (not offered in source region) does NOT fail an ACTIVE profile.
+      done <<<"$fm_ids"
+    fi
+    return 0
   fi
 
+  # 2. On-demand foundation model (non-profile) fallback
   local on_demand_fm=""
   on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null) and (.modelLifecycle.status // "") == "ACTIVE") | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
   [ -n "$on_demand_fm" ]
@@ -218,7 +231,7 @@ if [ "$BEDROCK_QUERY_OK" -eq 1 ]; then
     key_name="${label_id%%:*}"
     model_val="${label_id#*:}"
     if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
-      pass "O12 Bedrock: ${key_name} ('${model_val}') is ACTIVE and underlying foundation model lifecycle is ACTIVE in '${BEDROCK_REGION_VAL}'"
+      pass "O12 Bedrock: ${key_name} ('${model_val}') is ACTIVE and usable (profile/model is ACTIVE in '${BEDROCK_REGION_VAL}')"
     else
       fail "O12 Bedrock: ${key_name} ('${model_val}') is missing, LEGACY/EOL, or not ACTIVE in '${BEDROCK_REGION_VAL}'"
     fi

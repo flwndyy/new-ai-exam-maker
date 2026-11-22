@@ -21,6 +21,7 @@
 
 - Ngân sách **$200 AWS credit** cho toàn bộ dự án (dev + demo). Đây là **hạn mức ngân sách, không phải cơ chế tự ngắt dịch vụ**: AWS Budgets chỉ cảnh báo, không chặn chi tiêu. Phải có quota ngay trong ứng dụng (đặc biệt cho Bedrock). Không mặc định $200 chắc chắn đủ — xem mục 6.
 - Chỉ dùng dịch vụ AWS thuộc phạm vi chương trình FCAJ. **Không ALB, không NAT Gateway, không Multi-AZ**; chấp nhận đánh đổi về tính sẵn sàng.
+- **Vùng lưu trú & xử lý dữ liệu (Data Residency & AI Routing)**: Toàn bộ dữ liệu nghiệp vụ và dữ liệu tĩnh (RDS PostgreSQL, S3, Cognito, EC2, CloudWatch Logs) đặt cố định tại `ap-southeast-1` (Singapore). Riêng các lệnh gọi suy luận Amazon Bedrock sử dụng inference profile `global.*` (để dùng các model Claude Haiku 4.5 / Sonnet 4.6 mới nhất thay thế model cũ đã EOL), do đó payload prompt (tên môn, khối, chương, mức độ nhận thức và ghi chú tự do của giáo viên) có thể được AWS Bedrock định tuyến chuyển tiếp qua các AWS commercial region khác theo cơ chế global routing. Prompt này không chứa PII giáo viên/học sinh và không bị AWS lưu trữ hoặc sử dụng để huấn luyện model (xem mục 5.2, 6 và 10).
 - Ngôn ngữ giao diện: **tiếng Việt**. Code, tên biến/bảng, commit: tiếng Anh.
 
 ---
@@ -314,7 +315,7 @@ flowchart LR
 | KMS                                                       | Mã hóa; **ưu tiên key do AWS quản lý** (aws/ssm, aws/rds, aws/s3) để không phát sinh phí key riêng |
 | Parameter Store                                           | Connection string, ModelId, cấu hình quota, ID Cognito, origin secret                              |
 | CloudWatch (retention 7 ngày)                             | Log, alarm, metric (mục 10)                                                                        |
-| **Amazon Bedrock**                                        | LLM sinh câu hỏi — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6                             |
+| **Amazon Bedrock**                                        | LLM sinh câu hỏi (endpoint gọi từ EC2 worker tại `ap-southeast-1`; dùng inference profile `global.*` định tuyến suy luận đa region, xem mục 1, 6 & 10) — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6 |
 
 ### 5.3 CloudFront → EC2 (đã chốt, 19/11/2026)
 
@@ -531,6 +532,7 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 - Rate limit + quota cho AI; giới hạn kích thước input; log không chứa token/PII nhạy cảm.
 - Nội dung do AI sinh coi là **không tin cậy**: sanitize khi hiển thị. Ghi chú người dùng đưa vào prompt cũng không tin cậy (prompt injection) — xem 4.1.1.
 - Dữ liệu cá nhân (họ tên, email giáo viên) chỉ lưu mức tối thiểu cần thiết; không đưa dữ liệu cá nhân hay nội dung có bản quyền (SGK...) vào prompt gửi AI hoặc vào repo.
+- **Lưu trú dữ liệu & định tuyến suy luận AI (Data Residency & Cross-Region Inference)**: Dữ liệu nghiệp vụ tại chỗ (Data at rest trong RDS, S3, Cognito, SSM, CloudWatch Logs) được lưu trữ 100% tại `ap-southeast-1` (Singapore). Đối với luồng sinh câu hỏi qua Bedrock, do áp dụng inference profile `global.*` (`global.anthropic.claude-haiku-4-5-20251001-v1:0` và `global.anthropic.claude-sonnet-4-6`), nội dung prompt (tên môn, khối, chương, mức độ nhận thức, ghi chú giáo viên) sẽ được AWS Bedrock định tuyến chuyển tiếp (transit) tới bất kỳ AWS commercial region nào có sẵn năng lực tính toán. Để tuân thủ nguyên tắc bảo vệ dữ liệu & quyền riêng tư: (1) prompt tuyệt đối không chứa PII giáo viên hay học sinh; (2) không đưa tài liệu có bản quyền vào ghi chú; (3) AWS Bedrock cam kết không lưu trữ (không bật model invocation logging mặc định) và không dùng prompt/response để huấn luyện model.
 
 **Giám sát (CloudWatch)**
 
@@ -638,6 +640,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 **0.19 — 22/11/2026**
 - Chuẩn hóa AWS Systems Manager Parameter Store (O12): kiểm tra `modelLifecycle` cho thấy các model Claude 3/3.5 cũ đã EOL tại `ap-southeast-1`; chuyển sang inference profile `ACTIVE` gồm `global.anthropic.claude-haiku-4-5-20251001-v1:0` (dev/test) và `global.anthropic.claude-sonnet-4-6` (demo), ghi rõ hệ quả định tuyến cross-region + IAM ARN cho `global.*`, đồng thời tính lại mục 6 ($158.10 ≤ $200) và mục 14.
+- Cập nhật phản hồi review PR #75 (lần 4): bổ sung ghi chú lưu trú dữ liệu & hệ quả định tuyến cross-region Bedrock tại mục 1, 5.2, 10; sửa quy trình xoay secret đọc trực tiếp từ cấu hình Nginx trên đĩa thay vì suy từ version SSM; bổ sung ARN foundation-model không có region vào IAM policy mẫu; hoàn thiện tiền kiểm tra quota/rate-limit trước khi gọi put-parameter trong setup-ssm.sh và tối ưu verify Bedrock tránh false-positive khi query cross-region.
 
 **0.18 — 22/11/2026**
 - Triển khai `GET /api/v1/audit-logs` (A8), cột `audit_logs.department_id` và `audit_logs.is_secondary`, index `(created_at, id)`: lọc phạm vi Head theo snapshot tổ tại thời điểm sự kiện (giữ hiển thị `actor.fullName` kể cả khi actor đã chuyển tổ), dòng `department_id` NULL chỉ Admin xem, khóa constructor/setter của `AuditLog` để bắt buộc tạo dòng qua `AuditLog.Create`, dùng `is_secondary` chống trùng dòng trên danh sách Admin khi chuyển tổ giữa hai tổ khác NULL (kèm ghi audit chuyển tổ cho các `Topic` con khi chuyển `Subject`, và che GUID tổ/môn của tổ khác trong `note` khi Head xem thông qua hằng định dạng dùng chung), lấy tổ cố định của câu bị xóa cho `RemoveQuestionFromSet`, đổi cận `to` của `GET /audit-logs` sang inclusive (`<=`, chưa có consumer phụ thuộc cận exclusive cũ) với kiểm tra chặt định dạng ISO-8601 / `YYYY-MM-DD`, và chốt backfill phương án (b) chỉ cho thực thể hiện có mang tổ bất biến (`Question`, `Exam`, `ExamVersion`, `Department`). Cập nhật mục 3.2, A3, 8.1/A2, 14, `docs/erd.md` và `docs/api/openapi.yaml`.

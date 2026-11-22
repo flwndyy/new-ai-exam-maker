@@ -25,7 +25,9 @@
         "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
         "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}",
         "arn:aws:bedrock:*::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
-        "arn:aws:bedrock:*::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}"
+        "arn:aws:bedrock:*::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}",
+        "arn:aws:bedrock:::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
+        "arn:aws:bedrock:::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}"
       ]
     },
     {

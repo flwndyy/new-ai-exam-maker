@@ -75,6 +75,47 @@ if [ "$BEDROCK_MODEL_ID" != "$BEDROCK_DEV_MODEL_ID" ] && [ "$BEDROCK_MODEL_ID" !
   exit 1
 fi
 
+# Validate AI Quota defaults / overrides (must match ExamMaker.Application.Ai.AiQuotaOptions & SQS maxReceiveCount=3)
+for quota_var in "AI_JOBS_PER_USER_PER_DAY:${AI_JOBS_PER_USER_PER_DAY}" \
+                 "AI_MAX_QUESTIONS_PER_JOB:${AI_MAX_QUESTIONS_PER_JOB}" \
+                 "AI_TOKENS_PER_USER_PER_DAY:${AI_TOKENS_PER_USER_PER_DAY}" \
+                 "AI_SYSTEM_TOKENS_PER_DAY:${AI_SYSTEM_TOKENS_PER_DAY}" \
+                 "AI_MAX_NOTE_LENGTH:${AI_MAX_NOTE_LENGTH}"; do
+  var_name="${quota_var%%:*}"
+  var_val="${quota_var#*:}"
+  if [[ ! "$var_val" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: ${var_name} must be a positive integer (got '${var_val}')." >&2
+    exit 1
+  fi
+done
+
+if [ "$AI_MAX_ATTEMPTS" != "3" ]; then
+  echo "ERROR: AI_MAX_ATTEMPTS must be 3 to match SQS worker retry and DLQ maxReceiveCount=3 (got '${AI_MAX_ATTEMPTS}')." >&2
+  exit 1
+fi
+
+if [ "$AI_SYSTEM_TOKENS_PER_DAY" -lt "$AI_TOKENS_PER_USER_PER_DAY" ]; then
+  echo "ERROR: AI_SYSTEM_TOKENS_PER_DAY (${AI_SYSTEM_TOKENS_PER_DAY}) must be >= AI_TOKENS_PER_USER_PER_DAY (${AI_TOKENS_PER_USER_PER_DAY})." >&2
+  exit 1
+fi
+
+# Validate AI Rate Limit defaults / overrides (must match ExamMaker.Api.Ai.AiRateLimitOptions & .NET TimeSpan)
+if [[ ! "$AI_RATE_PERMIT_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: AI_RATE_PERMIT_LIMIT must be a positive integer (got '${AI_RATE_PERMIT_LIMIT}')." >&2
+  exit 1
+fi
+
+if [[ ! "$AI_RATE_WINDOW" =~ ^([0-9]+\.)?(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,7})?$ ]]; then
+  echo "ERROR: AI_RATE_WINDOW ('${AI_RATE_WINDOW}') is not a valid .NET TimeSpan format (expected 'hh:mm:ss' or '[d.]hh:mm:ss[.fffffff]')." >&2
+  exit 1
+fi
+
+AI_RATE_WINDOW_NONZERO="${AI_RATE_WINDOW//[0.:]/}"
+if [ -z "$AI_RATE_WINDOW_NONZERO" ]; then
+  echo "ERROR: AI_RATE_WINDOW ('${AI_RATE_WINDOW}') cannot be zero duration." >&2
+  exit 1
+fi
+
 TMP_JSON_FILE=""
 cleanup_tmp_json() {
   if [ -n "${TMP_JSON_FILE:-}" ]; then
@@ -180,6 +221,8 @@ put_origin_secret_param() {
   fi
 
   if [ "$status" = "exists" ]; then
+    local prev_ver=""
+    prev_ver="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --query "Parameter.Version" --output text)"
     jq -nc \
       --arg name "$name" \
       --arg val "$secret_val" \
@@ -193,12 +236,15 @@ put_origin_secret_param() {
         Description: $desc,
         Overwrite: true
       }' >"$TMP_JSON_FILE"
-    aws ssm put-parameter \
+    local put_ver=""
+    put_ver="$(aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --cli-input-json "file://${param_file}" >/dev/null
+      --cli-input-json "file://${param_file}" \
+      --query "Version" \
+      --output text)"
     rm -f "$TMP_JSON_FILE"
     TMP_JSON_FILE=""
-    echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — follow 3-step rotation in runbook!)"
+    echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${put_ver} via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
     jq -nc \
       --arg name "$name" \
@@ -218,12 +264,15 @@ put_origin_secret_param() {
           {Key: "Task", Value: "O12"}
         ]
       }' >"$TMP_JSON_FILE"
-    aws ssm put-parameter \
+    local put_ver=""
+    put_ver="$(aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --cli-input-json "file://${param_file}" >/dev/null
+      --cli-input-json "file://${param_file}" \
+      --query "Version" \
+      --output text)"
     rm -f "$TMP_JSON_FILE"
     TMP_JSON_FILE=""
-    echo "    [CREATED]  ${name} (SecureString via alias/aws/ssm; value not printed)"
+    echo "    [CREATED]  ${name} (SecureString version ${put_ver} via alias/aws/ssm; value not printed)"
   fi
 }
 

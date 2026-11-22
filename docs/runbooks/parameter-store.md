@@ -135,29 +135,38 @@ unset SECRET
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> **Quy trình xoay vòng secret không downtime (3 bước — đọc theo version trực tiếp trên EC2):**
+> **Quy trình xoay vòng secret không downtime (3 bước — đọc secret đang chạy trực tiếp từ Nginx trên EC2):**
 > 1. **Sinh secret mới (trên máy OPS / CloudShell):**
+>    Chạy lệnh sinh secret mới lên SSM Parameter Store (mỗi đợt xoay **chỉ chạy đúng 1 lần**; script sẽ in rõ `previous version <N> -> new version <N+1>` để đối chiếu):
 >    ```bash
 >    ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh
 >    ```
-> 2. **Trên EC2 (qua SSM Session Manager), nạp đồng thời cả secret cũ (`version - 1`) và secret mới vào Nginx:**
+> 2. **Trên EC2 (qua SSM Session Manager), trích xuất secret đang dùng từ file cấu hình Nginx hiện tại và nạp kèm secret mới từ SSM:**
+>    *Lưu ý quan trọng:* Không suy đoán secret cũ theo `Version - 1` trong SSM (vì nếu bước 1 vô tình chạy lặp lại thì `Version - 1` chỉ là secret rác chưa từng được cấu hình ở CloudFront/Nginx, dẫn đến 403 khi CloudFront vẫn gửi secret cũ). Nguồn chân lý duy nhất của secret đang phục vụ chính là cấu hình Nginx đang có trên đĩa:
 >    ```bash
->    CUR_VER="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --query Parameter.Version --output text)"
->    PREV_VER="$((CUR_VER - 1))"
->    [ "$PREV_VER" -ge 1 ] || { echo "No previous version to rotate from" >&2; exit 1; }
->    OLD_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name "/exammaker/dev/Origin/VerifySecret:${PREV_VER}" --with-decryption --query Parameter.Value --output text)"
->    NEW_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name "/exammaker/dev/Origin/VerifySecret:${CUR_VER}" --with-decryption --query Parameter.Value --output text)"
->    [ -n "$OLD_SECRET" ] && [ -n "$NEW_SECRET" ] || { echo "Failed to read secrets" >&2; exit 1; }
->    sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
->    sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<EOF
+>    # Đọc secret đang hoạt động từ file cấu hình Nginx trên đĩa
+>    OLD_SECRET="$(sed -n 's/^[[:space:]]*"\([^"]\{32,\}\)"[[:space:]]*1;.*/\1/p' /etc/exammaker/origin-secret.conf | head -n 1)"
+>    [ -n "$OLD_SECRET" ] || { echo "ERROR: Cannot extract currently active secret from /etc/exammaker/origin-secret.conf" >&2; exit 1; }
+>
+>    # Đọc secret mới nhất vừa sinh từ SSM Parameter Store
+>    NEW_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --with-decryption --query Parameter.Value --output text)"
+>    [ -n "$NEW_SECRET" ] || { echo "ERROR: Cannot read new secret from SSM" >&2; exit 1; }
+>
+>    if [ "$OLD_SECRET" = "$NEW_SECRET" ]; then
+>      echo "INFO: Active secret in Nginx already matches latest SSM secret. No dual-secret reload needed."
+>    else
+>      sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
+>      sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<EOF
 >    map \$http_x_origin_verify \$origin_header_valid {
 >        default 0;
 >        "${OLD_SECRET}" 1;
 >        "${NEW_SECRET}" 1;
 >    }
 >    EOF
+>      sudo nginx -t && sudo systemctl reload nginx
+>      echo "SUCCESS: Nginx is now accepting BOTH old and new secrets without downtime."
+>    fi
 >    unset OLD_SECRET NEW_SECRET
->    sudo nginx -t && sudo systemctl reload nginx
 >    ```
 > 3. **Cập nhật CloudFront (O5) sang secret mới và dọn secret cũ trên EC2:**
 >    - Lấy giá trị mới trên máy OPS (`aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --with-decryption --query Parameter.Value --output text`) và cập nhật custom header `X-Origin-Verify` trên CloudFront Origin, chờ distribution chuyển sang **`Deployed`**.
