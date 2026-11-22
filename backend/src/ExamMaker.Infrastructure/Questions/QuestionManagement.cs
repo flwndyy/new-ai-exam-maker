@@ -140,14 +140,21 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 DELETE FROM question_set_items WHERE question_id = {id}
                 RETURNING question_set_id AS "Value"
                 """).ToListAsync(cancellationToken);
-            foreach (var setId in affectedSets.Distinct())
+            var distinctSets = affectedSets.Distinct().ToArray();
+            var setDepartments = distinctSets.Length == 0
+                ? new Dictionary<Guid, Guid?>()
+                : await database.QuestionSets.AsNoTracking()
+                    .Where(x => distinctSets.Contains(x.Id))
+                    .Select(x => new { x.Id, x.Creator!.DepartmentId })
+                    .ToDictionaryAsync(x => x.Id, x => x.DepartmentId, cancellationToken);
+            foreach (var setId in distinctSets)
                 database.AuditLogs.Add(new AuditLog
                 {
                     Id = Guid.NewGuid(),
                     ActorId = actor.Id,
                     EntityType = "QuestionSet",
                     EntityId = setId,
-                    DepartmentId = question.DepartmentId,
+                    DepartmentId = setDepartments.GetValueOrDefault(setId),
                     Action = "RemoveQuestionFromSet",
                     Note = $"Source question deleted; question={id}; revision={question.Revision}",
                     CreatedAt = DateTime.UtcNow

@@ -179,11 +179,16 @@ public sealed class UserManagementTests : IAsyncLifetime
                 new("head@example.invalid", "Head", "head", Guid.Parse("10000000-0000-0000-0000-000000000002"), true), default);
             Assert.Equal("head", changed.Role);
             Assert.Equal(new[] { "head" }, cognito.Accounts[user.CognitoSub].Groups);
-            var audit = await database.AuditLogs.SingleAsync(x => x.EntityId == user.Id && x.Action == "UpdateUser");
-            Assert.Equal(Guid.Parse("10000000-0000-0000-0000-000000000002"), audit.DepartmentId);
-            Assert.Contains("role teacher->head", audit.Note);
-            Assert.Contains($"department {DepartmentId}->10000000-0000-0000-0000-000000000002", audit.Note);
-            Assert.DoesNotContain("@", audit.Note);
+            var audits = await database.AuditLogs.Where(x => x.EntityId == user.Id && x.Action == "UpdateUser").ToListAsync();
+            Assert.Equal(2, audits.Count);
+            Assert.Contains(audits, x => x.DepartmentId == DepartmentId);
+            Assert.Contains(audits, x => x.DepartmentId == Guid.Parse("10000000-0000-0000-0000-000000000002"));
+            Assert.All(audits, audit =>
+            {
+                Assert.Contains("role teacher->head", audit.Note);
+                Assert.Contains($"department {DepartmentId}->10000000-0000-0000-0000-000000000002", audit.Note);
+                Assert.DoesNotContain("@", audit.Note);
+            });
         }
         cognito.FailNextMutation = () => throw new InvalidOperationException("Synthetic AWS failure after a partial change.");
         await using (var database = fixture.CreateContext())

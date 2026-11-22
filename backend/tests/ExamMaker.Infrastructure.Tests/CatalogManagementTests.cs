@@ -68,7 +68,9 @@ public sealed class CatalogManagementTests : IAsyncLifetime
         await service.DeleteDepartmentAsync(actorId, department.Id, default);
         await using var final = fixture.CreateContext();
         var audits = await final.AuditLogs.Where(x => x.ActorId == actorId).ToListAsync();
-        Assert.Equal(9, audits.Count);
+        Assert.Equal(10, audits.Count);
+        Assert.Contains(audits, x => x.Action == "UpdateSubject" && x.DepartmentId == department.Id);
+        Assert.Contains(audits, x => x.Action == "UpdateSubject" && x.DepartmentId == DepartmentId);
         Assert.Contains(audits, x => x.Action == "DeleteDepartment" && x.Note!.Contains("Renamed Department"));
         Assert.Contains(audits, x => x.Action == "DeleteSubject" && x.Note!.Contains("Renamed Subject") && x.Note.Contains("department="));
         Assert.Contains(audits, x => x.Action == "DeleteTopic" && x.Note!.Contains("Renamed Chapter") && x.Note.Contains("grade=12"));

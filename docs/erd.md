@@ -63,7 +63,7 @@ erDiagram
 
 `audit_logs.actor_id` xác định người thao tác; NULL là hệ thống và note bắt buộc nêu tác vụ.
 `entity_type` và `entity_id` xác định đối tượng bị tác động.
-`department_id` (nullable, không FK) lưu snapshot tổ chuyên môn tại thời điểm ghi; dòng NULL chỉ Admin xem được, và mọi nơi ghi audit mới phải set `DepartmentId` khi thuộc tổ.
+`department_id` (nullable, không FK) lưu snapshot tổ chuyên môn tại thời điểm ghi (chuyển tổ ghi hai dòng cho tổ cũ và tổ mới; lịch sử cũ không resolve được tổ giữ NULL và chỉ Admin xem được; mọi nơi ghi audit mới phải set `DepartmentId` khi thuộc tổ).
 Mỗi lần đổi trạng thái lưu hành động, trạng thái trước,
 trạng thái sau, ghi chú và thời điểm.
 

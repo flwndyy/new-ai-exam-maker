@@ -32,7 +32,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         if (actor.Role == Roles.Head)
         {
             if (actor.DepartmentId is not Guid deptId)
-                throw new AuditException(403, "Forbidden", "Trưởng bộ môn chưa được gán tổ chuyên môn.");
+                throw new AuditException(403, "Forbidden", "Tổ trưởng chưa được gán tổ chuyên môn.");
 
             headDepartmentId = deptId;
         }
@@ -64,7 +64,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
             logs = logs.Where(x => x.CreatedAt >= from);
 
         if (toUtc is DateTime to)
-            logs = logs.Where(x => x.CreatedAt < to);
+            logs = logs.Where(x => x.CreatedAt <= to);
 
         var totalItems = await logs.CountAsync(cancellationToken);
         var totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)query.PageSize);
@@ -110,8 +110,8 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         DateTime? fromUtc = query.From?.UtcDateTime;
         DateTime? toUtc = query.To?.UtcDateTime;
 
-        if (fromUtc is not null && toUtc is not null && fromUtc >= toUtc)
-            throw new AuditException(400, "ValidationFailed", "Thời điểm bắt đầu phải nhỏ hơn thời điểm kết thúc.", "from");
+        if (fromUtc is not null && toUtc is not null && fromUtc > toUtc)
+            throw new AuditException(400, "ValidationFailed", "Thời điểm bắt đầu không được lớn hơn thời điểm kết thúc.", "from");
 
         return (entityType, action, fromUtc, toUtc, (int)rawOffset);
     }

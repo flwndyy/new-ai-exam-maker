@@ -140,12 +140,15 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var reader = new AuditLogReader(db);
 
         var from = new DateTimeOffset(2026, 11, 20, 10, 5, 0, TimeSpan.Zero);
-        var to = new DateTimeOffset(2026, 11, 20, 10, 15, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 11, 20, 10, 12, 0, TimeSpan.Zero);
 
-        // From is inclusive (10:05), To is exclusive (10:15): 10:05, 10:08, 10:10, 10:12.
+        // Both From (10:05) and To (10:12) are inclusive: 10:05, 10:08, 10:10, 10:12.
         var bounded = await reader.ListAsync(headA, new AuditLogQuery(From: from, To: to), CancellationToken.None);
         Assert.Equal(4, bounded.TotalItems);
-        Assert.All(bounded.Items, x => Assert.True(x.CreatedAt >= from.UtcDateTime && x.CreatedAt < to.UtcDateTime));
+        Assert.All(bounded.Items, x => Assert.True(x.CreatedAt >= from.UtcDateTime && x.CreatedAt <= to.UtcDateTime));
+
+        var equalBounds = await reader.ListAsync(headA, new AuditLogQuery(From: from, To: from), CancellationToken.None);
+        Assert.Single(equalBounds.Items);
 
         var filtered = await reader.ListAsync(admin, new AuditLogQuery(EntityType: "Question", EntityId: qA, Action: "ApproveQuestion"), CancellationToken.None);
         Assert.Single(filtered.Items);

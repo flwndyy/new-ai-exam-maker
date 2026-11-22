@@ -23,8 +23,8 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
             EntityId: ParseOptionalGuid(request.EntityId, "entityId", "Mã đối tượng không hợp lệ."),
             ActorId: ParseOptionalGuid(request.ActorId, "actorId", "Mã người thao tác không hợp lệ."),
             Action: request.Action,
-            From: ParseOptionalUtcDateTimeOffset(request.From, "from", "Thời điểm bắt đầu không hợp lệ."),
-            To: ParseOptionalUtcDateTimeOffset(request.To, "to", "Thời điểm kết thúc không hợp lệ."));
+            From: ParseOptionalUtcDateTimeOffset(request.From, "from", "Thời điểm bắt đầu không hợp lệ.", endOfDayIfDateOnly: false),
+            To: ParseOptionalUtcDateTimeOffset(request.To, "to", "Thời điểm kết thúc không hợp lệ.", endOfDayIfDateOnly: true));
 
         return auditLogs.ListAsync(currentUser.User!.Id, query, cancellationToken);
     }
@@ -45,12 +45,15 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
         throw new AuditException(400, "ValidationFailed", message, field);
     }
 
-    private static DateTimeOffset? ParseOptionalUtcDateTimeOffset(string? raw, string field, string message)
+    private static DateTimeOffset? ParseOptionalUtcDateTimeOffset(string? raw, string field, string message, bool endOfDayIfDateOnly)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
+        var trimmed = raw.Trim();
+        if (endOfDayIfDateOnly && DateOnly.TryParseExact(trimmed, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateOnly))
+            return new DateTimeOffset(dateOnly.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc), TimeSpan.Zero);
         // Treat timestamps without an explicit offset as UTC rather than server local time.
         if (DateTimeOffset.TryParse(
-                raw.Trim(),
+                trimmed,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var value))

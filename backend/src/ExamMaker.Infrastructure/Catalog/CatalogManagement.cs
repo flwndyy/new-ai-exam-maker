@@ -69,8 +69,11 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             // ExecuteUpdate supports changes to alternate-key columns without EF tracking key mutations.
             else await database.Subjects.Where(x => x.Id == target).ExecuteUpdateAsync(x => x
                 .SetProperty(s => s.Name, name).SetProperty(s => s.DepartmentId, department), cancellationToken);
-            Audit(actorId, "Subject", target, department, id is null, before is null ? null : $"{before.Name}; department={before.DepartmentId}",
-                $"{name}; department={department}");
+            var beforeNote = before is null ? null : $"{before.Name}; department={before.DepartmentId}";
+            var afterNote = $"{name}; department={department}";
+            if (before is not null && before.DepartmentId != department)
+                Audit(actorId, "Subject", target, before.DepartmentId, false, beforeNote, afterNote);
+            Audit(actorId, "Subject", target, department, id is null, beforeNote, afterNote);
             return new SubjectView(target, name, department);
         }, cancellationToken);
     }
@@ -91,13 +94,20 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var subjectDepartmentId = await database.Subjects.AsNoTracking()
                 .Where(x => x.Id == subject).Select(x => (Guid?)x.DepartmentId).SingleOrDefaultAsync(cancellationToken)
                 ?? throw CatalogInputRules.Invalid();
+            var beforeDepartmentId = before is null || before.SubjectId == subject
+                ? subjectDepartmentId
+                : await database.Subjects.AsNoTracking()
+                    .Where(x => x.Id == before.SubjectId).Select(x => x.DepartmentId).SingleAsync(cancellationToken);
             if (before is not null && (before.SubjectId != subject || before.Grade != grade))
                 await EnsureNoActiveJobsAsync("Topic", target, cancellationToken);
             if (id is null) database.Topics.Add(new Topic { Id = target, Name = name, SubjectId = subject, Grade = grade, SortOrder = order });
             else await database.Topics.Where(x => x.Id == target).ExecuteUpdateAsync(x => x.SetProperty(t => t.Name, name)
                 .SetProperty(t => t.SubjectId, subject).SetProperty(t => t.Grade, grade).SetProperty(t => t.SortOrder, order), cancellationToken);
-            Audit(actorId, "Topic", target, subjectDepartmentId, id is null, before is null ? null : $"{before.Name}; subject={before.SubjectId}; grade={before.Grade}; order={before.SortOrder}",
-                $"{name}; subject={subject}; grade={grade}; order={order}");
+            var beforeNote = before is null ? null : $"{before.Name}; subject={before.SubjectId}; grade={before.Grade}; order={before.SortOrder}";
+            var afterNote = $"{name}; subject={subject}; grade={grade}; order={order}";
+            if (before is not null && beforeDepartmentId != subjectDepartmentId)
+                Audit(actorId, "Topic", target, beforeDepartmentId, false, beforeNote, afterNote);
+            Audit(actorId, "Topic", target, subjectDepartmentId, id is null, beforeNote, afterNote);
             return new TopicView(target, subject, grade, name, order);
         }, cancellationToken);
     }

@@ -82,10 +82,10 @@ public sealed class AuditLogsHttpTests
         using var client = app.CreateClient();
         client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
 
-        using var okResponse = await client.GetAsync("/api/v1/audit-logs?from=2026-11-20&to=2026-11-21");
+        using var okResponse = await client.GetAsync("/api/v1/audit-logs?from=2026-11-20&to=2026-11-20");
         Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         Assert.Equal(new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.From);
-        Assert.Equal(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.To);
+        Assert.Equal(new DateTimeOffset(new DateOnly(2026, 11, 20).ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc), TimeSpan.Zero), app.Reader.LastQuery?.To);
 
         using var badPage = await client.GetAsync("/api/v1/audit-logs?page=abc");
         Assert.Equal(HttpStatusCode.BadRequest, badPage.StatusCode);
