@@ -47,7 +47,7 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
                 ?? throw Missing();
             if (id is null) database.Departments.Add(new Department { Id = target, Name = name });
             else await database.Departments.Where(x => x.Id == target).ExecuteUpdateAsync(x => x.SetProperty(d => d.Name, name), cancellationToken);
-            Audit(actorId, "Department", target, id is null, before?.Name, name);
+            Audit(actorId, "Department", target, target, id is null, before?.Name, name);
             return new DepartmentView(target, name);
         }, cancellationToken);
     }
@@ -69,8 +69,28 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             // ExecuteUpdate supports changes to alternate-key columns without EF tracking key mutations.
             else await database.Subjects.Where(x => x.Id == target).ExecuteUpdateAsync(x => x
                 .SetProperty(s => s.Name, name).SetProperty(s => s.DepartmentId, department), cancellationToken);
-            Audit(actorId, "Subject", target, id is null, before is null ? null : $"{before.Name}; department={before.DepartmentId}",
-                $"{name}; department={department}");
+            var beforeNote = before is null ? null : $"{before.Name}; {AuditLog.FormatCatalogDepartment(before.DepartmentId)}";
+            var afterNote = $"{name}; {AuditLog.FormatCatalogDepartment(department)}";
+            if (before is not null && before.DepartmentId != department)
+            {
+                Audit(actorId, "Subject", target, before.DepartmentId, false, beforeNote, afterNote);
+                Audit(actorId, "Subject", target, department, false, beforeNote, afterNote, secondaryMove: true);
+                var childTopics = await database.Topics.AsNoTracking()
+                    .Where(t => t.SubjectId == target)
+                    .OrderBy(t => t.Grade).ThenBy(t => t.SortOrder).ThenBy(t => t.Id)
+                    .ToListAsync(cancellationToken);
+                foreach (var topic in childTopics)
+                {
+                    var topicBefore = $"{topic.Name}; {AuditLog.FormatCatalogSubject(target)}; grade={topic.Grade}; order={topic.SortOrder}; {AuditLog.FormatCatalogDepartment(before.DepartmentId)}";
+                    var topicAfter = $"{topic.Name}; {AuditLog.FormatCatalogSubject(target)}; grade={topic.Grade}; order={topic.SortOrder}; {AuditLog.FormatCatalogDepartment(department)}";
+                    Audit(actorId, "Topic", topic.Id, before.DepartmentId, false, topicBefore, topicAfter);
+                    Audit(actorId, "Topic", topic.Id, department, false, topicBefore, topicAfter, secondaryMove: true);
+                }
+            }
+            else
+            {
+                Audit(actorId, "Subject", target, department, id is null, beforeNote, afterNote);
+            }
             return new SubjectView(target, name, department);
         }, cancellationToken);
     }
@@ -88,14 +108,29 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var target = id ?? Guid.NewGuid();
             var before = id is null ? null : await database.Topics.AsNoTracking().SingleOrDefaultAsync(x => x.Id == target, cancellationToken)
                 ?? throw Missing();
-            if (!await database.Subjects.AnyAsync(x => x.Id == subject, cancellationToken)) throw CatalogInputRules.Invalid();
+            var subjectDepartmentId = await database.Subjects.AsNoTracking()
+                .Where(x => x.Id == subject).Select(x => (Guid?)x.DepartmentId).SingleOrDefaultAsync(cancellationToken)
+                ?? throw CatalogInputRules.Invalid();
+            var beforeDepartmentId = before is null || before.SubjectId == subject
+                ? subjectDepartmentId
+                : await database.Subjects.AsNoTracking()
+                    .Where(x => x.Id == before.SubjectId).Select(x => x.DepartmentId).SingleAsync(cancellationToken);
             if (before is not null && (before.SubjectId != subject || before.Grade != grade))
                 await EnsureNoActiveJobsAsync("Topic", target, cancellationToken);
             if (id is null) database.Topics.Add(new Topic { Id = target, Name = name, SubjectId = subject, Grade = grade, SortOrder = order });
             else await database.Topics.Where(x => x.Id == target).ExecuteUpdateAsync(x => x.SetProperty(t => t.Name, name)
                 .SetProperty(t => t.SubjectId, subject).SetProperty(t => t.Grade, grade).SetProperty(t => t.SortOrder, order), cancellationToken);
-            Audit(actorId, "Topic", target, id is null, before is null ? null : $"{before.Name}; subject={before.SubjectId}; grade={before.Grade}; order={before.SortOrder}",
-                $"{name}; subject={subject}; grade={grade}; order={order}");
+            var beforeNote = before is null ? null : $"{before.Name}; {AuditLog.FormatCatalogSubject(before.SubjectId)}; grade={before.Grade}; order={before.SortOrder}; {AuditLog.FormatCatalogDepartment(beforeDepartmentId)}";
+            var afterNote = $"{name}; {AuditLog.FormatCatalogSubject(subject)}; grade={grade}; order={order}; {AuditLog.FormatCatalogDepartment(subjectDepartmentId)}";
+            if (before is not null && beforeDepartmentId != subjectDepartmentId)
+            {
+                Audit(actorId, "Topic", target, beforeDepartmentId, false, beforeNote, afterNote);
+                Audit(actorId, "Topic", target, subjectDepartmentId, false, beforeNote, afterNote, secondaryMove: true);
+            }
+            else
+            {
+                Audit(actorId, "Topic", target, subjectDepartmentId, id is null, beforeNote, afterNote);
+            }
             return new TopicView(target, subject, grade, name, order);
         }, cancellationToken);
     }
@@ -116,26 +151,25 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
     private Task DeleteAsync<T>(Guid actorId, Guid id, IQueryable<T> source, string entityType, CancellationToken cancellationToken) where T : class =>
         WriteAsync(actorId, async () =>
         {
-            var before = entityType switch
+            var target = entityType switch
             {
-                "Department" => await database.Departments.AsNoTracking().Where(x => x.Id == id).Select(x => x.Name).SingleOrDefaultAsync(cancellationToken),
+                "Department" => await database.Departments.AsNoTracking().Where(x => x.Id == id)
+                    .Select(x => new { Note = x.Name, DepartmentId = (Guid?)x.Id }).SingleOrDefaultAsync(cancellationToken),
                 "Subject" => await database.Subjects.AsNoTracking().Where(x => x.Id == id)
-                    .Select(x => x.Name + "; department=" + x.DepartmentId).SingleOrDefaultAsync(cancellationToken),
+                    .Select(x => new { Note = x.Name + "; department=" + x.DepartmentId, DepartmentId = (Guid?)x.DepartmentId }).SingleOrDefaultAsync(cancellationToken),
                 _ => await database.Topics.AsNoTracking().Where(x => x.Id == id)
-                    .Select(x => x.Name + "; subject=" + x.SubjectId + "; grade=" + x.Grade + "; order=" + x.SortOrder).SingleOrDefaultAsync(cancellationToken)
+                    .Select(x => new { Note = x.Name + "; subject=" + x.SubjectId + "; grade=" + x.Grade + "; order=" + x.SortOrder, DepartmentId = (Guid?)x.Subject!.DepartmentId }).SingleOrDefaultAsync(cancellationToken)
             };
-            if (before is null) throw Missing();
+            if (target is null) throw Missing();
             await EnsureNoActiveJobsAsync(entityType, id, cancellationToken);
             if (await source.ExecuteDeleteAsync(cancellationToken) == 0) throw Missing();
-            database.AuditLogs.Add(new AuditLog
-            {
-                Id = Guid.NewGuid(),
-                ActorId = actorId,
-                EntityType = entityType,
-                EntityId = id,
-                Action = "Delete" + entityType,
-                Note = $"Deleted: {before}"
-            });
+            database.AuditLogs.Add(AuditLog.Create(
+                actorId,
+                entityType,
+                id,
+                target.DepartmentId,
+                "Delete" + entityType,
+                note: $"Deleted: {target.Note}"));
             return true;
         }, cancellationToken);
 
@@ -184,16 +218,15 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
     }
 
     /// <summary>Record before/after catalog metadata without leaving successful audits for rolled-back changes.</summary>
-    private void Audit(Guid actorId, string entityType, Guid id, bool created, string? before, string after) =>
-        database.AuditLogs.Add(new AuditLog
-        {
-            Id = Guid.NewGuid(),
-            ActorId = actorId,
-            EntityType = entityType,
-            EntityId = id,
-            Action = (created ? "Create" : "Update") + entityType,
-            Note = $"Before: {before ?? "(new)"}; after: {after}"
-        });
+    private void Audit(Guid actorId, string entityType, Guid id, Guid departmentId, bool created, string? before, string after, bool secondaryMove = false) =>
+        database.AuditLogs.Add(AuditLog.Create(
+            actorId,
+            entityType,
+            id,
+            departmentId,
+            (created ? "Create" : "Update") + entityType,
+            note: $"Before: {before ?? "(new)"}; after: {after}",
+            isSecondary: secondaryMove));
 
     /// <summary>Return a safe not-found response for missing update and delete targets.</summary>
     private static CatalogException Missing() => new(404, "NotFound", "Không tìm thấy danh mục.");

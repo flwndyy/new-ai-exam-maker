@@ -1015,7 +1015,8 @@ paths:
       tags: [Audit]
       operationId: listAuditLogs
       summary: Nhật ký audit
-      description: "Head: giới hạn trong tổ của mình. Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần."
+      description: |
+        Head: giới hạn trong tổ của mình theo snapshot `departmentId` tại thời điểm sự kiện (lịch sử cũ trước migration của `User`, `Subject`, `Topic`, `QuestionSet`, `AiJob` và thực thể đã xóa trước migration có `departmentId = null` nên chỉ Admin xem được; `actor.fullName` luôn giữ tên người thực hiện sự kiện dù sau đó người đó chuyển tổ). Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -1033,12 +1034,18 @@ paths:
           schema: { type: string }
         - name: from
           in: query
-          description: Từ thời điểm (UTC, gồm).
-          schema: { type: string, format: date-time }
+          description: Từ thời điểm (UTC, gồm `>=`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính từ `00:00:00Z`).
+          schema:
+            oneOf:
+              - { type: string, format: date-time }
+              - { type: string, format: date }
         - name: to
           in: query
-          description: Đến thời điểm (UTC, không gồm).
-          schema: { type: string, format: date-time }
+          description: Đến thời điểm (UTC, gồm `<=`, cho phép `from == to`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính đến `23:59:59.9999999Z`).
+          schema:
+            oneOf:
+              - { type: string, format: date-time }
+              - { type: string, format: date }
       responses:
         '200':
           description: OK

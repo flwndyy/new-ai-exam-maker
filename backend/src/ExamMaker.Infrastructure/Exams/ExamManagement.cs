@@ -61,8 +61,8 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
             };
             var version = NewVersion(exam.Id, 1, 45, now);
             database.Exams.Add(exam); database.ExamVersions.Add(version);
-            Audit(actor.Id, "Exam", exam.Id, "CreateExam", null, null);
-            Audit(actor.Id, "ExamVersion", version.Id, "CreateExamVersion", null, "Draft");
+            Audit(actor.Id, "Exam", exam.Id, exam.DepartmentId, "CreateExam", null, null);
+            Audit(actor.Id, "ExamVersion", version.Id, exam.DepartmentId, "CreateExamVersion", null, "Draft");
             await database.SaveChangesAsync(cancellationToken);
             return await DetailAsync(actor, exam.Id, cancellationToken);
         }, cancellationToken);
@@ -76,7 +76,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
             if (exam.Title != title)
             {
                 exam.Title = title; Touch(exam);
-                Audit(actor.Id, "Exam", id, "UpdateExam", null, null);
+                Audit(actor.Id, "Exam", id, exam.DepartmentId, "UpdateExam", null, null);
                 await database.SaveChangesAsync(cancellationToken);
             }
             return await DetailAsync(actor, id, cancellationToken);
@@ -119,7 +119,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
                 version.Questions.Add(Link(version.Id, version.Questions.Count + 1, item.Points, question));
             }
             version.TotalPoints = Sum(version.Questions); database.ExamVersions.Add(version); Touch(exam);
-            Audit(actor.Id, "ExamVersion", version.Id, "CreateExamVersion", null, "Draft", $"fromVersion={source.Id}; omitted={warnings.Count}");
+            Audit(actor.Id, "ExamVersion", version.Id, exam.DepartmentId, "CreateExamVersion", null, "Draft", $"fromVersion={source.Id}; omitted={warnings.Count}");
             await database.SaveChangesAsync(cancellationToken);
             return await VersionViewAsync(actor, version.Id, warnings, cancellationToken);
         }, cancellationToken);
@@ -139,7 +139,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
                 database.ExamVersionQuestions.Add(Link(id, index + 1, item.Points, sources[item.SourceQuestionId]));
             version.DurationMinutes = input.DurationMinutes; version.TotalPoints = total; version.ContentHash = null;
             version.UpdatedAt = ExamRules.NextTimestamp(version.UpdatedAt, DateTime.UtcNow); Touch(exam);
-            Audit(actor.Id, "ExamVersion", id, "UpdateExamVersion", version.Status, version.Status);
+            Audit(actor.Id, "ExamVersion", id, exam.DepartmentId, "UpdateExamVersion", version.Status, version.Status);
             await database.SaveChangesAsync(cancellationToken);
             return await VersionViewAsync(actor, id, [], cancellationToken);
         }, cancellationToken);
@@ -170,7 +170,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
                     .SetProperty(i => i.ExplanationSnapshot, (string?)null), cancellationToken);
             }
             Touch(exam);
-            Audit(actor.Id, "ExamVersion", id, action + "ExamVersion", before, version.Status,
+            Audit(actor.Id, "ExamVersion", id, exam.DepartmentId, action + "ExamVersion", before, version.Status,
                 action is ExamAction.Approve or ExamAction.Reject ? version.ReviewNote : null);
             await database.SaveChangesAsync(cancellationToken);
             return await VersionViewAsync(actor, id, [], cancellationToken);
@@ -356,7 +356,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
         if (page < 1 || size is < 1 or > 100 || (long)(page - 1) * size > int.MaxValue) throw ExamRules.Invalid("query");
     }
     /// <summary>Record mutation history inside the transaction; no emails or question content enter audit notes.</summary>
-    private void Audit(Guid actor, string entity, Guid id, string action, string? from, string? to, string? note = null) => database.AuditLogs.Add(new AuditLog
-    { Id = Guid.NewGuid(), ActorId = actor, EntityType = entity, EntityId = id, Action = action, FromStatus = from, ToStatus = to, Note = note, CreatedAt = DateTime.UtcNow });
+    private void Audit(Guid actor, string entity, Guid id, Guid departmentId, string action, string? from, string? to, string? note = null) =>
+        database.AuditLogs.Add(AuditLog.Create(actor, entity, id, departmentId, action, from, to, note));
     private static ExamException Conflict(string message) => new(409, "Conflict", message);
 }
