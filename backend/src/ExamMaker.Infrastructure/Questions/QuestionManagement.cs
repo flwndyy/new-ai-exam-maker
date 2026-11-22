@@ -141,16 +141,13 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
                 RETURNING question_set_id AS "Value"
                 """).ToListAsync(cancellationToken);
             foreach (var setId in affectedSets.Distinct())
-                database.AuditLogs.Add(new AuditLog
-                {
-                    Id = Guid.NewGuid(),
-                    ActorId = actor.Id,
-                    EntityType = "QuestionSet",
-                    EntityId = setId,
-                    Action = "RemoveQuestionFromSet",
-                    Note = $"Source question deleted; question={id}; revision={question.Revision}",
-                    CreatedAt = DateTime.UtcNow
-                });
+                database.AuditLogs.Add(AuditLog.Create(
+                    actor.Id,
+                    "QuestionSet",
+                    setId,
+                    question.DepartmentId,
+                    "RemoveQuestionFromSet",
+                    note: $"Source question deleted; question={id}; revision={question.Revision}"));
             Audit(actor.Id, question, "DeleteQuestion", question.Status,
                 $"revision={question.Revision}; subject={question.SubjectId}; topic={question.TopicId}; removedCollectionLinks={affectedSets.Count}");
             // Execute the restricted delete in PostgreSQL; tracked collection links must not trigger client-side cascades.
@@ -270,18 +267,16 @@ public sealed class QuestionManagement(ExamMakerDbContext database, ILogger<Ques
         q.ReviewedBy is Guid reviewer ? new(reviewer, q.Reviewer!.FullName) : null, q.ReviewedAt, q.ReviewNote, q.CreatedAt, q.UpdatedAt);
 
     /// <summary>Persist workflow history in the same transaction, including deletes without a polymorphic foreign key.</summary>
-    private void Audit(Guid actorId, Question question, string action, string? from, string? note) => database.AuditLogs.Add(new AuditLog
-    {
-        Id = Guid.NewGuid(),
-        ActorId = actorId,
-        EntityType = "Question",
-        EntityId = question.Id,
-        Action = action,
-        FromStatus = from,
-        ToStatus = action == "DeleteQuestion" ? null : question.Status,
-        Note = note,
-        CreatedAt = DateTime.UtcNow
-    });
+    private void Audit(Guid actorId, Question question, string action, string? from, string? note) =>
+        database.AuditLogs.Add(AuditLog.Create(
+            actorId,
+            "Question",
+            question.Id,
+            question.DepartmentId,
+            action,
+            from,
+            action == "DeleteQuestion" ? null : question.Status,
+            note));
 
     private static QuestionException Missing() => new(404, "NotFound", "Không tìm thấy câu hỏi.");
     private static QuestionException Referenced() => new(409, "QuestionReferenced", "Câu hỏi đang được đề tham chiếu.");
