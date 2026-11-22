@@ -55,8 +55,8 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         return await action(new ExamManagement(db, NullLogger<ExamManagement>.Instance));
     }
 
-    [PostgresFact]
     /// <summary>Exercise the full Question state machine (Draft -> Submitted -> Rejected -> Approved -> Archived) and permission denials against PostgreSQL.</summary>
+    [PostgresFact]
     public async Task Question_full_lifecycle_transitions_and_permission_denials_persist_on_postgres()
     {
         await SeedUsersAsync();
@@ -65,16 +65,29 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         var adminCreate = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.CreateAsync(
             admin, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Blocked", ValidPayload), CancellationToken.None)));
         Assert.Equal(403, adminCreate.StatusCode);
+        Assert.Equal("Forbidden", adminCreate.Code);
 
         // Create Draft.
         var created = await RunQuestionAsync(q => q.CreateAsync(
             teacherA, new(SubjectA, TopicA, 10, "MultipleChoice", "Recognition", "Initial stem", ValidPayload), CancellationToken.None));
         Assert.Equal("Draft", created.Status);
 
-        // Invalid transition from Draft: Approve/Withdraw/Archive must fail.
-        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(headA, created.Id, QuestionAction.Approve, null, CancellationToken.None)));
-        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None)));
-        await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Archive, null, CancellationToken.None)));
+        // Invalid transitions from Draft: use an actor who can see the Draft (Admin for Approve, owner for Withdraw/Archive)
+        // so the state machine returns 409 InvalidStateTransition rather than 404 NotFound.
+        var draftApprove = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(admin, created.Id, QuestionAction.Approve, null, CancellationToken.None, DateTimeOffset.UtcNow)));
+        Assert.Equal(409, draftApprove.StatusCode);
+        Assert.Equal("InvalidStateTransition", draftApprove.Code);
+
+        var draftWithdraw = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(teacherA, created.Id, QuestionAction.Withdraw, null, CancellationToken.None)));
+        Assert.Equal(409, draftWithdraw.StatusCode);
+        Assert.Equal("InvalidStateTransition", draftWithdraw.Code);
+
+        var draftArchive = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
+            q.TransitionAsync(teacherA, created.Id, QuestionAction.Archive, null, CancellationToken.None)));
+        Assert.Equal(409, draftArchive.StatusCode);
+        Assert.Equal("InvalidStateTransition", draftArchive.Code);
 
         // Submit -> Withdraw -> Submit.
         var submitted = await RunQuestionAsync(q => q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None));
@@ -118,15 +131,34 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         var afterArchive = await Assert.ThrowsAsync<QuestionException>(() => RunQuestionAsync(q =>
             q.TransitionAsync(teacherA, created.Id, QuestionAction.Submit, null, CancellationToken.None)));
         Assert.Equal(409, afterArchive.StatusCode);
+        Assert.Equal("InvalidStateTransition", afterArchive.Code);
 
-        // Every successful transition left an audit trail.
+        // Creation, content edits, and every workflow transition are recorded in exact chronological order.
         await using var verifyDb = fixture.CreateContext();
-        var auditCount = await verifyDb.AuditLogs.CountAsync(x => x.EntityType == "Question" && x.EntityId == created.Id);
-        Assert.Equal(11, auditCount);
+        var auditActions = await verifyDb.AuditLogs
+            .Where(x => x.EntityType == "Question" && x.EntityId == created.Id)
+            .OrderBy(x => x.CreatedAt).ThenBy(x => x.Id)
+            .Select(x => x.Action)
+            .ToListAsync();
+        Assert.Equal(
+            [
+                "CreateQuestion",
+                "SubmitQuestion",
+                "WithdrawQuestion",
+                "SubmitQuestion",
+                "RejectQuestion",
+                "SubmitQuestion",
+                "ApproveQuestion",
+                "UpdateQuestion",
+                "SubmitQuestion",
+                "ApproveQuestion",
+                "ArchiveQuestion"
+            ],
+            auditActions);
     }
 
-    [PostgresFact]
     /// <summary>Exercise the full ExamVersion state machine (Draft -> Submitted -> Rejected -> Approved -> Published -> Approved -> Archived) against PostgreSQL.</summary>
+    [PostgresFact]
     public async Task ExamVersion_full_lifecycle_transitions_and_permission_denials_persist_on_postgres()
     {
         await SeedUsersAsync();
@@ -146,6 +178,27 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         var v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Submit, null, CancellationToken.None));
         Assert.Equal("Submitted", v1.Status);
 
+        // Author cannot self-review, and out-of-department head cannot access private Submitted versions (404 NotFound).
+        var authorSelfReview = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(teacherA, v1Id, ExamAction.Approve, new(new DateTimeOffset(v1.SubmittedAt!.Value), null), CancellationToken.None)));
+        Assert.Equal(403, authorSelfReview.StatusCode);
+        Assert.Equal("Forbidden", authorSelfReview.Code);
+
+        var otherHeadReview = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(headB, v1Id, ExamAction.Approve, new(new DateTimeOffset(v1.SubmittedAt!.Value), null), CancellationToken.None)));
+        Assert.Equal(404, otherHeadReview.StatusCode);
+        Assert.Equal("NotFound", otherHeadReview.Code);
+
+        // Head author also receives 403 SelfReview when attempting to approve their own exam version.
+        var headExam = await RunExamAsync(e => e.CreateAsync(headA, new("Head Midterm", SubjectA, 10), CancellationToken.None));
+        var headV1Id = headExam.Versions[0].Id;
+        await RunExamAsync(e => e.UpdateVersionAsync(headA, headV1Id, new(45, [new(q.Id, 1.0m)]), CancellationToken.None));
+        var headV1 = await RunExamAsync(e => e.TransitionAsync(headA, headV1Id, ExamAction.Submit, null, CancellationToken.None));
+        var headSelfReview = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(headA, headV1Id, ExamAction.Approve, new(new DateTimeOffset(headV1.SubmittedAt!.Value), null), CancellationToken.None)));
+        Assert.Equal(403, headSelfReview.StatusCode);
+        Assert.Equal("SelfReview", headSelfReview.Code);
+
         v1 = await RunExamAsync(e => e.TransitionAsync(teacherA, v1Id, ExamAction.Withdraw, null, CancellationToken.None));
         Assert.Equal("Draft", v1.Status);
 
@@ -157,13 +210,29 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Approve, new(new DateTimeOffset(v1.SubmittedAt!.Value), null), CancellationToken.None));
         Assert.Equal("Approved", v1.Status);
 
-        // Only Admin may Publish/Unpublish; Teacher and Head receive 403.
+        // Only Admin may Publish/Unpublish; Teacher and Head receive 403 Forbidden.
+        var teacherPublish = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(teacherA, v1Id, ExamAction.Publish, null, CancellationToken.None)));
+        Assert.Equal(403, teacherPublish.StatusCode);
+        Assert.Equal("Forbidden", teacherPublish.Code);
+
         var headPublish = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
             e.TransitionAsync(headA, v1Id, ExamAction.Publish, null, CancellationToken.None)));
         Assert.Equal(403, headPublish.StatusCode);
+        Assert.Equal("Forbidden", headPublish.Code);
 
         v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None));
         Assert.Equal("Published", v1.Status);
+
+        var teacherUnpublish = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(teacherA, v1Id, ExamAction.Unpublish, null, CancellationToken.None)));
+        Assert.Equal(403, teacherUnpublish.StatusCode);
+        Assert.Equal("Forbidden", teacherUnpublish.Code);
+
+        var headUnpublish = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
+            e.TransitionAsync(headA, v1Id, ExamAction.Unpublish, null, CancellationToken.None)));
+        Assert.Equal(403, headUnpublish.StatusCode);
+        Assert.Equal("Forbidden", headUnpublish.Code);
 
         // Unpublish returns to Approved (there is no Unpublished state), then Archive.
         v1 = await RunExamAsync(e => e.TransitionAsync(admin, v1Id, ExamAction.Unpublish, null, CancellationToken.None));
@@ -176,5 +245,29 @@ public sealed class A9WorkflowIntegrationTests : IAsyncLifetime
         var afterArchive = await Assert.ThrowsAsync<ExamException>(() => RunExamAsync(e =>
             e.TransitionAsync(admin, v1Id, ExamAction.Publish, null, CancellationToken.None)));
         Assert.Equal(409, afterArchive.StatusCode);
+        Assert.Equal("InvalidStateTransition", afterArchive.Code);
+
+        // Verify the complete ExamVersion audit trail in chronological order.
+        await using var verifyDb = fixture.CreateContext();
+        var versionAuditActions = await verifyDb.AuditLogs
+            .Where(x => x.EntityType == "ExamVersion" && x.EntityId == v1Id)
+            .OrderBy(x => x.CreatedAt).ThenBy(x => x.Id)
+            .Select(x => x.Action)
+            .ToListAsync();
+        Assert.Equal(
+            [
+                "CreateExamVersion",
+                "UpdateExamVersion",
+                "SubmitExamVersion",
+                "WithdrawExamVersion",
+                "SubmitExamVersion",
+                "RejectExamVersion",
+                "SubmitExamVersion",
+                "ApproveExamVersion",
+                "PublishExamVersion",
+                "UnpublishExamVersion",
+                "ArchiveExamVersion"
+            ],
+            versionAuditActions);
     }
 }

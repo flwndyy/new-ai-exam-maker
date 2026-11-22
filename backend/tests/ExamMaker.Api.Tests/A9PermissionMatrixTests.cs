@@ -20,10 +20,13 @@ public sealed class A9PermissionMatrixTests
     public enum ActorKind
     {
         TeacherOwner,
+        InactiveTeacherOwner,
         TeacherPeerSameDept,
         TeacherOtherDept,
         HeadOwner,
+        InactiveHeadOwner,
         HeadPeerSameDept,
+        InactiveHeadPeerSameDept,
         HeadOtherDept,
         Admin,
         InactiveAdmin
@@ -32,10 +35,13 @@ public sealed class A9PermissionMatrixTests
     private static AuthenticatedUser Actor(ActorKind kind) => kind switch
     {
         ActorKind.TeacherOwner => new(OwnerId, "sub-1", "t1@example.invalid", "Teacher Owner", Roles.Teacher, DeptA, null, true),
+        ActorKind.InactiveTeacherOwner => new(OwnerId, "sub-1b", "t1b@example.invalid", "Inactive Teacher Owner", Roles.Teacher, DeptA, null, false),
         ActorKind.TeacherPeerSameDept => new(Guid.NewGuid(), "sub-2", "t2@example.invalid", "Teacher Peer", Roles.Teacher, DeptA, null, true),
         ActorKind.TeacherOtherDept => new(Guid.NewGuid(), "sub-3", "t3@example.invalid", "Teacher Other", Roles.Teacher, DeptB, null, true),
         ActorKind.HeadOwner => new(OwnerId, "sub-4", "h1@example.invalid", "Head Owner", Roles.Head, DeptA, null, true),
+        ActorKind.InactiveHeadOwner => new(OwnerId, "sub-4b", "h1b@example.invalid", "Inactive Head Owner", Roles.Head, DeptA, null, false),
         ActorKind.HeadPeerSameDept => new(Guid.NewGuid(), "sub-5", "h2@example.invalid", "Head Peer", Roles.Head, DeptA, null, true),
+        ActorKind.InactiveHeadPeerSameDept => new(Guid.NewGuid(), "sub-5b", "h2b@example.invalid", "Inactive Head Peer", Roles.Head, DeptA, null, false),
         ActorKind.HeadOtherDept => new(Guid.NewGuid(), "sub-6", "h3@example.invalid", "Head Other", Roles.Head, DeptB, null, true),
         ActorKind.Admin => new(Guid.NewGuid(), "sub-7", "a1@example.invalid", "Admin", Roles.Admin, null, null, true),
         ActorKind.InactiveAdmin => new(Guid.NewGuid(), "sub-8", "a2@example.invalid", "Inactive", Roles.Admin, null, null, false),
@@ -86,9 +92,9 @@ public sealed class A9PermissionMatrixTests
             }
     }
 
+    /// <summary>Verify QuestionRules.CanRead matches section 3.2 for every actor role and question status.</summary>
     [Theory]
     [MemberData(nameof(QuestionVisibilityCases))]
-    /// <summary>Verify QuestionRules.CanRead matches section 3.2 for every actor role and question status.</summary>
     public void Question_visibility_matrix_matches_spec(ActorKind kind, string status, bool expected)
     {
         Assert.Equal(expected, QuestionRules.CanRead(Actor(kind), NewQuestion(status)));
@@ -99,6 +105,14 @@ public sealed class A9PermissionMatrixTests
         foreach (var kind in Enum.GetValues<ActorKind>())
             foreach (var action in Enum.GetValues<QuestionAction>())
             {
+                var initialStatuses = action switch
+                {
+                    QuestionAction.Submit or QuestionAction.MarkReviewed => new[] { "Draft", "Rejected" },
+                    QuestionAction.Withdraw or QuestionAction.Approve or QuestionAction.Reject => new[] { "Submitted" },
+                    QuestionAction.Archive => new[] { "Approved" },
+                    _ => new[] { "Draft" }
+                };
+
                 var expectedError = action switch
                 {
                     QuestionAction.Submit or QuestionAction.Withdraw or QuestionAction.MarkReviewed =>
@@ -115,23 +129,17 @@ public sealed class A9PermissionMatrixTests
                             : "Forbidden",
                     _ => "Forbidden"
                 };
-                yield return [kind, action, expectedError!];
+
+                foreach (var initialStatus in initialStatuses)
+                    yield return [kind, action, initialStatus, expectedError!];
             }
     }
 
+    /// <summary>Verify QuestionRules.Transition enforces the role, department, ownership, and self-review matrix across valid source states.</summary>
     [Theory]
     [MemberData(nameof(QuestionTransitionAuthorityCases))]
-    /// <summary>Verify QuestionRules.Transition enforces the role, department, ownership, and self-review matrix.</summary>
-    public void Question_transition_permission_matrix_matches_spec(ActorKind kind, QuestionAction action, string? expectedError)
+    public void Question_transition_permission_matrix_matches_spec(ActorKind kind, QuestionAction action, string initialStatus, string? expectedError)
     {
-        var initialStatus = action switch
-        {
-            QuestionAction.Submit => "Draft",
-            QuestionAction.Withdraw or QuestionAction.Approve or QuestionAction.Reject => "Submitted",
-            QuestionAction.Archive => "Approved",
-            QuestionAction.MarkReviewed => "Draft",
-            _ => "Draft"
-        };
         var question = NewQuestion(initialStatus);
         if (action == QuestionAction.MarkReviewed)
         {
@@ -171,9 +179,9 @@ public sealed class A9PermissionMatrixTests
             }
     }
 
+    /// <summary>Verify ExamRules.CanRead and CanReadAnswers match section 3.2, keeping answers hidden from peer teachers.</summary>
     [Theory]
     [MemberData(nameof(ExamVisibilityCases))]
-    /// <summary>Verify ExamRules.CanRead and CanReadAnswers match section 3.2, keeping answers hidden from peer teachers.</summary>
     public void Exam_visibility_and_answer_matrix_matches_spec(ActorKind kind, string status, bool expectedRead, bool expectedAnswers)
     {
         var actor = Actor(kind);
@@ -184,9 +192,19 @@ public sealed class A9PermissionMatrixTests
 
     public static IEnumerable<object[]> ExamTransitionAuthorityCases()
     {
-        foreach (var kind in Enum.GetValues<ActorKind>().Where(k => k != ActorKind.InactiveAdmin))
+        foreach (var kind in Enum.GetValues<ActorKind>())
             foreach (var action in Enum.GetValues<ExamAction>())
             {
+                var sourceStatuses = action switch
+                {
+                    ExamAction.Submit => new[] { "Draft", "Rejected" },
+                    ExamAction.Withdraw or ExamAction.Approve or ExamAction.Reject => new[] { "Submitted" },
+                    ExamAction.Archive => new[] { "Approved", "Rejected" },
+                    ExamAction.Publish => new[] { "Approved" },
+                    ExamAction.Unpublish => new[] { "Published" },
+                    _ => new[] { "Draft" }
+                };
+
                 var expectedError = action switch
                 {
                     ExamAction.Submit or ExamAction.Withdraw =>
@@ -205,25 +223,18 @@ public sealed class A9PermissionMatrixTests
                         kind == ActorKind.Admin ? null : "Forbidden",
                     _ => "Forbidden"
                 };
-                yield return [kind, action, expectedError!];
+
+                foreach (var sourceStatus in sourceStatuses)
+                    yield return [kind, action, sourceStatus, expectedError!];
             }
     }
 
+    /// <summary>Verify ExamRules.RequireAction enforces role, ownership, department, activation, and self-review rules across all valid source states.</summary>
     [Theory]
     [MemberData(nameof(ExamTransitionAuthorityCases))]
-    /// <summary>Verify ExamRules.RequireAction enforces role, ownership, department, and self-review rules across all exam actions.</summary>
-    public void Exam_transition_permission_matrix_matches_spec(ActorKind kind, ExamAction action, string? expectedError)
+    public void Exam_transition_permission_matrix_matches_spec(ActorKind kind, ExamAction action, string sourceStatus, string? expectedError)
     {
-        var status = action switch
-        {
-            ExamAction.Submit => "Draft",
-            ExamAction.Withdraw or ExamAction.Approve or ExamAction.Reject => "Submitted",
-            ExamAction.Archive => "Approved",
-            ExamAction.Publish => "Approved",
-            ExamAction.Unpublish => "Published",
-            _ => "Draft"
-        };
-        var version = new ExamVersion { Status = status, SubmittedAt = DateTime.UnixEpoch, UpdatedAt = DateTime.UnixEpoch };
+        var version = new ExamVersion { Status = sourceStatus, SubmittedAt = DateTime.UnixEpoch, UpdatedAt = DateTime.UnixEpoch };
 
         if (expectedError is null)
         {
