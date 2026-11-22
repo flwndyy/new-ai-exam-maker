@@ -343,6 +343,11 @@ else
   fail "Security: sensitive parameter(s) stored as non-SecureString: ${PLAINTEXT_SECRETS}"
 fi
 
+# Advisory check for pre-existing O10 Rds/MasterPassword under app prefix
+if param_exists "Rds/MasterPassword"; then
+  warn "Security/Least-privilege advisory: '${SSM_PREFIX}/Rds/MasterPassword' exists under app prefix '${SSM_PREFIX}/' (loaded into IConfiguration via AddSystemsManager); migrate to '/exammaker-ops/${ENV_NAME}/Rds/MasterPassword' or delete after storing in OPS password manager"
+fi
+
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
   echo "ALL CHECKS PASSED (${PASSED}/${PASSED})."

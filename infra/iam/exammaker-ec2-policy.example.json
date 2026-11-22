@@ -23,12 +23,29 @@
         "${BEDROCK_HAIKU_MODEL_ARN}",
         "${BEDROCK_SONNET_MODEL_ARN}",
         "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
-        "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}",
+        "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}"
+      ]
+    },
+    {
+      "Sid": "BedrockCrossRegionFoundationModelViaApprovedProfile",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel"
+      ],
+      "Resource": [
         "arn:aws:bedrock:*::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
         "arn:aws:bedrock:*::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}",
         "arn:aws:bedrock:::foundation-model/${BEDROCK_HAIKU_FOUNDATION_MODEL_ID}",
         "arn:aws:bedrock:::foundation-model/${BEDROCK_SONNET_FOUNDATION_MODEL_ID}"
-      ]
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "bedrock:InferenceProfileArn": [
+            "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
+            "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}"
+          ]
+        }
+      }
     },
     {
       "Sid": "CognitoAdminForConfiguredPool",

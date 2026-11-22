@@ -16,9 +16,10 @@
 #   - Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults; live demo
 #     runtime toggles (Bedrock/ModelId and Bedrock/EnableAnswerVerification) are STILL protected
 #     from bulk reset unless OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS explicitly includes them.
-#   - Origin/VerifySecret is NEVER overwritten unless ROTATE_ORIGIN_SECRET=1 is set,
-#     ORIGIN_VERIFY_SECRET_STDIN=1 is used, or ORIGIN_VERIFY_SECRET is provided (only use
-#     ORIGIN_VERIFY_SECRET env var in a non-shared shell to avoid shell history exposure).
+#   - Origin/VerifySecret is NEVER overwritten when it already exists unless ROTATE_ORIGIN_SECRET=1
+#     is explicitly set (even if ORIGIN_VERIFY_SECRET or ORIGIN_VERIFY_SECRET_STDIN=1 is present in
+#     the environment, preventing accidental silent rotation on re-runs). Only pass ORIGIN_VERIFY_SECRET
+#     in a non-shared shell to avoid shell history exposure.
 #
 # Dependencies: aws (CLI v2), jq, openssl (or python3 for random hex fallback).
 #
@@ -231,32 +232,46 @@ put_string_param() {
 }
 
 # Executes `aws ssm put-parameter` with a JSON payload without exposing the secret in argv (`ps`).
-# - On Linux/macOS/CloudShell: pipes payload via stdin (`file:///dev/stdin`) so zero temp file is written to disk.
-# - On Windows Git Bash (where native aws.exe lacks /dev/stdin): creates an isolated temp dir with `umask 077`
-#   and restricts Windows NTFS ACLs to the current user via `icacls` before writing and immediately deleting.
+# Must be called directly (NOT inside `$(...)` command substitution) so `TMP_SECRET_DIR` is set in
+# the main shell and always cleaned up by `trap cleanup_tmp_secret EXIT INT TERM` on Ctrl-C.
+# Stores the resulting parameter version in `LAST_PUT_SECRET_VERSION`.
+LAST_PUT_SECRET_VERSION=""
 put_secret_json_payload() {
   local payload_json="$1"
   local ver=""
   local rc=0
+  LAST_PUT_SECRET_VERSION=""
+
   if [ -e /dev/stdin ] && ! command -v cygpath >/dev/null 2>&1; then
-    ver="$(aws ssm put-parameter \
+    ver="$(printf '%s' "$payload_json" | aws ssm put-parameter \
       --region "$AWS_REGION" \
       --cli-input-json "file:///dev/stdin" \
       --query "Version" \
-      --output text <<<"$payload_json")" || rc=$?
+      --output text)" || rc=$?
     if [ "$rc" -ne 0 ] || [ -z "$ver" ] || [[ ! "$ver" =~ ^[0-9]+$ ]]; then
       echo "ERROR: aws ssm put-parameter failed via /dev/stdin (rc=${rc}, version='${ver}')." >&2
       return 1
     fi
-    printf '%s\n' "$ver"
+    LAST_PUT_SECRET_VERSION="$ver"
     return 0
   fi
 
   TMP_SECRET_DIR="$(umask 077 && mktemp -d)" || return 1
-  if command -v cygpath >/dev/null 2>&1 && command -v icacls >/dev/null 2>&1; then
+  if command -v cygpath >/dev/null 2>&1; then
+    if ! command -v icacls >/dev/null 2>&1; then
+      rm -rf "$TMP_SECRET_DIR"
+      TMP_SECRET_DIR=""
+      echo "ERROR: icacls is required on Windows to restrict temporary secret directory ACLs." >&2
+      return 1
+    fi
     local win_dir=""
     win_dir="$(cygpath -w "$TMP_SECRET_DIR")"
-    icacls "$win_dir" /inheritance:r /grant:r "${USERNAME:-$(id -un)}:(OI)(CI)F" >/dev/null 2>&1 || true
+    if ! icacls "$win_dir" /inheritance:r /grant:r "${USERNAME:-$(id -un)}:(OI)(CI)F" >/dev/null 2>&1; then
+      rm -rf "$TMP_SECRET_DIR"
+      TMP_SECRET_DIR=""
+      echo "ERROR: Failed to restrict Windows NTFS ACLs on temporary secret directory '${win_dir}'." >&2
+      return 1
+    fi
   fi
 
   local tmp_file="${TMP_SECRET_DIR}/payload.json"
@@ -283,7 +298,7 @@ put_secret_json_payload() {
     echo "ERROR: aws ssm put-parameter failed (rc=${rc}, version='${ver}')." >&2
     return 1
   fi
-  printf '%s\n' "$ver"
+  LAST_PUT_SECRET_VERSION="$ver"
   return 0
 }
 
@@ -293,14 +308,21 @@ put_origin_secret_param() {
   local status=""
   status="$(check_ssm_param_status "$name")"
 
-  if [ "$status" = "exists" ] && [ -z "$ORIGIN_VERIFY_SECRET" ] && [ "$ORIGIN_VERIFY_SECRET_STDIN" != "1" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
-    echo "    [KEPT]     ${name} (SecureString already exists; preserving CloudFront <-> Nginx secret)"
+  if [ "$status" = "exists" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
+    if [ -n "$ORIGIN_VERIFY_SECRET" ] || [ "$ORIGIN_VERIFY_SECRET_STDIN" = "1" ]; then
+      echo "    [KEPT]     ${name} (SecureString already exists; set ROTATE_ORIGIN_SECRET=1 to overwrite with provided secret)"
+    else
+      echo "    [KEPT]     ${name} (SecureString already exists; preserving CloudFront <-> Nginx secret)"
+    fi
     return 0
   fi
 
   local secret_val="$ORIGIN_VERIFY_SECRET"
   if [ "$ORIGIN_VERIFY_SECRET_STDIN" = "1" ]; then
-    IFS= read -r secret_val
+    if ! IFS= read -r secret_val && [ -z "$secret_val" ]; then
+      echo "ERROR: Failed to read Origin/VerifySecret from stdin (empty input or unexpected EOF)." >&2
+      exit 1
+    fi
     secret_val="$(printf '%s' "$secret_val" | tr -d '\r\n')"
   elif [ -n "$secret_val" ]; then
     echo "    [WARN]     ORIGIN_VERIFY_SECRET was passed via environment variable; ensure this is a non-shared shell (prefer ROTATE_ORIGIN_SECRET=1 or ORIGIN_VERIFY_SECRET_STDIN=1)." >&2
@@ -314,7 +336,6 @@ put_origin_secret_param() {
   fi
 
   local payload_json=""
-  local put_ver=""
   if [ "$status" = "exists" ]; then
     local prev_ver=""
     if ! prev_ver="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --query "Parameter.Version" --output text)" || [ -z "$prev_ver" ]; then
@@ -334,11 +355,11 @@ put_origin_secret_param() {
         Description: $desc,
         Overwrite: true
       }')"
-    if ! put_ver="$(put_secret_json_payload "$payload_json")" || [ -z "$put_ver" ]; then
+    if ! put_secret_json_payload "$payload_json" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
       echo "ERROR: Failed to rotate ${name} in SSM Parameter Store." >&2
       return 1
     fi
-    echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${put_ver} via alias/aws/ssm — follow 3-step rotation in runbook!)"
+    echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${LAST_PUT_SECRET_VERSION} via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
     payload_json="$(jq -nc \
       --arg name "$name" \
@@ -358,11 +379,11 @@ put_origin_secret_param() {
           {Key: "Task", Value: "O12"}
         ]
       }')"
-    if ! put_ver="$(put_secret_json_payload "$payload_json")" || [ -z "$put_ver" ]; then
+    if ! put_secret_json_payload "$payload_json" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
       echo "ERROR: Failed to create ${name} in SSM Parameter Store." >&2
       return 1
     fi
-    echo "    [CREATED]  ${name} (SecureString version ${put_ver} via alias/aws/ssm; value not printed)"
+    echo "    [CREATED]  ${name} (SecureString version ${LAST_PUT_SECRET_VERSION} via alias/aws/ssm; value not printed)"
   fi
 }
 
