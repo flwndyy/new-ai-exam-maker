@@ -10,7 +10,7 @@
 #
 # Safety behavior:
 #   - Non-secret config parameters are create-if-absent by default so live demo overrides
-#     (e.g. switching ModelId from Haiku to Sonnet v2) are preserved on re-run.
+#     (e.g. switching ModelId from Haiku 4.5 to Sonnet 4.6) are preserved on re-run.
 #     Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults.
 #   - Origin/VerifySecret is NEVER overwritten unless ORIGIN_VERIFY_SECRET is provided
 #     or ROTATE_ORIGIN_SECRET=1 is set explicitly (prevents breaking CloudFront <-> Nginx 403).
@@ -69,6 +69,19 @@ if [ "$BEDROCK_ENABLE_VERIFICATION" != "true" ] && [ "$BEDROCK_ENABLE_VERIFICATI
   echo "ERROR: BEDROCK_ENABLE_VERIFICATION must be 'true' or 'false' (got '${BEDROCK_ENABLE_VERIFICATION}')." >&2
   exit 1
 fi
+
+if [ "$BEDROCK_MODEL_ID" != "$BEDROCK_DEV_MODEL_ID" ] && [ "$BEDROCK_MODEL_ID" != "$BEDROCK_DEMO_MODEL_ID" ]; then
+  echo "ERROR: BEDROCK_MODEL_ID ('${BEDROCK_MODEL_ID}') must match BEDROCK_DEV_MODEL_ID ('${BEDROCK_DEV_MODEL_ID}') or BEDROCK_DEMO_MODEL_ID ('${BEDROCK_DEMO_MODEL_ID}')." >&2
+  exit 1
+fi
+
+TMP_JSON_FILE=""
+cleanup_tmp_json() {
+  if [ -n "${TMP_JSON_FILE:-}" ]; then
+    rm -f "$TMP_JSON_FILE"
+  fi
+}
+trap cleanup_tmp_json EXIT
 
 generate_origin_secret() {
   if command -v openssl >/dev/null 2>&1; then
@@ -159,14 +172,11 @@ put_origin_secret_param() {
 
   # Write parameter payload via temporary file (0600) so the secret is never exposed in process argv (`ps`).
   # Convert POSIX path via `cygpath -m` on Git Bash (Windows) because MSYS_NO_PATHCONV=1 disables auto-conversion for aws.exe.
-  local tmp_json=""
-  local param_file=""
-  tmp_json="$(mktemp)"
-  chmod 600 "$tmp_json"
-  trap 'rm -f "$tmp_json"' RETURN
-  param_file="$tmp_json"
+  TMP_JSON_FILE="$(mktemp)"
+  chmod 600 "$TMP_JSON_FILE"
+  local param_file="$TMP_JSON_FILE"
   if command -v cygpath >/dev/null 2>&1; then
-    param_file="$(cygpath -m "$tmp_json")"
+    param_file="$(cygpath -m "$TMP_JSON_FILE")"
   fi
 
   if [ "$status" = "exists" ]; then
@@ -182,10 +192,12 @@ put_origin_secret_param() {
         Value: $val,
         Description: $desc,
         Overwrite: true
-      }' >"$tmp_json"
+      }' >"$TMP_JSON_FILE"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
       --cli-input-json "file://${param_file}" >/dev/null
+    rm -f "$TMP_JSON_FILE"
+    TMP_JSON_FILE=""
     echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
     jq -nc \
@@ -205,10 +217,12 @@ put_origin_secret_param() {
           {Key: "Environment", Value: $env},
           {Key: "Task", Value: "O12"}
         ]
-      }' >"$tmp_json"
+      }' >"$TMP_JSON_FILE"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
       --cli-input-json "file://${param_file}" >/dev/null
+    rm -f "$TMP_JSON_FILE"
+    TMP_JSON_FILE=""
     echo "    [CREATED]  ${name} (SecureString via alias/aws/ssm; value not printed)"
   fi
 }

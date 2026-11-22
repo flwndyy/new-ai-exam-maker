@@ -158,15 +158,29 @@ else
   FOUNDATION_JSON="$FOUNDATION_OUT"
 fi
 
-is_foundation_model_active() {
+# Checks foundation model lifecycle in BEDROCK_REGION_VAL using already-fetched FOUNDATION_JSON first,
+# then falls back to get-foundation-model. Returns:
+#   0 = ACTIVE, 1 = found but LEGACY/non-ACTIVE, 2 = not offered in BEDROCK_REGION_VAL.
+check_foundation_model_lifecycle() {
   local fm_id="$1"
-  local fm_json=""
   local lifecycle=""
-  if ! fm_json="$(aws bedrock get-foundation-model --region "$BEDROCK_REGION_VAL" --model-identifier "$fm_id" --output json 2>/dev/null)"; then
+  lifecycle="$(jq -r --arg id "$fm_id" '.modelSummaries[]? | select(.modelId == $id) | .modelLifecycle.status // empty' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
+  if [ -n "$lifecycle" ]; then
+    [ "$lifecycle" = "ACTIVE" ] && return 0 || return 1
+  fi
+
+  local fm_out=""
+  local rc=0
+  fm_out="$(aws bedrock get-foundation-model --region "$BEDROCK_REGION_VAL" --model-identifier "$fm_id" --output json 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if grep -q "ResourceNotFoundException" <<<"$fm_out"; then
+      return 2
+    fi
     return 1
   fi
-  lifecycle="$(jq -r '.modelDetails.modelLifecycle.status // empty' <<<"$fm_json" | tr -d '\r\n')"
-  [ "$lifecycle" = "ACTIVE" ]
+
+  lifecycle="$(jq -r '.modelDetails.modelLifecycle.status // empty' <<<"$fm_out" | tr -d '\r\n')"
+  [ "$lifecycle" = "ACTIVE" ] && return 0 || return 1
 }
 
 is_valid_bedrock_id() {
@@ -175,15 +189,23 @@ is_valid_bedrock_id() {
   profile_json="$(jq -c --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE")' <<<"$PROFILES_JSON")"
   if [ -n "$profile_json" ]; then
     local fm_ids=""
+    local active_count=0
     fm_ids="$(jq -r '.models[]?.modelArn | split("/") | last' <<<"$profile_json" | sort -u)"
     [ -n "$fm_ids" ] || return 1
     while IFS= read -r fm; do
       [ -z "$fm" ] && continue
-      if ! is_foundation_model_active "$fm"; then
+      local fm_rc=0
+      check_foundation_model_lifecycle "$fm" || fm_rc=$?
+      if [ "$fm_rc" -eq 0 ]; then
+        active_count=$((active_count + 1))
+      elif [ "$fm_rc" -eq 1 ]; then
+        # Explicitly reject models whose lifecycle is LEGACY/non-ACTIVE.
         return 1
       fi
+      # fm_rc == 2 means that destination ARN is not offered directly in BEDROCK_REGION_VAL (normal for global.*/apac.*).
     done <<<"$fm_ids"
-    return 0
+    [ "$active_count" -ge 1 ]
+    return $?
   fi
 
   local on_demand_fm=""

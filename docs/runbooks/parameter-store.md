@@ -1,7 +1,7 @@
 # Runbook — Quy ước & Vận hành AWS Systems Manager Parameter Store (Task O12)
 
 Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Systems Manager Parameter Store** cho dự án **AI Exam Maker** (`ap-southeast-1`), đảm bảo:
-- **100% ánh xạ tự động vào .NET 10 `IConfiguration`** qua `ParameterStoreConfiguration.cs` khi cấu hình `ParameterStore__Path=/exammaker/<env>`.
+- **Ánh xạ tự động vào .NET 10 `IConfiguration`** qua `ParameterStoreConfiguration.cs` khi cấu hình `ParameterStore__Path=/exammaker/<env>` cho **các khóa hiện đã được bind trong code** (xem cột *Nơi sử dụng* ở mục 2: `AWS:Region`, `Cognito:Region|UserPoolId|ClientId`, `ConnectionStrings:ExamMaker`, `Sqs:AiJobsQueueUrl`, `AiQuota:*`, `AiRateLimit:*`). Các khóa `Bedrock/*` sẽ được Worker B6 bind sau; các khóa `Rds/*`, `CloudWatch/*`, `Origin/VerifySecret`, `Cognito/HostedUiDomain|Authority`, `Sqs/*Arn|Dlq*` phục vụ hạ tầng/OPS/frontend.
 - **Chi phí $0**: toàn bộ tham số dùng **Standard tier** (`≤ 10.000` tham số miễn phí) và mọi `SecureString` mã hóa bằng khóa **AWS-managed `alias/aws/ssm`** (không tạo KMS CMK tốn $1/tháng).
 - **Bảo mật**: tuyệt đối không lưu secret, connection string, Account ID hay giá trị thật trong Git hoặc file `appsettings.json`.
 
@@ -63,7 +63,7 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 ```
 
 **Hành vi an toàn của script:**
-- Các tham số cấu hình (`Bedrock/*`, `AiQuota/*`, `AiRateLimit/*`, `AWS/Region`, `CloudWatch/*`) mặc định là **create-if-absent** để tránh vô tình ghi đè khi team đã chuyển sang cấu hình demo (ví dụ đã bật Sonnet v2). Muốn đồng bộ lại theo mặc định script, chạy `OVERWRITE_CONFIG=1 ./infra/ssm/setup-ssm.sh`.
+- Các tham số cấu hình (`Bedrock/*`, `AiQuota/*`, `AiRateLimit/*`, `AWS/Region`, `CloudWatch/*`) mặc định là **create-if-absent** để tránh vô tình ghi đè khi team đã chuyển sang cấu hình demo (ví dụ đã bật Sonnet 4.6). Muốn đồng bộ lại theo mặc định script, chạy `OVERWRITE_CONFIG=1 ./infra/ssm/setup-ssm.sh`.
 - `/exammaker/dev/Origin/VerifySecret` **không bao giờ bị ghi đè** ở lần chạy lại bình thường (tránh làm lệch secret giữa CloudFront và Nginx gây lỗi `403`). Chỉ xoay vòng khi truyền rõ `ROTATE_ORIGIN_SECRET=1` hoặc `ORIGIN_VERIFY_SECRET=<value>`.
 
 ### 3.2 Xác minh toàn bộ cây tham số (O9 + O10 + O11 + O12)
@@ -94,9 +94,9 @@ ParameterStore__Path=/exammaker/dev
 
 Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-ec2-policy.example.json`) chỉ cần quyền `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` giới hạn đúng 2 ARN `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev` và `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev/*` (khớp `${PARAMETER_ARN_PREFIX}` và `${PARAMETER_ARN_PREFIX}/*` trong policy mẫu; khóa `alias/aws/ssm` được giải mã mặc định mà không cần cấp `kms:Decrypt` riêng cho CMK).
 
-### 4.2 Chuyển đổi cấu hình Dev (Haiku) ↔ Demo (Sonnet v2)
+### 4.2 Chuyển đổi cấu hình Dev (Haiku 4.5) ↔ Demo (Sonnet 4.6)
 
-**Trước buổi demo (chuyển sang Sonnet v2 + bật kiểm chứng đáp án):**
+**Trước buổi demo (chuyển sang Sonnet 4.6 + bật kiểm chứng đáp án):**
 
 ```bash
 DEMO_MODEL="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/DemoModelId --query Parameter.Value --output text)"
@@ -135,7 +135,30 @@ unset SECRET
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> **Quy trình xoay vòng secret không downtime (3 bước — bắt buộc lưu secret cũ trước khi xoay):**
-> 1. **Lưu secret cũ và sinh secret mới:** Trước khi chạy lệnh xoay, đọc và giữ giá trị cũ trong phiên shell (`OLD_SECRET` — nếu lỡ xoay rồi có thể lấy lại bản trước bằng `aws ssm get-parameter --name /exammaker/dev/Origin/VerifySecret:<version> --with-decryption`), sau đó chạy `ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh` và đọc `NEW_SECRET`.
-> 2. **Cập nhật Nginx (EC2) nhận cả 2 secret:** Ghi đồng thời `"${OLD_SECRET}" 1;` và `"${NEW_SECRET}" 1;` vào `/etc/exammaker/origin-secret.conf`, chạy `sudo nginx -t && sudo systemctl reload nginx` rồi `unset OLD_SECRET NEW_SECRET`.
-> 3. **Đổi CloudFront và dọn secret cũ:** Cập nhật custom header `X-Origin-Verify` trên CloudFront Origin (O5) sang secret mới, chờ CloudFront chuyển sang trạng thái `Deployed`, rồi gỡ dòng secret cũ khỏi `/etc/exammaker/origin-secret.conf` và reload Nginx lại.
+> **Quy trình xoay vòng secret không downtime (3 bước — đọc theo version trực tiếp trên EC2):**
+> 1. **Sinh secret mới (trên máy OPS / CloudShell):**
+>    ```bash
+>    ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh
+>    ```
+> 2. **Trên EC2 (qua SSM Session Manager), nạp đồng thời cả secret cũ (`version - 1`) và secret mới vào Nginx:**
+>    ```bash
+>    CUR_VER="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --query Parameter.Version --output text)"
+>    PREV_VER="$((CUR_VER - 1))"
+>    [ "$PREV_VER" -ge 1 ] || { echo "No previous version to rotate from" >&2; exit 1; }
+>    OLD_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name "/exammaker/dev/Origin/VerifySecret:${PREV_VER}" --with-decryption --query Parameter.Value --output text)"
+>    NEW_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name "/exammaker/dev/Origin/VerifySecret:${CUR_VER}" --with-decryption --query Parameter.Value --output text)"
+>    [ -n "$OLD_SECRET" ] && [ -n "$NEW_SECRET" ] || { echo "Failed to read secrets" >&2; exit 1; }
+>    sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
+>    sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<EOF
+>    map \$http_x_origin_verify \$origin_header_valid {
+>        default 0;
+>        "${OLD_SECRET}" 1;
+>        "${NEW_SECRET}" 1;
+>    }
+>    EOF
+>    unset OLD_SECRET NEW_SECRET
+>    sudo nginx -t && sudo systemctl reload nginx
+>    ```
+> 3. **Cập nhật CloudFront (O5) sang secret mới và dọn secret cũ trên EC2:**
+>    - Lấy giá trị mới trên máy OPS (`aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --with-decryption --query Parameter.Value --output text`) và cập nhật custom header `X-Origin-Verify` trên CloudFront Origin, chờ distribution chuyển sang **`Deployed`**.
+>    - Quay lại phiên EC2, chạy lại đoạn script ở đầu mục 4.3 để `/etc/exammaker/origin-secret.conf` chỉ giữ duy nhất secret mới và reload Nginx.
