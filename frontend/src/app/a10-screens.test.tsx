@@ -354,8 +354,24 @@ describe("A10 admin, review, and role navigation screens", () => {
 
     await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
     expect(mocks.apiPut.mock.calls[0][1].body.payload.rubric[0].points).toBe(0.1);
-    await waitFor(() => expect(screen.getByText("Cần rà soát lại câu AI trước khi gửi duyệt.")).toBeTruthy());
+    // When PUT resets aiReviewedByAuthor on an edited AI question, submit stops early and prompts the author to re-review.
+    expect(mocks.apiPost).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText(messages.questions.aiReviewResetNotice)).toBeTruthy());
     expect(screen.getByText(messages.questions.markReviewed)).toBeTruthy();
+
+    // Clicking "Đã rà soát" while having unsaved edits auto-saves before POST /mark-reviewed so edits are never lost.
+    mocks.apiPut.mockClear();
+    mocks.apiPost.mockResolvedValue({
+      data: { ...updatedAiEssay, stem: "AI essay edited twice", aiReviewedByAuthor: true, updatedAt: "2026-11-22T00:06:00.000Z" },
+      error: undefined,
+    });
+    fireEvent.change(screen.getByDisplayValue("AI essay edited"), { target: { value: "AI essay edited twice" } });
+    fireEvent.click(screen.getByText(messages.questions.markReviewed));
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut.mock.calls[0][1].body.stem).toBe("AI essay edited twice");
+    await waitFor(() =>
+      expect(mocks.apiPost).toHaveBeenCalledWith("/questions/{id}/mark-reviewed", { params: { path: { id: mocks.searchId } } }),
+    );
   });
 
   it("hides archive button for peer teachers and rejected questions, shows it for owner/head/admin on Approved, and rejects blank rubric criterion", async () => {
@@ -477,5 +493,68 @@ describe("A10 admin, review, and role navigation screens", () => {
     expect(screen.getByText(/Vận dụng cao/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/Động học/)).toBeTruthy());
     expect(screen.getByText(/±0.05/)).toBeTruthy();
+  });
+
+  it("blocks admin from creating questions, refetches on review conflict, and renders reconcile mismatch details", async () => {
+    // 1. Admin opening /questions/detail/ without id sees forbidden instead of create form.
+    mocks.auth.me.role = "admin";
+    mocks.searchId = "";
+    renderWithQuery(<QuestionDetailPage />);
+    expect(screen.getByText(messages.common.forbidden)).toBeTruthy();
+    expect(screen.queryByText(messages.common.save)).toBeNull();
+    cleanup();
+
+    // 2. Admin reconcile renders mismatch detail rows, and reactivating a user fetches fresh profile before PUT.
+    mocks.searchId = "00000000-0000-0000-0000-000000000099";
+    const inactiveUser = {
+      id: "00000000-0000-0000-0000-000000000055",
+      cognitoSub: "sub-55",
+      email: "stale@example.invalid",
+      fullName: "Stale Name",
+      role: "teacher" as const,
+      departmentId: "d1",
+      isActive: false,
+      createdAt: "2026-11-22T00:00:00.000Z",
+    };
+    const freshUser = {
+      ...inactiveUser,
+      role: "head" as const,
+      departmentId: "d2",
+    };
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/admin/users") return { data: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1, items: [inactiveUser] }, error: undefined };
+      if (path === "/admin/users/{id}") return { data: freshUser, error: undefined };
+      return { data: { page: 1, pageSize: 20, totalItems: 0, totalPages: 1, items: [] }, error: undefined };
+    });
+    mocks.apiPut.mockResolvedValue({ data: { ...freshUser, isActive: true }, error: undefined });
+    mocks.apiPost.mockResolvedValue({
+      data: {
+        checkedAt: "2026-11-22T00:00:00.000Z",
+        totalUsers: 5,
+        mismatches: [
+          {
+            userId: inactiveUser.id,
+            email: "drift@example.invalid",
+            dbRole: "head",
+            cognitoGroups: ["teacher"],
+            issue: "RoleMismatch",
+          },
+        ],
+      },
+      error: undefined,
+    });
+
+    renderWithQuery(<AdminPage />);
+    await waitFor(() => expect(screen.getByText("Stale Name")).toBeTruthy());
+
+    fireEvent.click(screen.getByText(messages.admin.enableUser));
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut.mock.calls[0][1].body.role).toBe("head");
+    expect(mocks.apiPut.mock.calls[0][1].body.departmentId).toBe("d2");
+    expect(mocks.apiPut.mock.calls[0][1].body.isActive).toBe(true);
+
+    fireEvent.click(screen.getByText(messages.admin.reconcile));
+    await waitFor(() => expect(screen.getByText("drift@example.invalid")).toBeTruthy());
+    expect(screen.getByText(messages.admin.reconcileIssues.RoleMismatch)).toBeTruthy();
   });
 });

@@ -193,13 +193,18 @@ function QuestionEditorForm({
         if (error) throw new Error(getApiErrorMessage(error));
         return "deleted";
       }
-      // Save unsaved edits before submitting so reviewers never see stale content and edits are not lost.
-      // Defer cache update until the mutation settles so QuestionEditorForm does not remount while POST /submit is in flight.
+      // Save unsaved edits before submitting or marking reviewed so reviewers never see stale content and edits are not lost.
+      // Defer cache update until the mutation settles so QuestionEditorForm does not remount while the POST is in flight.
       let savedBeforeAction: Question | null = null;
-      if (action === "submit" && isDirty) {
+      if ((action === "submit" || action === "mark-reviewed") && isDirty) {
         savedBeforeAction = await persistQuestion();
         setIsDirty(false);
         void queryClient.invalidateQueries({ queryKey: ["questions"] });
+        // Editing an AI question resets aiReviewedByAuthor on the server; stop before POST /submit and prompt the author to re-review.
+        if (action === "submit" && savedBeforeAction.source === "AI" && !savedBeforeAction.aiReviewedByAuthor) {
+          queryClient.setQueryData(["question", savedBeforeAction.id], savedBeforeAction);
+          throw new Error(vi.questions.aiReviewResetNotice);
+        }
       }
       const pathMap = {
         submit: "/questions/{id}/submit",
@@ -233,8 +238,9 @@ function QuestionEditorForm({
     onError: (err: Error) => onError(err.message),
   });
 
-  const isOwner = !q || me?.id === q.createdBy.id;
-  const isEditable = !q || q.status === "Draft" || q.status === "Rejected" || q.status === "Approved";
+  const isContentAuthor = me?.role === "teacher" || me?.role === "head";
+  const isOwner = isContentAuthor && (!q || me?.id === q.createdBy.id);
+  const isEditable = isOwner && (!q || q.status === "Draft" || q.status === "Rejected" || q.status === "Approved");
   const canArchive =
     Boolean(q && q.status === "Approved") &&
     (isOwner || me?.role === "admin" || (me?.role === "head" && me.departmentId === q?.departmentId));
@@ -267,6 +273,7 @@ function QuestionEditorForm({
         }}
         className="space-y-4 rounded border border-slate-200 bg-white p-5"
       >
+        <fieldset disabled={!isEditable} className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <label className="block text-sm">
             <span className="font-medium text-slate-700">{vi.questions.subject}</span>
@@ -502,7 +509,7 @@ function QuestionEditorForm({
         {type === "Essay" && (
           <div className="space-y-3">
             <label className="block text-sm">
-              <span className="font-medium text-slate-700">{vi.questions.essayRubric}</span>
+              <span className="font-medium text-slate-700">{vi.questions.modelAnswer}</span>
               <textarea
                 required
                 rows={3}
@@ -515,6 +522,7 @@ function QuestionEditorForm({
               />
             </label>
             <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-700">{vi.questions.essayRubric}</p>
               {essayRubric.map((row, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <input
@@ -578,6 +586,7 @@ function QuestionEditorForm({
             className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
           />
         </label>
+        </fieldset>
 
         <div className="flex flex-wrap items-center gap-3 pt-2">
           {isOwner && isEditable && (
@@ -626,8 +635,11 @@ function QuestionEditorForm({
           {q && canArchive && (
             <button
               type="button"
-              disabled={actionMutation.isPending}
-              onClick={() => actionMutation.mutate("archive")}
+              disabled={actionMutation.isPending || saveMutation.isPending}
+              onClick={() => {
+                if (isDirty && !window.confirm(vi.questions.confirmDiscardBeforeArchive)) return;
+                actionMutation.mutate("archive");
+              }}
               className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
             >
               {vi.questions.archive}
@@ -654,8 +666,11 @@ function QuestionEditorForm({
 
 function QuestionDetailInner() {
   const id = useSearchParams().get("id");
+  const { me } = useAuth();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const canCreate = me?.role === "teacher" || me?.role === "head";
 
   const questionQuery = useQuery({
     queryKey: ["question", id],
@@ -666,6 +681,10 @@ function QuestionDetailInner() {
       return data;
     },
   });
+
+  if (!id && !canCreate) {
+    return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
+  }
 
   return (
     <section className="space-y-6">

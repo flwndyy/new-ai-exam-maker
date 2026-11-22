@@ -8,6 +8,7 @@ import { MathMarkdown } from "@/components/math-markdown";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
+import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
 
 type QuestionStatus = components["schemas"]["QuestionStatus"];
@@ -21,6 +22,7 @@ const DIFFICULTIES: Difficulty[] = ["Recognition", "Understanding", "Application
 const GRADES: Grade[] = [10, 11, 12];
 
 export default function QuestionsPage() {
+  const { me } = useAuth();
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<string>("");
   const [subjectId, setSubjectId] = useState<string>("");
@@ -29,6 +31,8 @@ export default function QuestionsPage() {
   const [type, setType] = useState<string>("");
   const [difficulty, setDifficulty] = useState<string>("");
   const [mine, setMine] = useState(false);
+
+  const canCreate = me?.role === "teacher" || me?.role === "head";
 
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
@@ -41,12 +45,13 @@ export default function QuestionsPage() {
 
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", subjectId, grade],
+    enabled: Boolean(subjectId),
     queryFn: async () => {
       const { data, error } = await api.GET("/topics", {
         params: {
           query: {
             pageSize: 100,
-            subjectId: subjectId || undefined,
+            subjectId,
             grade: grade ? (Number(grade) as Grade) : undefined,
           },
         },
@@ -83,12 +88,14 @@ export default function QuestionsPage() {
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-slate-900">{vi.questions.title}</h1>
-        <Link
-          href="/questions/detail/"
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          {vi.questions.createButton}
-        </Link>
+        {canCreate && (
+          <Link
+            href="/questions/detail/"
+            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            {vi.questions.createButton}
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -125,12 +132,13 @@ export default function QuestionsPage() {
 
         <select
           aria-label={vi.questions.topic}
+          disabled={!subjectId}
           value={topicId}
           onChange={(e) => {
             setTopicId(e.target.value);
             setPage(1);
           }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:bg-slate-100"
         >
           <option value="">{vi.questions.topic}: {vi.common.all}</option>
           {topicsQuery.data?.map((t) => (
@@ -237,28 +245,30 @@ export default function QuestionsPage() {
               </div>
             </article>
           ))}
+        </div>
+      )}
 
-          <div className="flex items-center justify-between pt-2 text-sm">
-            <button
-              type="button"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-            >
-              {vi.common.previousPage}
-            </button>
-            <span className="text-slate-600">
-              {vi.common.pageLabel} {questionsQuery.data.page} / {Math.max(1, questionsQuery.data.totalPages)}
-            </span>
-            <button
-              type="button"
-              disabled={page >= questionsQuery.data.totalPages}
-              onClick={() => setPage((p) => p + 1)}
-              className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-            >
-              {vi.common.nextPage}
-            </button>
-          </div>
+      {questionsQuery.data && (questionsQuery.data.items.length > 0 || page > 1) && (
+        <div className="flex items-center justify-between pt-2 text-sm">
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+          >
+            {vi.common.previousPage}
+          </button>
+          <span className="text-slate-600">
+            {vi.common.pageLabel} {questionsQuery.data.page} / {Math.max(1, questionsQuery.data.totalPages)}
+          </span>
+          <button
+            type="button"
+            disabled={page >= questionsQuery.data.totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+          >
+            {vi.common.nextPage}
+          </button>
         </div>
       )}
     </section>

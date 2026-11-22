@@ -52,7 +52,12 @@ function QuestionDecisionForm({
       void queryClient.invalidateQueries({ queryKey: ["review", "questions"] });
       void queryClient.invalidateQueries({ queryKey: ["question", question.id] });
     },
-    onError: (err: Error) => onError(err.message),
+    onError: (err: Error) => {
+      onError(err.message);
+      // Context A6: re-read the current submission round and queue after a stale-round Conflict or state error.
+      void queryClient.invalidateQueries({ queryKey: ["question", question.id] });
+      void queryClient.invalidateQueries({ queryKey: ["review", "questions"] });
+    },
   });
 
   const allChecked = checks.every(Boolean);

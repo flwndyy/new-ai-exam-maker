@@ -31,10 +31,10 @@ export default function ReviewQueuePage() {
 
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", subjectId],
-    enabled: canReview && tab === "questions",
+    enabled: canReview && tab === "questions" && Boolean(subjectId),
     queryFn: async () => {
       const { data, error } = await api.GET("/topics", {
-        params: { query: { pageSize: 100, subjectId: subjectId || undefined } },
+        params: { query: { pageSize: 100, subjectId } },
       });
       if (error) throw new Error(getApiErrorMessage(error));
       return data.items;
@@ -138,12 +138,13 @@ export default function ReviewQueuePage() {
         {tab === "questions" && (
           <select
             aria-label={vi.questions.topic}
+            disabled={!subjectId}
             value={topicId}
             onChange={(e) => {
               setTopicId(e.target.value);
               setPage(1);
             }}
-            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
+            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-sm disabled:bg-slate-100"
           >
             <option value="">{vi.questions.topic}: {vi.common.all}</option>
             {topicsQuery.data?.map((t) => (
@@ -214,7 +215,7 @@ export default function ReviewQueuePage() {
         </div>
       )}
 
-      {activeData && activeData.items.length > 0 && (
+      {activeData && (activeData.items.length > 0 || page > 1) && (
         <div className="flex items-center justify-between pt-2 text-sm">
           <button
             type="button"

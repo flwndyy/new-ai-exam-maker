@@ -29,14 +29,16 @@ export default function AdminPage() {
   const [userPage, setUserPage] = useState(1);
   const [reconcileReport, setReconcileReport] = useState<ReconcileReport | null>(null);
 
-  // Department form state
+  // Department form & pagination state
   const [deptName, setDeptName] = useState("");
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
+  const [deptPage, setDeptPage] = useState(1);
 
-  // Subject form state
+  // Subject form & pagination state
   const [subjectName, setSubjectName] = useState("");
   const [subjectDeptId, setSubjectDeptId] = useState("");
   const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
+  const [subjectPage, setSubjectPage] = useState(1);
 
   // Topic form & pagination state
   const [topicName, setTopicName] = useState("");
@@ -59,6 +61,18 @@ export default function AdminPage() {
     },
   });
 
+  const departmentsListQuery = useQuery({
+    queryKey: ["catalog", "departments", "admin", deptPage],
+    enabled: isAdmin && tab === "departments",
+    queryFn: async () => {
+      const { data, error } = await api.GET("/departments", {
+        params: { query: { page: deptPage, pageSize: 20 } },
+      });
+      if (error) throw new Error(getApiErrorMessage(error));
+      return data;
+    },
+  });
+
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
     enabled: isAdmin,
@@ -66,6 +80,18 @@ export default function AdminPage() {
       const { data, error } = await api.GET("/subjects", { params: { query: { pageSize: 100 } } });
       if (error) throw new Error(getApiErrorMessage(error));
       return data.items;
+    },
+  });
+
+  const subjectsListQuery = useQuery({
+    queryKey: ["catalog", "subjects", "admin", subjectPage],
+    enabled: isAdmin && tab === "subjects",
+    queryFn: async () => {
+      const { data, error } = await api.GET("/subjects", {
+        params: { query: { page: subjectPage, pageSize: 20 } },
+      });
+      if (error) throw new Error(getApiErrorMessage(error));
+      return data;
     },
   });
 
@@ -132,14 +158,28 @@ export default function AdminPage() {
 
   const toggleUserActiveMutation = useMutation({
     mutationFn: async (item: AdminUser) => {
+      const targetActive = !item.isActive;
+      // If deactivating, use the dedicated soft-delete endpoint so concurrent role/department/email updates are never overwritten.
+      if (!targetActive) {
+        const { error } = await api.DELETE("/admin/users/{id}", {
+          params: { path: { id: item.id } },
+        });
+        if (error) throw new Error(getApiErrorMessage(error));
+        return;
+      }
+      // If reactivating, fetch the latest profile right before PUT so stale list rows never roll back role/department/email.
+      const { data: fresh, error: getError } = await api.GET("/admin/users/{id}", {
+        params: { path: { id: item.id } },
+      });
+      if (getError) throw new Error(getApiErrorMessage(getError));
       const { error } = await api.PUT("/admin/users/{id}", {
         params: { path: { id: item.id } },
         body: {
-          email: item.email,
-          fullName: item.fullName,
-          role: item.role,
-          departmentId: item.departmentId ?? null,
-          isActive: !item.isActive,
+          email: fresh.email,
+          fullName: fresh.fullName,
+          role: fresh.role,
+          departmentId: fresh.departmentId ?? null,
+          isActive: true,
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
@@ -252,7 +292,7 @@ export default function AdminPage() {
     onSuccess: () => {
       setTopicName("");
       setEditingTopicId(null);
-      notifySuccess(vi.admin.saved, ["catalog", "topics", "admin"]);
+      notifySuccess(vi.admin.saved, ["catalog", "topics"]);
     },
     onError: notifyError,
   });
@@ -271,7 +311,7 @@ export default function AdminPage() {
         setTopicGrade(10);
         setTopicOrder("1");
       }
-      notifySuccess(vi.admin.deleted, ["catalog", "topics", "admin"]);
+      notifySuccess(vi.admin.deleted, ["catalog", "topics"]);
     },
     onError: notifyError,
   });
@@ -368,18 +408,45 @@ export default function AdminPage() {
             </button>
           </form>
 
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => reconcileMutation.mutate()}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
-            >
-              {vi.admin.reconcile}
-            </button>
-            {reconcileReport && (
-              <span className="text-xs text-slate-600">
-                {vi.admin.reconcileSummary}: {reconcileReport.totalUsers} {vi.admin.reconcileUsersSuffix}, {reconcileReport.mismatches.length} {vi.admin.reconcileMismatchesSuffix}
-              </span>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => reconcileMutation.mutate()}
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+              >
+                {vi.admin.reconcile}
+              </button>
+              {reconcileReport && (
+                <span className="text-xs text-slate-600">
+                  {vi.admin.reconcileSummary}: {reconcileReport.totalUsers} {vi.admin.reconcileUsersSuffix}, {reconcileReport.mismatches.length} {vi.admin.reconcileMismatchesSuffix}
+                </span>
+              )}
+            </div>
+
+            {reconcileReport && reconcileReport.mismatches.length > 0 && (
+              <div className="overflow-x-auto rounded border border-amber-300 bg-amber-50">
+                <table className="w-full text-left text-xs text-amber-950">
+                  <thead className="border-b border-amber-200 bg-amber-100/60 uppercase">
+                    <tr>
+                      <th className="px-3 py-2">{vi.admin.email}</th>
+                      <th className="px-3 py-2">{vi.admin.reconcileIssueLabel}</th>
+                      <th className="px-3 py-2">{vi.admin.reconcileDbRoleLabel}</th>
+                      <th className="px-3 py-2">{vi.admin.reconcileCognitoGroupsLabel}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-200/60">
+                    {reconcileReport.mismatches.map((m, idx) => (
+                      <tr key={`${m.userId ?? m.email}-${m.issue}-${idx}`}>
+                        <td className="px-3 py-1.5 font-medium">{m.email}</td>
+                        <td className="px-3 py-1.5">{vi.admin.reconcileIssues[m.issue]}</td>
+                        <td className="px-3 py-1.5">{m.dbRole ? vi.auth.roles[m.dbRole] : "—"}</td>
+                        <td className="px-3 py-1.5">{(m.cognitoGroups ?? []).join(", ") || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
@@ -418,7 +485,7 @@ export default function AdminPage() {
             </table>
           </div>
 
-          {usersQuery.data && (usersQuery.data.totalPages ?? 1) > 1 && (
+          {usersQuery.data && ((usersQuery.data.totalPages ?? 1) > 1 || userPage > 1) && (
             <div className="flex items-center justify-between pt-2 text-sm">
               <button
                 type="button"
@@ -478,7 +545,7 @@ export default function AdminPage() {
           </form>
 
           <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-            {departmentsQuery.data?.map((d) => (
+            {(departmentsListQuery.data?.items ?? departmentsQuery.data)?.map((d) => (
               <li key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                 <span>{d.name}</span>
                 <div className="flex gap-3 text-xs">
@@ -505,6 +572,30 @@ export default function AdminPage() {
               </li>
             ))}
           </ul>
+
+          {departmentsListQuery.data && ((departmentsListQuery.data.totalPages ?? 1) > 1 || deptPage > 1) && (
+            <div className="flex items-center justify-between pt-2 text-sm">
+              <button
+                type="button"
+                disabled={deptPage <= 1}
+                onClick={() => setDeptPage((p) => Math.max(1, p - 1))}
+                className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              >
+                {vi.common.previousPage}
+              </button>
+              <span className="text-slate-600">
+                {vi.common.pageLabel} {departmentsListQuery.data.page ?? deptPage} / {Math.max(1, departmentsListQuery.data.totalPages ?? 1)}
+              </span>
+              <button
+                type="button"
+                disabled={deptPage >= (departmentsListQuery.data.totalPages ?? 1)}
+                onClick={() => setDeptPage((p) => p + 1)}
+                className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              >
+                {vi.common.nextPage}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -555,7 +646,7 @@ export default function AdminPage() {
           </form>
 
           <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-            {subjectsQuery.data?.map((s) => (
+            {(subjectsListQuery.data?.items ?? subjectsQuery.data)?.map((s) => (
               <li key={s.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                 <span>{s.name}</span>
                 <div className="flex gap-3 text-xs">
@@ -583,6 +674,30 @@ export default function AdminPage() {
               </li>
             ))}
           </ul>
+
+          {subjectsListQuery.data && ((subjectsListQuery.data.totalPages ?? 1) > 1 || subjectPage > 1) && (
+            <div className="flex items-center justify-between pt-2 text-sm">
+              <button
+                type="button"
+                disabled={subjectPage <= 1}
+                onClick={() => setSubjectPage((p) => Math.max(1, p - 1))}
+                className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              >
+                {vi.common.previousPage}
+              </button>
+              <span className="text-slate-600">
+                {vi.common.pageLabel} {subjectsListQuery.data.page ?? subjectPage} / {Math.max(1, subjectsListQuery.data.totalPages ?? 1)}
+              </span>
+              <button
+                type="button"
+                disabled={subjectPage >= (subjectsListQuery.data.totalPages ?? 1)}
+                onClick={() => setSubjectPage((p) => p + 1)}
+                className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              >
+                {vi.common.nextPage}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -705,7 +820,7 @@ export default function AdminPage() {
             ))}
           </ul>
 
-          {topicsQuery.data && (topicsQuery.data.totalPages ?? 1) > 1 && (
+          {topicsQuery.data && ((topicsQuery.data.totalPages ?? 1) > 1 || topicPage > 1) && (
             <div className="flex items-center justify-between pt-2 text-sm">
               <button
                 type="button"

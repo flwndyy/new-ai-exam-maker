@@ -72,7 +72,12 @@ function ExamDecisionForm({
       void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
       void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
     },
-    onError: (err: Error) => onError(err.message),
+    onError: (err: Error) => {
+      onError(err.message);
+      // Re-read the exam version and review queue after a stale-round Conflict or concurrent state transition.
+      void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
+      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
+    },
   });
 
   const allChecked = checks.every(Boolean);

@@ -73,19 +73,22 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
     return (
       <div className="space-y-2 rounded border border-slate-200 bg-white p-3 text-sm">
         <div>
-          <p className="font-medium text-slate-700">{vi.questions.essayRubric}:</p>
+          <p className="font-medium text-slate-700">{vi.questions.modelAnswer}:</p>
           <div className="mt-1 text-slate-800">
             <MathMarkdown>{payload.modelAnswer}</MathMarkdown>
           </div>
         </div>
-        <ul className="divide-y divide-slate-100 border-t border-slate-100 pt-2">
-          {payload.rubric.map((item, idx) => (
-            <li key={idx} className="flex justify-between gap-4 py-1">
-              <span>{item.criterion}</span>
-              <span className="shrink-0 font-medium">{item.points} {vi.review.points}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="border-t border-slate-100 pt-2">
+          <p className="font-medium text-slate-700">{vi.questions.essayRubric}:</p>
+          <ul className="mt-1 divide-y divide-slate-100">
+            {payload.rubric.map((item, idx) => (
+              <li key={idx} className="flex justify-between gap-4 py-1">
+                <span>{item.criterion}</span>
+                <span className="shrink-0 font-medium">{item.points} {vi.review.points}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     );
   }
