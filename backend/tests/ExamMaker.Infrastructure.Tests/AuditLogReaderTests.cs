@@ -164,7 +164,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         await using var db = fixture.CreateContext();
         var reader = new AuditLogReader(db);
 
-        var forbidden = await Assert.ThrowsAsync<AuditException>(() => reader.ListAsync(teacherA, new AuditLogQuery(), CancellationToken.None));
+        var forbidden = await Assert.ThrowsAsync<AuditException>(() => reader.ListAsync(teacherA, new AuditLogQuery(Page: 0, EntityType: "Invalid"), CancellationToken.None));
         Assert.Equal(403, forbidden.StatusCode);
 
         var invalidType = await Assert.ThrowsAsync<AuditException>(() => reader.ListAsync(admin, new AuditLogQuery(EntityType: "Invalid"), CancellationToken.None));
@@ -271,7 +271,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    public async Task Migration_does_not_backfill_user_or_ai_job_logs_from_current_user_department()
+    public async Task Migration_backfills_user_logs_from_current_user_department()
     {
         await using var db = fixture.CreateContext();
         var migrator = db.GetService<IMigrator>();
@@ -281,6 +281,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var localHeadB = Guid.NewGuid();
         var movedUser = Guid.NewGuid();
         var userLogId = Guid.NewGuid();
+        var adminLogId = Guid.NewGuid();
         var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
 
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -288,27 +289,28 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
             VALUES
                 ({localAdmin}, {"sub-admin-" + localAdmin}, {"admin-" + localAdmin + "@example.invalid"}, {"Local Admin"}, {Roles.Admin}, NULL, true, {t0}),
                 ({localHeadB}, {"sub-headb-" + localHeadB}, {"headb-" + localHeadB + "@example.invalid"}, {"Local Head B"}, {Roles.Head}, {DeptB}, true, {t0}),
-                ({movedUser}, {"sub-moved-" + movedUser}, {"moved-" + movedUser + "@example.invalid"}, {"Moved User"}, {Roles.Admin}, NULL, true, {t0});
+                ({movedUser}, {"sub-moved-" + movedUser}, {"moved-" + movedUser + "@example.invalid"}, {"Moved User"}, {Roles.Teacher}, {DeptB}, true, {t0});
 
             INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
-            VALUES ({userLogId}, {localAdmin}, 'User', {movedUser}, 'CreateUser', NULL, 'Active', 'Administrator provisioned an invited account.', {t0});
-
-            -- Move the former admin into DeptB BEFORE the migration runs.
-            UPDATE users SET role = {Roles.Teacher}, department_id = {DeptB} WHERE id = {movedUser};
+            VALUES
+                ({userLogId}, {localAdmin}, 'User', {movedUser}, 'CreateUser', NULL, 'Active', 'Administrator provisioned an invited account.', {t0}),
+                ({adminLogId}, {localAdmin}, 'User', {localAdmin}, 'CreateUser', NULL, 'Active', 'Bootstrap administrator CLI.', {t0});
             """);
 
         await db.Database.MigrateAsync();
 
         var reader = new AuditLogReader(db);
-        var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(), CancellationToken.None);
-        Assert.DoesNotContain(headBPage.Items, x => x.Id == userLogId);
+        var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(EntityType: "User"), CancellationToken.None);
+        Assert.Contains(headBPage.Items, x => x.Id == userLogId);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == adminLogId);
 
-        var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(EntityId: movedUser), CancellationToken.None);
+        var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(EntityType: "User"), CancellationToken.None);
         Assert.Contains(adminPage.Items, x => x.Id == userLogId);
+        Assert.Contains(adminPage.Items, x => x.Id == adminLogId);
     }
 
     [PostgresFact]
-    public async Task Migration_does_not_backfill_subject_or_topic_logs_from_current_department()
+    public async Task Migration_backfills_subject_and_topic_logs_from_current_department()
     {
         await using var db = fixture.CreateContext();
         var migrator = db.GetService<IMigrator>();
@@ -329,25 +331,23 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
                 ({localHeadB}, {"sub-headb-" + localHeadB}, {"headb-" + localHeadB + "@example.invalid"}, {"Local Head B"}, {Roles.Head}, {DeptB}, true, {t0});
 
             INSERT INTO subjects (id, name, department_id)
-            VALUES ({subjectId}, {"Movable Subject " + subjectId}, {DeptA});
+            VALUES ({subjectId}, {"Subject " + subjectId}, {DeptB});
 
             INSERT INTO topics (id, subject_id, grade, name, sort_order)
-            VALUES ({topicId}, {subjectId}, 10, {"Movable Topic " + topicId}, 1);
+            VALUES ({topicId}, {subjectId}, 10, {"Topic " + topicId}, 1);
 
             INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
             VALUES
-                ({subjectLogId}, {localAdmin}, 'Subject', {subjectId}, 'CreateSubject', NULL, NULL, 'Before: (new); after: Movable Subject', {t0}),
-                ({topicLogId}, {localAdmin}, 'Topic', {topicId}, 'CreateTopic', NULL, NULL, 'Before: (new); after: Movable Topic', {t0.AddMinutes(1)});
-
-            -- Move the subject from DeptA to DeptB BEFORE the migration runs.
-            UPDATE subjects SET department_id = {DeptB} WHERE id = {subjectId};
+                ({subjectLogId}, {localAdmin}, 'Subject', {subjectId}, 'CreateSubject', NULL, NULL, 'Before: (new); after: Subject', {t0}),
+                ({topicLogId}, {localAdmin}, 'Topic', {topicId}, 'CreateTopic', NULL, NULL, 'Before: (new); after: Topic', {t0.AddMinutes(1)});
             """);
 
         await db.Database.MigrateAsync();
 
         var reader = new AuditLogReader(db);
         var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(), CancellationToken.None);
-        Assert.DoesNotContain(headBPage.Items, x => x.Id == subjectLogId || x.Id == topicLogId);
+        Assert.Contains(headBPage.Items, x => x.Id == subjectLogId);
+        Assert.Contains(headBPage.Items, x => x.Id == topicLogId);
 
         var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(), CancellationToken.None);
         Assert.Contains(adminPage.Items, x => x.Id == subjectLogId);

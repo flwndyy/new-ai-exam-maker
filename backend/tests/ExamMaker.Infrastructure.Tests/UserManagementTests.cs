@@ -180,6 +180,7 @@ public sealed class UserManagementTests : IAsyncLifetime
             Assert.Equal("head", changed.Role);
             Assert.Equal(new[] { "head" }, cognito.Accounts[user.CognitoSub].Groups);
             var audit = await database.AuditLogs.SingleAsync(x => x.EntityId == user.Id && x.Action == "UpdateUser");
+            Assert.Equal(Guid.Parse("10000000-0000-0000-0000-000000000002"), audit.DepartmentId);
             Assert.Contains("role teacher->head", audit.Note);
             Assert.Contains($"department {DepartmentId}->10000000-0000-0000-0000-000000000002", audit.Note);
             Assert.DoesNotContain("@", audit.Note);

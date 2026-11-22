@@ -17,8 +17,6 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
     /// <summary>Return paginated audit logs ordered newest first, scoped to the head's department.</summary>
     public async Task<AuditLogPage> ListAsync(Guid actorId, AuditLogQuery query, CancellationToken cancellationToken)
     {
-        var (entityType, action, fromUtc, toUtc, offset) = ValidateQuery(query);
-
         var actor = await database.Users.AsNoTracking()
             .Where(u => u.Id == actorId)
             .Select(u => new { u.Id, u.Role, u.DepartmentId, u.IsActive })
@@ -30,16 +28,24 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         if (actor.Role != Roles.Admin && actor.Role != Roles.Head)
             throw new AuditException(403, "Forbidden", "Bạn không có quyền xem nhật ký audit.");
 
-        IQueryable<AuditLog> logs = database.AuditLogs.AsNoTracking();
-
+        Guid? headDepartmentId = null;
         if (actor.Role == Roles.Head)
         {
             if (actor.DepartmentId is not Guid deptId)
                 throw new AuditException(403, "Forbidden", "Trưởng bộ môn chưa được gán tổ chuyên môn.");
 
+            headDepartmentId = deptId;
+        }
+
+        var (entityType, action, fromUtc, toUtc, offset) = ValidateQuery(query);
+
+        IQueryable<AuditLog> logs = database.AuditLogs.AsNoTracking();
+
+        if (headDepartmentId is Guid scopedDeptId)
+        {
             // Only entries explicitly scoped to the head's department are visible;
             // departmentless entries (e.g., admin provisioning or legacy unresolvable rows) remain admin-only.
-            logs = logs.Where(log => log.DepartmentId == deptId);
+            logs = logs.Where(log => log.DepartmentId == scopedDeptId);
         }
 
         if (entityType is not null)

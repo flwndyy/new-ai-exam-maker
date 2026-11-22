@@ -73,6 +73,26 @@ public sealed class AuditLogsHttpTests
         Assert.Equal("ValidationFailed", body.GetProperty("code").GetString());
         Assert.True(body.GetProperty("errors").TryGetProperty("entityType", out _));
     }
+
+    [Fact]
+    public async Task Offsetless_dates_default_to_utc_and_unparseable_page_returns_validation_code()
+    {
+        using var app = new AuditLogsTestFactory();
+        app.Directory.User = AuthTestFactory.Teacher with { Role = Roles.Head };
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+
+        using var okResponse = await client.GetAsync("/api/v1/audit-logs?from=2026-11-20&to=2026-11-21");
+        Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
+        Assert.Equal(new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.From);
+        Assert.Equal(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.To);
+
+        using var badPage = await client.GetAsync("/api/v1/audit-logs?page=abc");
+        Assert.Equal(HttpStatusCode.BadRequest, badPage.StatusCode);
+        var body = await badPage.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ValidationFailed", body.GetProperty("code").GetString());
+        Assert.True(body.GetProperty("errors").TryGetProperty("page", out _));
+    }
 }
 
 public sealed class AuditLogsTestFactory : AuthTestFactory
