@@ -11,14 +11,20 @@
 # Safety behavior:
 #   - Non-secret config parameters are create-if-absent by default so live demo overrides
 #     (e.g. switching ModelId from Haiku 4.5 to Sonnet 4.6) are preserved on re-run.
-#     Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults.
-#   - Origin/VerifySecret is NEVER overwritten unless ORIGIN_VERIFY_SECRET is provided
-#     or ROTATE_ORIGIN_SECRET=1 is set explicitly (prevents breaking CloudFront <-> Nginx 403).
+#   - Set OVERWRITE_KEYS="Key1,Key2" (e.g. OVERWRITE_KEYS="AiQuota/JobsPerUserPerDay")
+#     to update specific parameter(s) without resetting anything else.
+#   - Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults; live demo
+#     runtime toggles (Bedrock/ModelId and Bedrock/EnableAnswerVerification) are STILL protected
+#     from bulk reset unless OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS explicitly includes them.
+#   - Origin/VerifySecret is NEVER overwritten unless ROTATE_ORIGIN_SECRET=1 is set,
+#     ORIGIN_VERIFY_SECRET_STDIN=1 is used, or ORIGIN_VERIFY_SECRET is provided (only use
+#     ORIGIN_VERIFY_SECRET env var in a non-shared shell to avoid shell history exposure).
 #
 # Dependencies: aws (CLI v2), jq, openssl (or python3 for random hex fallback).
 #
 # Usage (AWS CloudShell, Linux, macOS, or Git Bash with jq):
 #   ./infra/ssm/setup-ssm.sh
+#   OVERWRITE_KEYS="AiQuota/JobsPerUserPerDay" AI_JOBS_PER_USER_PER_DAY=15 ./infra/ssm/setup-ssm.sh
 #   OVERWRITE_CONFIG=1 ./infra/ssm/setup-ssm.sh
 #   ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh
 
@@ -33,8 +39,11 @@ ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
 
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
+OVERWRITE_BEDROCK_RUNTIME="${OVERWRITE_BEDROCK_RUNTIME:-0}"
+OVERWRITE_KEYS="${OVERWRITE_KEYS:-}"
 ROTATE_ORIGIN_SECRET="${ROTATE_ORIGIN_SECRET:-0}"
 ORIGIN_VERIFY_SECRET="${ORIGIN_VERIFY_SECRET:-}"
+ORIGIN_VERIFY_SECRET_STDIN="${ORIGIN_VERIFY_SECRET_STDIN:-0}"
 
 # Bedrock defaults (docs/context.md §6, §14 & docs/aws-o3-ec2-ssm.md §2.1)
 # Verified against `aws bedrock list-inference-profiles` & `get-foundation-model` in ap-southeast-1:
@@ -116,13 +125,13 @@ if [ -z "$AI_RATE_WINDOW_NONZERO" ]; then
   exit 1
 fi
 
-TMP_JSON_FILE=""
-cleanup_tmp_json() {
-  if [ -n "${TMP_JSON_FILE:-}" ]; then
-    rm -f "$TMP_JSON_FILE"
+TMP_SECRET_DIR=""
+cleanup_tmp_secret() {
+  if [ -n "${TMP_SECRET_DIR:-}" ] && [ -d "${TMP_SECRET_DIR:-}" ]; then
+    rm -rf "$TMP_SECRET_DIR"
   fi
 }
-trap cleanup_tmp_json EXIT
+trap cleanup_tmp_secret EXIT INT TERM
 
 generate_origin_secret() {
   if command -v openssl >/dev/null 2>&1; then
@@ -156,15 +165,44 @@ check_ssm_param_status() {
   return 1
 }
 
+should_overwrite_param() {
+  local name="$1"
+  local suffix="${name#"${SSM_PREFIX}/"}"
+
+  # 1. Explicit per-key opt-in via OVERWRITE_KEYS (comma-separated suffixes or full paths)
+  if [ -n "$OVERWRITE_KEYS" ]; then
+    local item=""
+    IFS=',' read -ra key_items <<<"$OVERWRITE_KEYS"
+    for item in "${key_items[@]}"; do
+      item="$(echo "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      if [ "$item" = "$suffix" ] || [ "$item" = "$name" ]; then
+        return 0
+      fi
+    done
+  fi
+
+  # 2. Bulk overwrite via OVERWRITE_CONFIG=1 protects live demo runtime toggles
+  #    (Bedrock/ModelId and Bedrock/EnableAnswerVerification) unless OVERWRITE_BEDROCK_RUNTIME=1.
+  if [ "$OVERWRITE_CONFIG" = "1" ]; then
+    if [ "$suffix" = "Bedrock/ModelId" ] || [ "$suffix" = "Bedrock/EnableAnswerVerification" ]; then
+      [ "$OVERWRITE_BEDROCK_RUNTIME" = "1" ] && return 0 || return 1
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
 put_string_param() {
   local name="$1"
   local value="$2"
   local desc="$3"
   local status=""
+  local suffix="${name#"${SSM_PREFIX}/"}"
   status="$(check_ssm_param_status "$name")"
 
   if [ "$status" = "exists" ]; then
-    if [ "$OVERWRITE_CONFIG" = "1" ]; then
+    if should_overwrite_param "$name"; then
       aws ssm put-parameter \
         --region "$AWS_REGION" \
         --name "$name" \
@@ -174,8 +212,10 @@ put_string_param() {
         --description "$desc" \
         --overwrite >/dev/null
       echo "    [UPDATED]  ${name} = ${value}"
+    elif [ "$OVERWRITE_CONFIG" = "1" ] && { [ "$suffix" = "Bedrock/ModelId" ] || [ "$suffix" = "Bedrock/EnableAnswerVerification" ]; }; then
+      echo "    [PROTECTED] ${name} (preserved demo/runtime toggle; set OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS='${suffix}' to overwrite)"
     else
-      echo "    [KEPT]     ${name} (already exists; set OVERWRITE_CONFIG=1 to overwrite)"
+      echo "    [KEPT]     ${name} (already exists; set OVERWRITE_CONFIG=1 or OVERWRITE_KEYS='${suffix}' to overwrite)"
     fi
   else
     aws ssm put-parameter \
@@ -190,19 +230,64 @@ put_string_param() {
   fi
 }
 
+# Executes `aws ssm put-parameter` with a JSON payload without exposing the secret in argv (`ps`).
+# - On Linux/macOS/CloudShell: pipes payload via stdin (`file:///dev/stdin`) so zero temp file is written to disk.
+# - On Windows Git Bash (where native aws.exe lacks /dev/stdin): creates an isolated temp dir with `umask 077`
+#   and restricts Windows NTFS ACLs to the current user via `icacls` before writing and immediately deleting.
+put_secret_json_payload() {
+  local payload_json="$1"
+  if [ -e /dev/stdin ] && ! command -v cygpath >/dev/null 2>&1; then
+    aws ssm put-parameter \
+      --region "$AWS_REGION" \
+      --cli-input-json "file:///dev/stdin" \
+      --query "Version" \
+      --output text <<<"$payload_json"
+    return 0
+  fi
+
+  TMP_SECRET_DIR="$(umask 077 && mktemp -d)"
+  if command -v cygpath >/dev/null 2>&1 && command -v icacls >/dev/null 2>&1; then
+    local win_dir=""
+    win_dir="$(cygpath -w "$TMP_SECRET_DIR")"
+    icacls "$win_dir" /inheritance:r /grant:r "${USERNAME:-$(id -un)}:(OI)(CI)F" >/dev/null 2>&1 || true
+  fi
+
+  local tmp_file="${TMP_SECRET_DIR}/payload.json"
+  (umask 077 && printf '%s\n' "$payload_json" >"$tmp_file")
+  local param_file="$tmp_file"
+  if command -v cygpath >/dev/null 2>&1; then
+    param_file="$(cygpath -m "$tmp_file")"
+  fi
+
+  local ver=""
+  ver="$(aws ssm put-parameter \
+    --region "$AWS_REGION" \
+    --cli-input-json "file://${param_file}" \
+    --query "Version" \
+    --output text)"
+  rm -rf "$TMP_SECRET_DIR"
+  TMP_SECRET_DIR=""
+  printf '%s\n' "$ver"
+}
+
 put_origin_secret_param() {
   local name="${SSM_PREFIX}/Origin/VerifySecret"
   local desc="Shared secret for CloudFront X-Origin-Verify header and Nginx origin-secret.conf (O4/O5/O12)"
   local status=""
   status="$(check_ssm_param_status "$name")"
 
-  if [ "$status" = "exists" ] && [ -z "$ORIGIN_VERIFY_SECRET" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
+  if [ "$status" = "exists" ] && [ -z "$ORIGIN_VERIFY_SECRET" ] && [ "$ORIGIN_VERIFY_SECRET_STDIN" != "1" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
     echo "    [KEPT]     ${name} (SecureString already exists; preserving CloudFront <-> Nginx secret)"
     return 0
   fi
 
   local secret_val="$ORIGIN_VERIFY_SECRET"
-  if [ -z "$secret_val" ]; then
+  if [ "$ORIGIN_VERIFY_SECRET_STDIN" = "1" ]; then
+    IFS= read -r secret_val
+    secret_val="$(printf '%s' "$secret_val" | tr -d '\r\n')"
+  elif [ -n "$secret_val" ]; then
+    echo "    [WARN]     ORIGIN_VERIFY_SECRET was passed via environment variable; ensure this is a non-shared shell (prefer ROTATE_ORIGIN_SECRET=1 or ORIGIN_VERIFY_SECRET_STDIN=1)." >&2
+  else
     secret_val="$(generate_origin_secret)"
   fi
 
@@ -211,19 +296,12 @@ put_origin_secret_param() {
     exit 1
   fi
 
-  # Write parameter payload via temporary file (0600) so the secret is never exposed in process argv (`ps`).
-  # Convert POSIX path via `cygpath -m` on Git Bash (Windows) because MSYS_NO_PATHCONV=1 disables auto-conversion for aws.exe.
-  TMP_JSON_FILE="$(mktemp)"
-  chmod 600 "$TMP_JSON_FILE"
-  local param_file="$TMP_JSON_FILE"
-  if command -v cygpath >/dev/null 2>&1; then
-    param_file="$(cygpath -m "$TMP_JSON_FILE")"
-  fi
-
+  local payload_json=""
+  local put_ver=""
   if [ "$status" = "exists" ]; then
     local prev_ver=""
     prev_ver="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --query "Parameter.Version" --output text)"
-    jq -nc \
+    payload_json="$(jq -nc \
       --arg name "$name" \
       --arg val "$secret_val" \
       --arg desc "$desc" \
@@ -235,18 +313,11 @@ put_origin_secret_param() {
         Value: $val,
         Description: $desc,
         Overwrite: true
-      }' >"$TMP_JSON_FILE"
-    local put_ver=""
-    put_ver="$(aws ssm put-parameter \
-      --region "$AWS_REGION" \
-      --cli-input-json "file://${param_file}" \
-      --query "Version" \
-      --output text)"
-    rm -f "$TMP_JSON_FILE"
-    TMP_JSON_FILE=""
+      }')"
+    put_ver="$(put_secret_json_payload "$payload_json")"
     echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${put_ver} via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
-    jq -nc \
+    payload_json="$(jq -nc \
       --arg name "$name" \
       --arg val "$secret_val" \
       --arg desc "$desc" \
@@ -263,21 +334,14 @@ put_origin_secret_param() {
           {Key: "Environment", Value: $env},
           {Key: "Task", Value: "O12"}
         ]
-      }' >"$TMP_JSON_FILE"
-    local put_ver=""
-    put_ver="$(aws ssm put-parameter \
-      --region "$AWS_REGION" \
-      --cli-input-json "file://${param_file}" \
-      --query "Version" \
-      --output text)"
-    rm -f "$TMP_JSON_FILE"
-    TMP_JSON_FILE=""
+      }')"
+    put_ver="$(put_secret_json_payload "$payload_json")"
     echo "    [CREATED]  ${name} (SecureString version ${put_ver} via alias/aws/ssm; value not printed)"
   fi
 }
 
 echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | SSM Prefix: ${SSM_PREFIX}"
-echo "==> Mode: OVERWRITE_CONFIG=${OVERWRITE_CONFIG}, ROTATE_ORIGIN_SECRET=${ROTATE_ORIGIN_SECRET}"
+echo "==> Mode: OVERWRITE_CONFIG=${OVERWRITE_CONFIG}, OVERWRITE_BEDROCK_RUNTIME=${OVERWRITE_BEDROCK_RUNTIME}, OVERWRITE_KEYS='${OVERWRITE_KEYS}', ROTATE_ORIGIN_SECRET=${ROTATE_ORIGIN_SECRET}"
 
 echo ""
 echo "==> 1. AWS Core parameters..."

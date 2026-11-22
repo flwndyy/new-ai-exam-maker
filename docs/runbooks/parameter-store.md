@@ -63,8 +63,10 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 ```
 
 **Hành vi an toàn của script:**
-- Các tham số cấu hình (`Bedrock/*`, `AiQuota/*`, `AiRateLimit/*`, `AWS/Region`, `CloudWatch/*`) mặc định là **create-if-absent** để tránh vô tình ghi đè khi team đã chuyển sang cấu hình demo (ví dụ đã bật Sonnet 4.6). Muốn đồng bộ lại theo mặc định script, chạy `OVERWRITE_CONFIG=1 ./infra/ssm/setup-ssm.sh`.
-- `/exammaker/dev/Origin/VerifySecret` **không bao giờ bị ghi đè** ở lần chạy lại bình thường (tránh làm lệch secret giữa CloudFront và Nginx gây lỗi `403`). Chỉ xoay vòng khi truyền rõ `ROTATE_ORIGIN_SECRET=1` hoặc `ORIGIN_VERIFY_SECRET=<value>`.
+- Các tham số cấu hình (`Bedrock/*`, `AiQuota/*`, `AiRateLimit/*`, `AWS/Region`, `CloudWatch/*`) mặc định là **create-if-absent** để tránh vô tình ghi đè khi team đã chuyển sang cấu hình demo (ví dụ đã bật Sonnet 4.6).
+  - Muốn ghi đè chỉ một hoặc vài tham số cụ thể (ví dụ chỉ đổi quota mà không đụng tới model), dùng `OVERWRITE_KEYS="AiQuota/JobsPerUserPerDay" AI_JOBS_PER_USER_PER_DAY=20 ./infra/ssm/setup-ssm.sh`.
+  - Khi chạy `OVERWRITE_CONFIG=1 ./infra/ssm/setup-ssm.sh` để đồng bộ hàng loạt về mặc định script, hai tham số điều khiển runtime demo là `Bedrock/ModelId` và `Bedrock/EnableAnswerVerification` **vẫn được bảo vệ không bị reset** (trừ khi bật thêm `OVERWRITE_BEDROCK_RUNTIME=1` hoặc chỉ định rõ trong `OVERWRITE_KEYS`).
+- `/exammaker/dev/Origin/VerifySecret` **không bao giờ bị ghi đè** ở lần chạy lại bình thường (tránh làm lệch secret giữa CloudFront và Nginx gây lỗi `403`). Chỉ xoay vòng khi truyền rõ `ROTATE_ORIGIN_SECRET=1` (khuyến nghị: tự sinh secret trong bộ nhớ, không lưu lại trong shell history). Chỉ dùng biến môi trường `ORIGIN_VERIFY_SECRET=<value>` trên shell cá nhân không dùng chung (hoặc đọc qua stdin với `ORIGIN_VERIFY_SECRET_STDIN=1`) để tránh lộ secret trong lịch sử lệnh.
 
 ### 3.2 Xác minh toàn bộ cây tham số (O9 + O10 + O11 + O12)
 
@@ -120,19 +122,23 @@ aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/Enab
 
 ### 4.3 Lấy `Origin/VerifySecret` để cấu hình Nginx (O4) & CloudFront (O5)
 
-Trên EC2 (qua SSM Session Manager), lấy secret trực tiếp từ Parameter Store để ghi vào `/etc/exammaker/origin-secret.conf` (không sao chép qua chat):
+Trên EC2 (qua SSM Session Manager), lấy secret trực tiếp từ Parameter Store để ghi vào `/etc/exammaker/origin-secret.conf` (không sao chép qua chat; dùng `if/else` không có `exit` để không làm đóng phiên SSM tương tác):
 
 ```bash
 SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --with-decryption --query Parameter.Value --output text)"
-sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
-sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<EOF
+if [ -z "$SECRET" ]; then
+  echo "ERROR: Cannot read /exammaker/dev/Origin/VerifySecret from SSM" >&2
+else
+  sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
+  sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<EOF
 map \$http_x_origin_verify \$origin_header_valid {
     default 0;
     "${SECRET}" 1;
 }
 EOF
+  sudo nginx -t && sudo systemctl reload nginx
+fi
 unset SECRET
-sudo nginx -t && sudo systemctl reload nginx
 ```
 
 > **Quy trình xoay vòng secret không downtime (3 bước — đọc secret đang chạy trực tiếp từ Nginx trên EC2):**
@@ -142,17 +148,18 @@ sudo nginx -t && sudo systemctl reload nginx
 >    ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh
 >    ```
 > 2. **Trên EC2 (qua SSM Session Manager), trích xuất secret đang dùng từ file cấu hình Nginx hiện tại và nạp kèm secret mới từ SSM:**
->    *Lưu ý quan trọng:* Không suy đoán secret cũ theo `Version - 1` trong SSM (vì nếu bước 1 vô tình chạy lặp lại thì `Version - 1` chỉ là secret rác chưa từng được cấu hình ở CloudFront/Nginx, dẫn đến 403 khi CloudFront vẫn gửi secret cũ). Nguồn chân lý duy nhất của secret đang phục vụ chính là cấu hình Nginx đang có trên đĩa:
+>    *Lưu ý quan trọng:* File `/etc/exammaker/origin-secret.conf` có quyền `root:nginx 0640`, còn phiên SSM Session Manager chạy dưới `ssm-user`, nên bắt buộc đọc bằng `sudo sed`. Không dùng `exit 1` trong snippet để tránh làm đóng phiên shell tương tác nếu có lỗi, và không suy đoán secret cũ theo `Version - 1` trong SSM:
 >    ```bash
->    # Đọc secret đang hoạt động từ file cấu hình Nginx trên đĩa
->    OLD_SECRET="$(sed -n 's/^[[:space:]]*"\([^"]\{32,\}\)"[[:space:]]*1;.*/\1/p' /etc/exammaker/origin-secret.conf | head -n 1)"
->    [ -n "$OLD_SECRET" ] || { echo "ERROR: Cannot extract currently active secret from /etc/exammaker/origin-secret.conf" >&2; exit 1; }
->
+>    # Đọc secret đang hoạt động từ file cấu hình Nginx trên đĩa (cần sudo vì file thuộc root:nginx 0640)
+>    OLD_SECRET="$(sudo sed -n 's/^[[:space:]]*"\([^"]\{32,\}\)"[[:space:]]*1;.*/\1/p' /etc/exammaker/origin-secret.conf | head -n 1)"
 >    # Đọc secret mới nhất vừa sinh từ SSM Parameter Store
 >    NEW_SECRET="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Origin/VerifySecret --with-decryption --query Parameter.Value --output text)"
->    [ -n "$NEW_SECRET" ] || { echo "ERROR: Cannot read new secret from SSM" >&2; exit 1; }
 >
->    if [ "$OLD_SECRET" = "$NEW_SECRET" ]; then
+>    if [ -z "$OLD_SECRET" ]; then
+>      echo "ERROR: Cannot extract currently active secret from /etc/exammaker/origin-secret.conf" >&2
+>    elif [ -z "$NEW_SECRET" ]; then
+>      echo "ERROR: Cannot read new secret from SSM" >&2
+>    elif [ "$OLD_SECRET" = "$NEW_SECRET" ]; then
 >      echo "INFO: Active secret in Nginx already matches latest SSM secret. No dual-secret reload needed."
 >    else
 >      sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf
