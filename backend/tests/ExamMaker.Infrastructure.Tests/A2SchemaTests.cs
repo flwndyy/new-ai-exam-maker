@@ -72,21 +72,20 @@ public class A2SchemaTests
     }
 
     [Fact]
-    public void AuditLog_factory_and_clean_note_handle_department_snapshots_and_move_markers()
+    public void AuditLog_factory_handles_department_snapshots_and_secondary_move_flags()
     {
         var deptId = Guid.NewGuid();
         var actorId = Guid.NewGuid();
         var entityId = Guid.NewGuid();
-        var log = AuditLog.Create(actorId, "Subject", entityId, deptId, "UpdateSubject", note: "Before: A; after: B" + AuditLog.SecondaryMoveSuffix);
+        var log = AuditLog.Create(actorId, "Subject", entityId, deptId, "UpdateSubject", note: "Before: A; after: B", isSecondary: true);
 
         Assert.NotEqual(Guid.Empty, log.Id);
         Assert.Equal(actorId, log.ActorId);
         Assert.Equal("Subject", log.EntityType);
         Assert.Equal(entityId, log.EntityId);
         Assert.Equal(deptId, log.DepartmentId);
+        Assert.True(log.IsSecondary);
         Assert.Equal("UpdateSubject", log.Action);
-        Assert.Equal("Before: A; after: B", AuditLog.CleanNote(log.Note));
-        Assert.Equal("Before: A; after: B", AuditLog.CleanNote("Before: A; after: B"));
-        Assert.Null(AuditLog.CleanNote(null));
+        Assert.Equal("Before: A; after: B", log.Note);
     }
 }

@@ -63,7 +63,7 @@ erDiagram
 
 `audit_logs.actor_id` xác định người thao tác; NULL là hệ thống và note bắt buộc nêu tác vụ.
 `entity_type` và `entity_id` xác định đối tượng bị tác động.
-`department_id` (nullable, không FK) lưu snapshot tổ chuyên môn tại thời điểm ghi (chuyển giữa hai tổ khác NULL ghi hai dòng cho tổ cũ và tổ mới, dòng thứ hai đánh dấu để Admin không thấy trùng; lịch sử cũ không resolve được từ thực thể/dòng cùng thực thể giữ NULL và chỉ Admin xem được; mọi nơi ghi audit mới phải set `DepartmentId` qua `AuditLog.Create`).
+`department_id` (nullable, không FK) lưu snapshot tổ chuyên môn tại thời điểm ghi (chuyển giữa hai tổ khác NULL ghi hai dòng cho tổ cũ và tổ mới, dòng thứ hai đặt `is_secondary = true` để Admin không thấy trùng; lịch sử cũ trước migration của thực thể có thể đổi tổ hoặc đã xóa không resolve được tổ giữ NULL và chỉ Admin xem được; mọi nơi ghi audit mới phải set `DepartmentId` qua `AuditLog.Create`).
 Mỗi lần đổi trạng thái lưu hành động, trạng thái trước,
 trạng thái sau, ghi chú và thời điểm.
 
@@ -98,6 +98,6 @@ trạng thái sau, ghi chú và thời điểm.
 | `exam_version_questions` | PK ghép `(exam_version_id, sort_order)`; unique `(exam_version_id, source_question_id)`; FK `exam_version_id → exam_versions.id`, `source_question_id → questions.id` | `points`, `source_revision`, `type`, `difficulty`, `stem_snapshot`, `payload_snapshot`, `explanation_snapshot` |
 | `ai_generation_jobs` | PK `id`; FK `requested_by → users.id` | `params`, `status`, `attempt`, `max_attempts`, `lease_expires_at`, `error_code`, `error_message`, `model_id`, `prompt_version`, `input_tokens`, `output_tokens`, `created_at`, `started_at`, `finished_at` |
 | `ai_usage_daily` | PK ghép `(user_id, date)`; FK `user_id → users.id` | `jobs`, `tokens` |
-| `audit_logs` | PK `id`; FK `actor_id → users.id` | `entity_type`, `entity_id`, `department_id`, `action`, `from_status`, `to_status`, `note`, `created_at` |
+| `audit_logs` | PK `id`; FK `actor_id → users.id` | `entity_type`, `entity_id`, `department_id`, `is_secondary`, `action`, `from_status`, `to_status`, `note`, `created_at` |
 
 Chi tiết schema A2 nằm tại mục 8.1 trong `docs/context.md`. Snapshot được phép NULL khi Draft/Rejected; Application chụp nội dung khi Submit, trigger kiểm tra đầy đủ snapshot, nguồn Approved, tổng điểm và khóa nội dung đã đóng băng. Composite FK bảo đảm chương/môn/khối/tổ nhất quán. Đổi thứ tự câu bằng xóa/chèn lại dưới khóa version trong transaction; xóa bộ/câu phải gỡ question_set_items trước (FK RESTRICT). Các bảng `exams`, `exam_versions` có thêm `created_at`, `updated_at` theo API contract.

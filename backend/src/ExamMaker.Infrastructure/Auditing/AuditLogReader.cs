@@ -50,8 +50,8 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
         else
         {
             // Dual-department move events emit a primary row for the source department and a secondary row
-            // tagged with SecondaryMoveSuffix for the target department; administrators see the event once.
-            logs = logs.Where(log => log.Note == null || !log.Note.EndsWith(AuditLog.SecondaryMoveSuffix));
+            // (IsSecondary = true) for the target department; administrators see the event once.
+            logs = logs.Where(log => !log.IsSecondary);
         }
 
         if (entityType is not null)
@@ -88,7 +88,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
                 x.Action,
                 x.FromStatus,
                 x.ToStatus,
-                AuditLog.CleanNote(x.Note),
+                x.Note,
                 x.CreatedAt))
             .ToListAsync(cancellationToken);
 

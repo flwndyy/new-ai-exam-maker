@@ -2973,7 +2973,7 @@ export interface operations {
                 action?: string;
                 /** @description Từ thời điểm (UTC, gồm; chuỗi chỉ có ngày `YYYY-MM-DD` tính từ đầu ngày `00:00:00Z`). */
                 from?: string;
-                /** @description Đến thời điểm (UTC, gồm; cho phép `from == to`, chuỗi chỉ có ngày `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`). */
+                /** @description Đến thời điểm (UTC, gồm; cho phép `from == to`, chuỗi chỉ có ngày `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`, chuỗi ngày giờ không có phần thập phân giây tính đến hết giây `.9999999Z`). */
                 to?: string;
             };
             header?: never;

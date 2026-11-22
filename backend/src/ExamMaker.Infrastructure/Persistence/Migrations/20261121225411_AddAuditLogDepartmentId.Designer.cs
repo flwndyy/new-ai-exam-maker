@@ -181,6 +181,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("from_status");
 
+                    b.Property<bool>("IsSecondary")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_secondary");
+
                     b.Property<string>("Note")
                         .HasColumnType("text")
                         .HasColumnName("note");
@@ -194,6 +200,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ActorId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_actor_created");
+
+                    b.HasIndex("CreatedAt", "Id")
+                        .HasDatabaseName("ix_audit_logs_created_id");
 
                     b.HasIndex("DepartmentId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_department_created");

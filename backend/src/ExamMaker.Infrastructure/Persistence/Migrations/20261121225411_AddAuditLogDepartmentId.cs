@@ -17,13 +17,26 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                 type: "uuid",
                 nullable: true);
 
+            migrationBuilder.AddColumn<bool>(
+                name: "is_secondary",
+                table: "audit_logs",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
             migrationBuilder.CreateIndex(
                 name: "ix_audit_logs_department_created",
                 table: "audit_logs",
                 columns: new[] { "department_id", "created_at" });
 
-            // Backfill department_id for existing audit rows from target entities, falling back to sibling rows for deleted entities.
-            // Unresolvable legacy rows (where the entity was already deleted before upgrade) remain NULL and visible only to administrators.
+            migrationBuilder.CreateIndex(
+                name: "ix_audit_logs_created_id",
+                table: "audit_logs",
+                columns: new[] { "created_at", "id" });
+
+            // Backfill department_id only for entities with an immutable department (Question, Exam, ExamVersion, Department).
+            // Entities whose department can change over time (User, Subject, Topic, QuestionSet, AiJob) or pre-deleted
+            // entities without an existing department snapshot remain NULL (admin-only) so historical events are never misattributed.
             migrationBuilder.Sql("""
                 UPDATE audit_logs AS a
                 SET department_id = resolved.department_id
@@ -38,27 +51,7 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                                 JOIN exams e ON e.id = v.exam_id
                                 WHERE v.id = a2.entity_id
                             )
-                            WHEN 'QuestionSet' THEN (
-                                SELECT u.department_id
-                                FROM question_sets qs
-                                JOIN users u ON u.id = qs.created_by
-                                WHERE qs.id = a2.entity_id
-                            )
-                            WHEN 'User' THEN (SELECT u.department_id FROM users u WHERE u.id = a2.entity_id)
-                            WHEN 'AiJob' THEN (
-                                SELECT u.department_id
-                                FROM ai_generation_jobs j
-                                JOIN users u ON u.id = j.requested_by
-                                WHERE j.id = a2.entity_id
-                            )
                             WHEN 'Department' THEN (SELECT d.id FROM departments d WHERE d.id = a2.entity_id)
-                            WHEN 'Subject' THEN (SELECT s.department_id FROM subjects s WHERE s.id = a2.entity_id)
-                            WHEN 'Topic' THEN (
-                                SELECT s.department_id
-                                FROM topics t
-                                JOIN subjects s ON s.id = t.subject_id
-                                WHERE t.id = a2.entity_id
-                            )
                         END AS department_id
                     FROM audit_logs a2
                     WHERE a2.department_id IS NULL
@@ -75,6 +68,7 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         department_id
                     FROM audit_logs
                     WHERE department_id IS NOT NULL
+                      AND entity_type IN ('Question', 'Exam', 'ExamVersion', 'Department')
                     ORDER BY entity_type, entity_id, created_at DESC, id DESC
                 ) AS sibling
                 WHERE a.department_id IS NULL
@@ -87,7 +81,15 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropIndex(
+                name: "ix_audit_logs_created_id",
+                table: "audit_logs");
+
+            migrationBuilder.DropIndex(
                 name: "ix_audit_logs_department_created",
+                table: "audit_logs");
+
+            migrationBuilder.DropColumn(
+                name: "is_secondary",
                 table: "audit_logs");
 
             migrationBuilder.DropColumn(

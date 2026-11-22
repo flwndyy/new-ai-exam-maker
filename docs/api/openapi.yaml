@@ -1037,7 +1037,7 @@ paths:
           schema: { type: string, format: date-time }
         - name: to
           in: query
-          description: Đến thời điểm (UTC, gồm; cho phép `from == to`, chuỗi chỉ có ngày `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`).
+          description: Đến thời điểm (UTC, gồm; cho phép `from == to`, chuỗi chỉ có ngày `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`, chuỗi ngày giờ không có phần thập phân giây tính đến hết giây `.9999999Z`).
           schema: { type: string, format: date-time }
       responses:
         '200':

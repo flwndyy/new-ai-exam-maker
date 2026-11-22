@@ -274,7 +274,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
     }
 
     [PostgresFact]
-    public async Task Migration_backfills_user_logs_from_current_user_department()
+    public async Task Migration_leaves_mutable_department_entity_logs_null_so_prior_department_history_is_never_leaked()
     {
         await using var db = fixture.CreateContext();
         var migrator = db.GetService<IMigrator>();
@@ -283,8 +283,12 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var localAdmin = Guid.NewGuid();
         var localHeadB = Guid.NewGuid();
         var movedUser = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var topicId = Guid.NewGuid();
         var userLogId = Guid.NewGuid();
         var adminLogId = Guid.NewGuid();
+        var subjectLogId = Guid.NewGuid();
+        var topicLogId = Guid.NewGuid();
         var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
 
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -294,45 +298,6 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
                 ({localHeadB}, {"sub-headb-" + localHeadB}, {"headb-" + localHeadB + "@example.invalid"}, {"Local Head B"}, {Roles.Head}, {DeptB}, true, {t0}),
                 ({movedUser}, {"sub-moved-" + movedUser}, {"moved-" + movedUser + "@example.invalid"}, {"Moved User"}, {Roles.Teacher}, {DeptB}, true, {t0});
 
-            INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
-            VALUES
-                ({userLogId}, {localAdmin}, 'User', {movedUser}, 'CreateUser', NULL, 'Active', 'Administrator provisioned an invited account.', {t0}),
-                ({adminLogId}, {localAdmin}, 'User', {localAdmin}, 'CreateUser', NULL, 'Active', 'Bootstrap administrator CLI.', {t0});
-            """);
-
-        await db.Database.MigrateAsync();
-
-        var reader = new AuditLogReader(db);
-        var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(EntityType: "User"), CancellationToken.None);
-        Assert.Contains(headBPage.Items, x => x.Id == userLogId);
-        Assert.DoesNotContain(headBPage.Items, x => x.Id == adminLogId);
-
-        var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(EntityType: "User"), CancellationToken.None);
-        Assert.Contains(adminPage.Items, x => x.Id == userLogId);
-        Assert.Contains(adminPage.Items, x => x.Id == adminLogId);
-    }
-
-    [PostgresFact]
-    public async Task Migration_backfills_subject_and_topic_logs_from_current_department()
-    {
-        await using var db = fixture.CreateContext();
-        var migrator = db.GetService<IMigrator>();
-        await migrator.MigrateAsync("20261120071750_AddUserAdministration");
-
-        var localAdmin = Guid.NewGuid();
-        var localHeadB = Guid.NewGuid();
-        var subjectId = Guid.NewGuid();
-        var topicId = Guid.NewGuid();
-        var subjectLogId = Guid.NewGuid();
-        var topicLogId = Guid.NewGuid();
-        var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
-
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active, created_at)
-            VALUES
-                ({localAdmin}, {"sub-admin-" + localAdmin}, {"admin-" + localAdmin + "@example.invalid"}, {"Local Admin"}, {Roles.Admin}, NULL, true, {t0}),
-                ({localHeadB}, {"sub-headb-" + localHeadB}, {"headb-" + localHeadB + "@example.invalid"}, {"Local Head B"}, {Roles.Head}, {DeptB}, true, {t0});
-
             INSERT INTO subjects (id, name, department_id)
             VALUES ({subjectId}, {"Subject " + subjectId}, {DeptB});
 
@@ -341,6 +306,8 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
 
             INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
             VALUES
+                ({userLogId}, {localAdmin}, 'User', {movedUser}, 'CreateUser', NULL, 'Active', 'Administrator provisioned an invited account.', {t0}),
+                ({adminLogId}, {localAdmin}, 'User', {localAdmin}, 'CreateUser', NULL, 'Active', 'Bootstrap administrator CLI.', {t0}),
                 ({subjectLogId}, {localAdmin}, 'Subject', {subjectId}, 'CreateSubject', NULL, NULL, 'Before: (new); after: Subject', {t0}),
                 ({topicLogId}, {localAdmin}, 'Topic', {topicId}, 'CreateTopic', NULL, NULL, 'Before: (new); after: Topic', {t0.AddMinutes(1)});
             """);
@@ -348,11 +315,16 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         await db.Database.MigrateAsync();
 
         var reader = new AuditLogReader(db);
+        // Because User, Subject, and Topic can move across departments over time, legacy pre-migration rows stay NULL (admin-only).
         var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(), CancellationToken.None);
-        Assert.Contains(headBPage.Items, x => x.Id == subjectLogId);
-        Assert.Contains(headBPage.Items, x => x.Id == topicLogId);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == userLogId);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == adminLogId);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == subjectLogId);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == topicLogId);
 
         var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(), CancellationToken.None);
+        Assert.Contains(adminPage.Items, x => x.Id == userLogId);
+        Assert.Contains(adminPage.Items, x => x.Id == adminLogId);
         Assert.Contains(adminPage.Items, x => x.Id == subjectLogId);
         Assert.Contains(adminPage.Items, x => x.Id == topicLogId);
     }
@@ -449,8 +421,17 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         Assert.Equal(1, headASubjectLogs.TotalItems);
         Assert.Equal(1, headBSubjectLogs.TotalItems);
         Assert.Equal(1, adminSubjectLogs.TotalItems);
-        Assert.DoesNotContain(AuditLog.SecondaryMoveSuffix, headBSubjectLogs.Items[0].Note);
         Assert.Equal(headASubjectLogs.Items[0].Note, headBSubjectLogs.Items[0].Note);
+
+        // User-entered notes (such as ReviewNote ending with "[move-target]") are never hidden or truncated.
+        var trickyLog = AuditLog.Create(headA, "ExamVersion", Guid.NewGuid(), DeptA, "RejectExamVersion", "Submitted", "Rejected", "Sai đáp án [move-target]");
+        db.AuditLogs.Add(trickyLog);
+        await db.SaveChangesAsync();
+        var adminRejectLogs = await reader.ListAsync(admin, new AuditLogQuery(EntityId: trickyLog.EntityId), CancellationToken.None);
+        var headARejectLogs = await reader.ListAsync(headA, new AuditLogQuery(EntityId: trickyLog.EntityId), CancellationToken.None);
+        Assert.Equal(1, adminRejectLogs.TotalItems);
+        Assert.Equal("Sai đáp án [move-target]", adminRejectLogs.Items[0].Note);
+        Assert.Equal("Sai đáp án [move-target]", headARejectLogs.Items[0].Note);
 
         // User move DeptA -> DeptB -> NULL (admin) -> DeptA via UserManagementService.
         var cognito = new FakeCognitoUserAdmin();

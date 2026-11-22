@@ -57,8 +57,20 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var value))
+        {
+            if (endOfDayIfDateOnly && !HasFractionalSeconds(trimmed))
+                return value.AddTicks(TimeSpan.TicksPerSecond - 1);
             return value;
+        }
         throw new AuditException(400, "ValidationFailed", message, field);
+    }
+
+    /// <summary>Detect whether a timestamp string explicitly specifies fractional seconds after the time component.</summary>
+    private static bool HasFractionalSeconds(string trimmed)
+    {
+        var timeSeparator = trimmed.IndexOfAny(['T', 't', ' ']);
+        if (timeSeparator < 0) return false;
+        return trimmed.AsSpan(timeSeparator + 1).IndexOfAny(['.', ',']) >= 0;
     }
 }
 

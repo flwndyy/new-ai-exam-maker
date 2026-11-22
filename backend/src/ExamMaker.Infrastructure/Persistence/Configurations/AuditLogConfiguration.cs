@@ -22,6 +22,7 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.Property(x => x.EntityType).HasColumnName("entity_type").IsRequired();
         builder.Property(x => x.EntityId).HasColumnName("entity_id");
         builder.Property(x => x.DepartmentId).HasColumnName("department_id");
+        builder.Property(x => x.IsSecondary).HasColumnName("is_secondary").HasDefaultValue(false);
         builder.Property(x => x.Action).HasColumnName("action").IsRequired();
         builder.Property(x => x.FromStatus).HasColumnName("from_status");
         builder.Property(x => x.ToStatus).HasColumnName("to_status");
@@ -35,5 +36,7 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
             .HasDatabaseName("ix_audit_logs_actor_created");
         builder.HasIndex(x => new { x.DepartmentId, x.CreatedAt })
             .HasDatabaseName("ix_audit_logs_department_created");
+        builder.HasIndex(x => new { x.CreatedAt, x.Id })
+            .HasDatabaseName("ix_audit_logs_created_id");
     }
 }

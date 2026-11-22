@@ -214,7 +214,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             id,
             departmentId,
             (created ? "Create" : "Update") + entityType,
-            note: $"Before: {before ?? "(new)"}; after: {after}" + (secondaryMove ? AuditLog.SecondaryMoveSuffix : "")));
+            note: $"Before: {before ?? "(new)"}; after: {after}",
+            isSecondary: secondaryMove));
 
     /// <summary>Return a safe not-found response for missing update and delete targets.</summary>
     private static CatalogException Missing() => new(404, "NotFound", "Không tìm thấy danh mục.");

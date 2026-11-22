@@ -183,7 +183,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
             {
                 Audit(actorId, user.Id, user.DepartmentId, "UpdateUser", fromStatus, toStatus, auditNote);
                 if (input.DepartmentId is Guid newDeptId && newDeptId != user.DepartmentId)
-                    Audit(actorId, user.Id, newDeptId, "UpdateUser", fromStatus, toStatus, auditNote + AuditLog.SecondaryMoveSuffix);
+                    Audit(actorId, user.Id, newDeptId, "UpdateUser", fromStatus, toStatus, auditNote, isSecondary: true);
             }
             user.Email = input.Email;
             user.FullName = input.FullName;
@@ -304,8 +304,8 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
         user.Role, user.DepartmentId, user.IsActive, user.CreatedAt);
 
     /// <summary>Persist user-management audit events in the same database transaction as the local change.</summary>
-    private void Audit(Guid? actorId, Guid id, Guid? departmentId, string action, string? from, string to, string note) =>
-        database.AuditLogs.Add(AuditLog.Create(actorId, "User", id, departmentId, action, from, to, note));
+    private void Audit(Guid? actorId, Guid id, Guid? departmentId, string action, string? from, string to, string note, bool isSecondary = false) =>
+        database.AuditLogs.Add(AuditLog.Create(actorId, "User", id, departmentId, action, from, to, note, isSecondary: isSecondary));
     private static UserOperationException Invalid() => new(400, "ValidationFailed", "Thông tin người dùng không hợp lệ.");
     private static UserOperationException Missing() => new(404, "NotFound", "Không tìm thấy người dùng.");
 }
