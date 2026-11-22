@@ -45,6 +45,16 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
         throw new AuditException(400, "ValidationFailed", message, field);
     }
 
+    private static readonly string[] IsoDateTimeFormats =
+    [
+        "yyyy-MM-dd'T'HH:mm:ssK",
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",
+        "yyyy-MM-dd't'HH:mm:ssK",
+        "yyyy-MM-dd't'HH:mm:ss.FFFFFFFK",
+        "yyyy-MM-dd'T'HH:mmK",
+        "yyyy-MM-dd't'HH:mmK"
+    ];
+
     private static DateTimeOffset? ParseOptionalUtcDateTimeOffset(string? raw, string field, string message, bool endOfDayIfDateOnly)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
@@ -54,12 +64,10 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
             var time = endOfDayIfDateOnly ? TimeOnly.MaxValue : TimeOnly.MinValue;
             return new DateTimeOffset(dateOnly.ToDateTime(time, DateTimeKind.Utc), TimeSpan.Zero);
         }
-        // Require an explicit ISO-8601 time separator so non-canonical date strings (e.g., 2026-1-1) are rejected.
-        if (trimmed.IndexOfAny(['T', 't']) < 0)
-            throw new AuditException(400, "ValidationFailed", message, field);
-        // Treat timestamps without an explicit offset as UTC rather than server local time.
-        if (DateTimeOffset.TryParse(
+        // Strictly accept only canonical ISO-8601 date-time formats; treat timestamps without an explicit offset as UTC.
+        if (DateTimeOffset.TryParseExact(
                 trimmed,
+                IsoDateTimeFormats,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var value))

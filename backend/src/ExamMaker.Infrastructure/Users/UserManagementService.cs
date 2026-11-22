@@ -171,7 +171,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
             var permissionChanges = new List<string>();
             if (user.Role != input.Role) permissionChanges.Add($"role {user.Role}->{input.Role}");
             if (user.DepartmentId != input.DepartmentId)
-                permissionChanges.Add($"department {user.DepartmentId?.ToString() ?? "none"}->{input.DepartmentId?.ToString() ?? "none"}");
+                permissionChanges.Add(AuditLog.FormatUserDepartmentChange(user.DepartmentId, input.DepartmentId));
             var auditNote = permissionChanges.Count == 0 ? "User profile and managed role synchronized." : string.Join("; ", permissionChanges);
             var fromStatus = user.IsActive ? "Active" : "Inactive";
             var toStatus = active ? "Active" : "Inactive";

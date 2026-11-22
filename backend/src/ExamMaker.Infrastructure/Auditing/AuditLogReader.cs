@@ -94,24 +94,30 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
 
         if (headDepartmentId is Guid redactDeptId)
         {
+            var ownSubjectIds = await database.Subjects.AsNoTracking()
+                .Where(s => s.DepartmentId == redactDeptId)
+                .Select(s => s.Id)
+                .ToListAsync(cancellationToken);
+            var allowedSubjects = ownSubjectIds.Select(id => id.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             items = items
-                .Select(item => item with { Note = RedactOtherDepartmentGuids(item.Note, redactDeptId) })
+                .Select(item => item with { Note = RedactCrossDepartmentTokens(item.Note, redactDeptId, allowedSubjects) })
                 .ToList();
         }
 
         return new AuditLogPage(query.Page, query.PageSize, totalItems, totalPages, items);
     }
 
-    /// <summary>Mask other departments' identifiers in department-transfer audit notes when viewed by a department head.</summary>
-    private static string? RedactOtherDepartmentGuids(string? note, Guid headDepartmentId)
+    /// <summary>Mask other departments' and other departments' subjects' identifiers in audit notes when viewed by a department head.</summary>
+    public static string? RedactCrossDepartmentTokens(string? note, Guid headDepartmentId, IReadOnlySet<string>? ownSubjectIds = null)
     {
         if (string.IsNullOrEmpty(note)) return note;
         var own = headDepartmentId.ToString();
 
-        // UserManagement format: "department <old> -> <new>" or "department <old>-><new>"
+        // UserManagement format: AuditLog.UserDepartmentMovePrefix + "<old>-><new>"
         var result = System.Text.RegularExpressions.Regex.Replace(
             note,
-            @"(?<=\bdepartment\s+)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|none)->([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|none)",
+            $@"(?<=\b{System.Text.RegularExpressions.Regex.Escape(AuditLog.UserDepartmentMovePrefix)})([0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}|none)->([0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}|none)",
             match =>
             {
                 var left = match.Groups[1].Value;
@@ -121,11 +127,27 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
                 return $"{safeLeft}->{safeRight}";
             });
 
-        // CatalogManagement format: "department=<guid>"
+        // CatalogManagement department format: AuditLog.CatalogDepartmentKey + "<guid>"
         result = System.Text.RegularExpressions.Regex.Replace(
             result,
-            @"(?<=\bdepartment=)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+            $@"(?<=\b{System.Text.RegularExpressions.Regex.Escape(AuditLog.CatalogDepartmentKey)})([0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}})",
             match => match.Value.Equals(own, StringComparison.OrdinalIgnoreCase) ? match.Value : "other");
+
+        // CatalogManagement subject format on cross-department topic moves: redact subject=<guid> on the side belonging to another department.
+        if (result.Contains($"{AuditLog.CatalogDepartmentKey}other", StringComparison.Ordinal))
+        {
+            result = System.Text.RegularExpressions.Regex.Replace(
+                result,
+                $@"({System.Text.RegularExpressions.Regex.Escape(AuditLog.CatalogSubjectKey)})([0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}})(; grade=[0-9]+; order=[0-9]+; {System.Text.RegularExpressions.Regex.Escape(AuditLog.CatalogDepartmentKey)}other)",
+                match => $"{match.Groups[1].Value}other{match.Groups[3].Value}");
+        }
+        else if (ownSubjectIds is not null)
+        {
+            result = System.Text.RegularExpressions.Regex.Replace(
+                result,
+                $@"(?<=\b{System.Text.RegularExpressions.Regex.Escape(AuditLog.CatalogSubjectKey)})([0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}})",
+                match => ownSubjectIds.Contains(match.Value) ? match.Value : "other");
+        }
 
         return result;
     }

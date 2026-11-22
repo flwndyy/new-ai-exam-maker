@@ -97,6 +97,18 @@ public sealed class AuditLogsHttpTests
         Assert.Equal("ValidationFailed", badDateBody.GetProperty("code").GetString());
         Assert.True(badDateBody.GetProperty("errors").TryGetProperty("to", out _));
 
+        // Non-ISO strings containing the letter 'T' (e.g., RFC1123 "Thu, 20 Nov 2026 00:00:00 GMT") must be rejected.
+        using var rfcDate = await client.GetAsync("/api/v1/audit-logs?from=Thu%2C%2020%20Nov%202026%2000%3A00%3A00%20GMT");
+        Assert.Equal(HttpStatusCode.BadRequest, rfcDate.StatusCode);
+        var rfcBody = await rfcDate.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ValidationFailed", rfcBody.GetProperty("code").GetString());
+        Assert.True(rfcBody.GetProperty("errors").TryGetProperty("from", out _));
+
+        // URL-encoded explicit offset (+07:00 -> %2B07:00) is converted to UTC.
+        using var offsetResponse = await client.GetAsync("/api/v1/audit-logs?from=2026-11-20T07:00:00%2B07:00");
+        Assert.Equal(HttpStatusCode.OK, offsetResponse.StatusCode);
+        Assert.Equal(new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.From);
+
         using var badPage = await client.GetAsync("/api/v1/audit-logs?page=abc");
         Assert.Equal(HttpStatusCode.BadRequest, badPage.StatusCode);
         var body = await badPage.Content.ReadFromJsonAsync<JsonElement>();

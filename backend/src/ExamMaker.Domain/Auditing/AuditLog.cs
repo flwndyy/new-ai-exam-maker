@@ -22,6 +22,27 @@ public class AuditLog
     public string? Note { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
+    /// <summary>Shared prefix for user department transfer notes ("department &lt;old&gt;-&gt;&lt;new&gt;") so writers and redaction stay coupled.</summary>
+    public const string UserDepartmentMovePrefix = "department ";
+
+    /// <summary>Shared key for catalog department metadata ("department=&lt;guid&gt;") so writers and redaction stay coupled.</summary>
+    public const string CatalogDepartmentKey = "department=";
+
+    /// <summary>Shared key for catalog subject metadata ("subject=&lt;guid&gt;") so cross-department topic moves are also redacted for heads.</summary>
+    public const string CatalogSubjectKey = "subject=";
+
+    /// <summary>Format a user department transition note token using the shared prefix.</summary>
+    public static string FormatUserDepartmentChange(Guid? fromDepartmentId, Guid? toDepartmentId) =>
+        $"{UserDepartmentMovePrefix}{fromDepartmentId?.ToString() ?? "none"}->{toDepartmentId?.ToString() ?? "none"}";
+
+    /// <summary>Format a catalog department metadata token using the shared key.</summary>
+    public static string FormatCatalogDepartment(Guid departmentId) =>
+        $"{CatalogDepartmentKey}{departmentId}";
+
+    /// <summary>Format a catalog subject metadata token using the shared key.</summary>
+    public static string FormatCatalogSubject(Guid subjectId) =>
+        $"{CatalogSubjectKey}{subjectId}";
+
     /// <summary>Create an audit log row with an explicit department snapshot (null only for departmentless system/admin events).</summary>
     public static AuditLog Create(
         Guid? actorId,

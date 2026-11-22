@@ -90,5 +90,29 @@ public class A2SchemaTests
 
         // Public constructors and mutable public setters must remain disallowed so writers cannot omit departmentId.
         Assert.Empty(typeof(AuditLog).GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
+
+        // Verify shared note formatters and cross-department redaction stay in sync.
+        var deptA = Guid.Parse("10000000-0000-0000-0000-000000000001");
+        var deptB = Guid.Parse("10000000-0000-0000-0000-000000000002");
+        var subjA = Guid.Parse("20000000-0000-0000-0000-000000000001");
+        var subjB = Guid.Parse("20000000-0000-0000-0000-000000000002");
+
+        var userNote = $"role teacher->head; {AuditLog.FormatUserDepartmentChange(deptA, deptB)}";
+        var redactedUserForA = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(userNote, deptA);
+        var redactedUserForB = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(userNote, deptB);
+        Assert.Equal($"role teacher->head; department {deptA}->other", redactedUserForA);
+        Assert.Equal($"role teacher->head; department other->{deptB}", redactedUserForB);
+
+        var topicNote = $"Before: Chapter; {AuditLog.FormatCatalogSubject(subjA)}; grade=10; order=1; {AuditLog.FormatCatalogDepartment(deptA)}; after: Chapter; {AuditLog.FormatCatalogSubject(subjB)}; grade=10; order=1; {AuditLog.FormatCatalogDepartment(deptB)}";
+        var redactedTopicForA = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(topicNote, deptA);
+        var redactedTopicForB = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(topicNote, deptB);
+        Assert.Contains($"subject={subjA}; grade=10; order=1; department={deptA}", redactedTopicForA);
+        Assert.Contains("subject=other; grade=10; order=1; department=other", redactedTopicForA);
+        Assert.DoesNotContain(subjB.ToString(), redactedTopicForA);
+        Assert.DoesNotContain(deptB.ToString(), redactedTopicForA);
+        Assert.Contains("subject=other; grade=10; order=1; department=other", redactedTopicForB);
+        Assert.Contains($"subject={subjB}; grade=10; order=1; department={deptB}", redactedTopicForB);
+        Assert.DoesNotContain(subjA.ToString(), redactedTopicForB);
+        Assert.DoesNotContain(deptA.ToString(), redactedTopicForB);
     }
 }

@@ -69,8 +69,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             // ExecuteUpdate supports changes to alternate-key columns without EF tracking key mutations.
             else await database.Subjects.Where(x => x.Id == target).ExecuteUpdateAsync(x => x
                 .SetProperty(s => s.Name, name).SetProperty(s => s.DepartmentId, department), cancellationToken);
-            var beforeNote = before is null ? null : $"{before.Name}; department={before.DepartmentId}";
-            var afterNote = $"{name}; department={department}";
+            var beforeNote = before is null ? null : $"{before.Name}; {AuditLog.FormatCatalogDepartment(before.DepartmentId)}";
+            var afterNote = $"{name}; {AuditLog.FormatCatalogDepartment(department)}";
             if (before is not null && before.DepartmentId != department)
             {
                 Audit(actorId, "Subject", target, before.DepartmentId, false, beforeNote, afterNote);
@@ -81,8 +81,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
                     .ToListAsync(cancellationToken);
                 foreach (var topic in childTopics)
                 {
-                    var topicBefore = $"{topic.Name}; subject={target}; grade={topic.Grade}; order={topic.SortOrder}; department={before.DepartmentId}";
-                    var topicAfter = $"{topic.Name}; subject={target}; grade={topic.Grade}; order={topic.SortOrder}; department={department}";
+                    var topicBefore = $"{topic.Name}; {AuditLog.FormatCatalogSubject(target)}; grade={topic.Grade}; order={topic.SortOrder}; {AuditLog.FormatCatalogDepartment(before.DepartmentId)}";
+                    var topicAfter = $"{topic.Name}; {AuditLog.FormatCatalogSubject(target)}; grade={topic.Grade}; order={topic.SortOrder}; {AuditLog.FormatCatalogDepartment(department)}";
                     Audit(actorId, "Topic", topic.Id, before.DepartmentId, false, topicBefore, topicAfter);
                     Audit(actorId, "Topic", topic.Id, department, false, topicBefore, topicAfter, secondaryMove: true);
                 }
@@ -120,8 +120,8 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             if (id is null) database.Topics.Add(new Topic { Id = target, Name = name, SubjectId = subject, Grade = grade, SortOrder = order });
             else await database.Topics.Where(x => x.Id == target).ExecuteUpdateAsync(x => x.SetProperty(t => t.Name, name)
                 .SetProperty(t => t.SubjectId, subject).SetProperty(t => t.Grade, grade).SetProperty(t => t.SortOrder, order), cancellationToken);
-            var beforeNote = before is null ? null : $"{before.Name}; subject={before.SubjectId}; grade={before.Grade}; order={before.SortOrder}";
-            var afterNote = $"{name}; subject={subject}; grade={grade}; order={order}";
+            var beforeNote = before is null ? null : $"{before.Name}; {AuditLog.FormatCatalogSubject(before.SubjectId)}; grade={before.Grade}; order={before.SortOrder}; {AuditLog.FormatCatalogDepartment(beforeDepartmentId)}";
+            var afterNote = $"{name}; {AuditLog.FormatCatalogSubject(subject)}; grade={grade}; order={order}; {AuditLog.FormatCatalogDepartment(subjectDepartmentId)}";
             if (before is not null && beforeDepartmentId != subjectDepartmentId)
             {
                 Audit(actorId, "Topic", target, beforeDepartmentId, false, beforeNote, afterNote);

@@ -796,7 +796,7 @@ export interface paths {
         };
         /**
          * Nhật ký audit
-         * @description Head: giới hạn trong tổ của mình. Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
+         * @description Head: giới hạn trong tổ của mình theo snapshot `departmentId` tại thời điểm sự kiện (lịch sử cũ trước migration của `User`, `Subject`, `Topic`, `QuestionSet`, `AiJob` và thực thể đã xóa trước migration có `departmentId = null` nên chỉ Admin xem được; `actor.fullName` luôn giữ tên người thực hiện sự kiện dù sau đó người đó chuyển tổ). Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
          */
         get: operations["listAuditLogs"];
         put?: never;
@@ -2971,9 +2971,9 @@ export interface operations {
                 entityId?: string;
                 actorId?: string;
                 action?: string;
-                /** @description Từ thời điểm (UTC, gồm; nhận timestamp ISO-8601 chính xác hoặc chuỗi chỉ có ngày đúng định dạng `YYYY-MM-DD` tính từ đầu ngày `00:00:00Z`). */
+                /** @description Từ thời điểm (UTC, gồm `>=`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính từ `00:00:00Z`). */
                 from?: string;
-                /** @description Đến thời điểm (UTC, gồm; cho phép `from == to`, nhận timestamp ISO-8601 chính xác hoặc chuỗi chỉ có ngày đúng định dạng `YYYY-MM-DD` tính đến hết ngày `23:59:59.9999999Z`). */
+                /** @description Đến thời điểm (UTC, gồm `<=`, cho phép `from == to`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính đến `23:59:59.9999999Z`). */
                 to?: string;
             };
             header?: never;

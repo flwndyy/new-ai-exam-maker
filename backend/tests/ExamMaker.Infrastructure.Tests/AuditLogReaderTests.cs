@@ -408,6 +408,18 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         Assert.Equal(1, headBTopicMoveLogs.TotalItems);
         Assert.Equal(1, adminTopicMoveLogs.TotalItems);
 
+        // Moving a topic directly from a DeptB subject to a DeptA subject redacts the foreign subject and department GUIDs for each head.
+        var subjectInA = await catalog.SaveSubjectAsync(admin, null, new("Target Subject A", DeptA), CancellationToken.None);
+        await catalog.SaveTopicAsync(admin, childTopic.Id, new(subjectInA.Id, 10, "Child Topic", 1), CancellationToken.None);
+        var headADirectTopicLogs = await reader.ListAsync(headA, new AuditLogQuery(EntityType: "Topic", EntityId: childTopic.Id, Action: "UpdateTopic"), CancellationToken.None);
+        var headBDirectTopicLogs = await reader.ListAsync(headB, new AuditLogQuery(EntityType: "Topic", EntityId: childTopic.Id, Action: "UpdateTopic"), CancellationToken.None);
+        Assert.DoesNotContain(subject.Id.ToString(), headADirectTopicLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptB.ToString(), headADirectTopicLogs.Items[0].Note);
+        Assert.Contains($"subject={subjectInA.Id}", headADirectTopicLogs.Items[0].Note);
+        Assert.DoesNotContain(subjectInA.Id.ToString(), headBDirectTopicLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptA.ToString(), headBDirectTopicLogs.Items[0].Note);
+        Assert.Contains($"subject={subject.Id}", headBDirectTopicLogs.Items[0].Note);
+
         // User-entered notes (such as ReviewNote ending with "[move-target]") are never hidden or truncated.
         var trickyLog = AuditLog.Create(headA, "ExamVersion", Guid.NewGuid(), DeptA, "RejectExamVersion", "Submitted", "Rejected", "Sai đáp án [move-target]");
         db.AuditLogs.Add(trickyLog);
