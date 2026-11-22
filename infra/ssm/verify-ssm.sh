@@ -195,27 +195,43 @@ check_foundation_model_lifecycle() {
   return 3
 }
 
+BEDROCK_LIFECYCLE_NOTE=""
 is_valid_bedrock_id() {
   local mid="$1"
+  BEDROCK_LIFECYCLE_NOTE=""
   local profile_json=""
   # 1. Profile validity: status must be ACTIVE in BEDROCK_REGION_VAL
   profile_json="$(jq -c --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE")' <<<"$PROFILES_JSON")"
   if [ -n "$profile_json" ]; then
     local fm_ids=""
+    local confirmed_active=0
+    local unverified_cross_region=0
+    local inconclusive_lookup=0
     fm_ids="$(jq -r '.models[]?.modelArn | split("/") | last' <<<"$profile_json" | sort -u)"
     if [ -n "$fm_ids" ]; then
       while IFS= read -r fm; do
         [ -z "$fm" ] && continue
         local fm_rc=0
         check_foundation_model_lifecycle "$fm" || fm_rc=$?
-        if [ "$fm_rc" -eq 1 ]; then
+        if [ "$fm_rc" -eq 0 ]; then
+          confirmed_active=$((confirmed_active + 1))
+        elif [ "$fm_rc" -eq 1 ]; then
           # Explicitly reject only when an underlying foundation model is confirmed LEGACY.
           return 1
+        elif [ "$fm_rc" -eq 2 ]; then
+          unverified_cross_region=$((unverified_cross_region + 1))
         elif [ "$fm_rc" -eq 3 ]; then
-          warn "O12 Bedrock: lifecycle lookup for foundation model '${fm}' (profile '${mid}') in '${BEDROCK_REGION_VAL}' was inconclusive; treating ACTIVE profile as valid"
+          inconclusive_lookup=$((inconclusive_lookup + 1))
+          warn "O12 Bedrock: lifecycle lookup for foundation model '${fm}' (profile '${mid}') in '${BEDROCK_REGION_VAL}' was inconclusive; relying on profile.status=ACTIVE"
         fi
-        # fm_rc == 2 (not offered in source region) does NOT fail an ACTIVE profile.
       done <<<"$fm_ids"
+    fi
+    if [ "$confirmed_active" -gt 0 ] && [ "$inconclusive_lookup" -eq 0 ]; then
+      BEDROCK_LIFECYCLE_NOTE="profile.status=ACTIVE, local foundation model lifecycle confirmed ACTIVE"
+    elif [ "$inconclusive_lookup" -gt 0 ]; then
+      BEDROCK_LIFECYCLE_NOTE="profile.status=ACTIVE, foundation model lifecycle lookup inconclusive"
+    else
+      BEDROCK_LIFECYCLE_NOTE="profile.status=ACTIVE, destination foundation models are cross-region"
     fi
     return 0
   fi
@@ -223,7 +239,11 @@ is_valid_bedrock_id() {
   # 2. On-demand foundation model (non-profile) fallback
   local on_demand_fm=""
   on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null) and (.modelLifecycle.status // "") == "ACTIVE") | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
-  [ -n "$on_demand_fm" ]
+  if [ -n "$on_demand_fm" ]; then
+    BEDROCK_LIFECYCLE_NOTE="ON_DEMAND foundation model lifecycle confirmed ACTIVE"
+    return 0
+  fi
+  return 1
 }
 
 if [ "$BEDROCK_QUERY_OK" -eq 1 ]; then
@@ -231,7 +251,7 @@ if [ "$BEDROCK_QUERY_OK" -eq 1 ]; then
     key_name="${label_id%%:*}"
     model_val="${label_id#*:}"
     if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
-      pass "O12 Bedrock: ${key_name} ('${model_val}') is ACTIVE and usable (profile/model is ACTIVE in '${BEDROCK_REGION_VAL}')"
+      pass "O12 Bedrock: ${key_name} ('${model_val}') is valid in '${BEDROCK_REGION_VAL}' (${BEDROCK_LIFECYCLE_NOTE})"
     else
       fail "O12 Bedrock: ${key_name} ('${model_val}') is missing, LEGACY/EOL, or not ACTIVE in '${BEDROCK_REGION_VAL}'"
     fi

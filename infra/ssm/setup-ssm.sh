@@ -236,16 +236,23 @@ put_string_param() {
 #   and restricts Windows NTFS ACLs to the current user via `icacls` before writing and immediately deleting.
 put_secret_json_payload() {
   local payload_json="$1"
+  local ver=""
+  local rc=0
   if [ -e /dev/stdin ] && ! command -v cygpath >/dev/null 2>&1; then
-    aws ssm put-parameter \
+    ver="$(aws ssm put-parameter \
       --region "$AWS_REGION" \
       --cli-input-json "file:///dev/stdin" \
       --query "Version" \
-      --output text <<<"$payload_json"
+      --output text <<<"$payload_json")" || rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$ver" ] || [[ ! "$ver" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: aws ssm put-parameter failed via /dev/stdin (rc=${rc}, version='${ver}')." >&2
+      return 1
+    fi
+    printf '%s\n' "$ver"
     return 0
   fi
 
-  TMP_SECRET_DIR="$(umask 077 && mktemp -d)"
+  TMP_SECRET_DIR="$(umask 077 && mktemp -d)" || return 1
   if command -v cygpath >/dev/null 2>&1 && command -v icacls >/dev/null 2>&1; then
     local win_dir=""
     win_dir="$(cygpath -w "$TMP_SECRET_DIR")"
@@ -253,21 +260,31 @@ put_secret_json_payload() {
   fi
 
   local tmp_file="${TMP_SECRET_DIR}/payload.json"
-  (umask 077 && printf '%s\n' "$payload_json" >"$tmp_file")
+  if ! (umask 077 && printf '%s\n' "$payload_json" >"$tmp_file"); then
+    rm -rf "$TMP_SECRET_DIR"
+    TMP_SECRET_DIR=""
+    echo "ERROR: Failed to write temporary secret payload file." >&2
+    return 1
+  fi
+
   local param_file="$tmp_file"
   if command -v cygpath >/dev/null 2>&1; then
     param_file="$(cygpath -m "$tmp_file")"
   fi
 
-  local ver=""
   ver="$(aws ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${param_file}" \
     --query "Version" \
-    --output text)"
+    --output text)" || rc=$?
   rm -rf "$TMP_SECRET_DIR"
   TMP_SECRET_DIR=""
+  if [ "$rc" -ne 0 ] || [ -z "$ver" ] || [[ ! "$ver" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: aws ssm put-parameter failed (rc=${rc}, version='${ver}')." >&2
+    return 1
+  fi
   printf '%s\n' "$ver"
+  return 0
 }
 
 put_origin_secret_param() {
@@ -300,7 +317,10 @@ put_origin_secret_param() {
   local put_ver=""
   if [ "$status" = "exists" ]; then
     local prev_ver=""
-    prev_ver="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --query "Parameter.Version" --output text)"
+    if ! prev_ver="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --query "Parameter.Version" --output text)" || [ -z "$prev_ver" ]; then
+      echo "ERROR: Failed to read current version of ${name} before rotation." >&2
+      return 1
+    fi
     payload_json="$(jq -nc \
       --arg name "$name" \
       --arg val "$secret_val" \
@@ -314,7 +334,10 @@ put_origin_secret_param() {
         Description: $desc,
         Overwrite: true
       }')"
-    put_ver="$(put_secret_json_payload "$payload_json")"
+    if ! put_ver="$(put_secret_json_payload "$payload_json")" || [ -z "$put_ver" ]; then
+      echo "ERROR: Failed to rotate ${name} in SSM Parameter Store." >&2
+      return 1
+    fi
     echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${put_ver} via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
     payload_json="$(jq -nc \
@@ -335,7 +358,10 @@ put_origin_secret_param() {
           {Key: "Task", Value: "O12"}
         ]
       }')"
-    put_ver="$(put_secret_json_payload "$payload_json")"
+    if ! put_ver="$(put_secret_json_payload "$payload_json")" || [ -z "$put_ver" ]; then
+      echo "ERROR: Failed to create ${name} in SSM Parameter Store." >&2
+      return 1
+    fi
     echo "    [CREATED]  ${name} (SecureString version ${put_ver} via alias/aws/ssm; value not printed)"
   fi
 }
