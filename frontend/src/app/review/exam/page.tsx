@@ -19,11 +19,13 @@ type ExamVersion = components["schemas"]["ExamVersion"];
 function ExamDecisionForm({
   version,
   isAdmin,
+  isSelfAuthor,
   onSuccess,
   onError,
 }: {
   version: ExamVersion;
   isAdmin: boolean;
+  isSelfAuthor: boolean;
   onSuccess: (message: string) => void;
   onError: (message: string) => void;
 }) {
@@ -77,7 +79,12 @@ function ExamDecisionForm({
 
   return (
     <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
-      {version.status === "Submitted" && (
+      {version.status === "Submitted" && isSelfAuthor && (
+        <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          {vi.review.selfReviewNotice}
+        </p>
+      )}
+      {version.status === "Submitted" && !isSelfAuthor && (
         <>
           <h2 className="text-sm font-semibold text-slate-900">{vi.review.checklistTitle}</h2>
           <div className="space-y-2">
@@ -109,7 +116,7 @@ function ExamDecisionForm({
       )}
 
       <div className="flex flex-wrap gap-3">
-        {version.status === "Submitted" && (
+        {version.status === "Submitted" && !isSelfAuthor && (
           <>
             <button
               type="button"
@@ -248,7 +255,10 @@ function ReviewExamInner() {
             {v.items.map((item) => (
               <article key={item.sourceQuestionId} className="space-y-2 rounded border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>Câu {item.sortOrder}</span>
+                  <span>
+                    {vi.review.questionItemPrefix} {item.sortOrder}
+                    {item.difficulty ? ` · ${vi.questions.difficulties[item.difficulty]}` : ""}
+                  </span>
                   <span className="font-medium text-slate-700">{item.points} {vi.review.points}</span>
                 </div>
                 {item.stem && (
@@ -257,6 +267,14 @@ function ReviewExamInner() {
                   </div>
                 )}
                 {item.type && item.payload && <QuestionPayloadView type={item.type} payload={item.payload} />}
+                {item.explanation && (
+                  <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <p className="font-medium text-slate-700">{vi.questions.explanation}:</p>
+                    <div className="mt-1">
+                      <MathMarkdown>{item.explanation}</MathMarkdown>
+                    </div>
+                  </div>
+                )}
               </article>
             ))}
           </div>
@@ -265,6 +283,7 @@ function ReviewExamInner() {
             key={`${v.id}-${v.submittedAt ?? ""}-${v.status}`}
             version={v}
             isAdmin={me?.role === "admin"}
+            isSelfAuthor={me?.id === v.createdBy.id}
             onSuccess={(msg) => {
               setErrorMsg(null);
               setFeedback(msg);

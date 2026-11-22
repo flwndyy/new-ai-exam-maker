@@ -200,7 +200,7 @@ export default function ReviewQueuePage() {
                   {item.examTitle} (v{item.versionNo})
                 </h2>
                 <p className="mt-1 text-xs text-slate-600">
-                  {vi.common.gradePrefix} {item.grade} · {item.questionCount} câu · {item.totalPoints} {vi.review.points} · {item.createdBy.fullName}
+                  {vi.common.gradePrefix} {item.grade} · {item.questionCount} {vi.review.questionCountSuffix} · {item.totalPoints} {vi.review.points} · {item.createdBy.fullName}
                 </p>
               </div>
               <Link

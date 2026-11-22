@@ -136,12 +136,16 @@ function QuestionEditorForm({
     return {
       modelAnswer: essayAnswer,
       rubric: essayRubric.map((r) => {
+        const criterion = r.criterion.trim();
+        if (!criterion) {
+          throw new Error(vi.questions.criterionRequired);
+        }
         const pts = Number(r.points);
         if (!Number.isFinite(pts) || pts <= 0) {
-          throw new Error("Điểm tiêu chí phải lớn hơn 0.");
+          throw new Error(vi.questions.criterionPointsPositive);
         }
         return {
-          criterion: r.criterion.trim() || "Đáp án đúng",
+          criterion,
           points: pts,
         };
       }),
@@ -190,10 +194,11 @@ function QuestionEditorForm({
         return "deleted";
       }
       // Save unsaved edits before submitting so reviewers never see stale content and edits are not lost.
+      // Defer cache update until the mutation settles so QuestionEditorForm does not remount while POST /submit is in flight.
+      let savedBeforeAction: Question | null = null;
       if (action === "submit" && isDirty) {
-        const saved = await persistQuestion();
+        savedBeforeAction = await persistQuestion();
         setIsDirty(false);
-        queryClient.setQueryData(["question", saved.id], saved);
         void queryClient.invalidateQueries({ queryKey: ["questions"] });
       }
       const pathMap = {
@@ -202,8 +207,18 @@ function QuestionEditorForm({
         "mark-reviewed": "/questions/{id}/mark-reviewed",
         archive: "/questions/{id}/archive",
       } as const;
-      const { error } = await api.POST(pathMap[action], { params: { path: { id } } });
-      if (error) throw new Error(getApiErrorMessage(error));
+      const { data: transitioned, error } = await api.POST(pathMap[action], { params: { path: { id } } });
+      if (error) {
+        if (savedBeforeAction) {
+          queryClient.setQueryData(["question", savedBeforeAction.id], savedBeforeAction);
+        }
+        throw new Error(getApiErrorMessage(error));
+      }
+      if (transitioned) {
+        queryClient.setQueryData(["question", id], transitioned);
+      } else if (savedBeforeAction) {
+        queryClient.setQueryData(["question", savedBeforeAction.id], savedBeforeAction);
+      }
       return action;
     },
     onSuccess: (result) => {
@@ -220,6 +235,9 @@ function QuestionEditorForm({
 
   const isOwner = !q || me?.id === q.createdBy.id;
   const isEditable = !q || q.status === "Draft" || q.status === "Rejected" || q.status === "Approved";
+  const canArchive =
+    Boolean(q && q.status === "Approved") &&
+    (isOwner || me?.role === "admin" || (me?.role === "head" && me.departmentId === q?.departmentId));
 
   return (
     <div className="space-y-4">
@@ -415,8 +433,8 @@ function QuestionEditorForm({
                   }}
                   className="rounded border border-slate-300 px-2 py-1 text-sm"
                 >
-                  <option value="true">Đúng</option>
-                  <option value="false">Sai</option>
+                  <option value="true">{vi.questions.trueLabel}</option>
+                  <option value="false">{vi.questions.falseLabel}</option>
                 </select>
               </div>
             ))}
@@ -440,7 +458,7 @@ function QuestionEditorForm({
             </label>
             <div className="space-y-2">
               <label className="block text-sm">
-                <span className="font-medium text-slate-700">Kiểu đáp án</span>
+                <span className="font-medium text-slate-700">{vi.questions.shortAnswerTypeLabel}</span>
                 <select
                   value={shortAnswerType}
                   onChange={(e) => {
@@ -449,12 +467,12 @@ function QuestionEditorForm({
                   }}
                   className="mt-1 w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm"
                 >
-                  <option value="number">Số (number)</option>
-                  <option value="text">Chuỗi (text)</option>
+                  <option value="number">{vi.questions.shortAnswerTypeNumber}</option>
+                  <option value="text">{vi.questions.shortAnswerTypeText}</option>
                 </select>
               </label>
               <input
-                placeholder="Đơn vị (tùy chọn)"
+                placeholder={vi.questions.shortUnitPlaceholder}
                 value={shortUnit}
                 onChange={(e) => {
                   setShortUnit(e.target.value);
@@ -501,7 +519,7 @@ function QuestionEditorForm({
                 <div key={idx} className="flex items-center gap-2">
                   <input
                     required
-                    placeholder="Tiêu chí chấm"
+                    placeholder={vi.questions.criterionPlaceholder}
                     value={row.criterion}
                     onChange={(e) => {
                       setEssayRubric((prev) => prev.map((item, i) => (i === idx ? { ...item, criterion: e.target.value } : item)));
@@ -605,7 +623,7 @@ function QuestionEditorForm({
             </button>
           )}
 
-          {q && (q.status === "Approved" || q.status === "Rejected") && (
+          {q && canArchive && (
             <button
               type="button"
               disabled={actionMutation.isPending}

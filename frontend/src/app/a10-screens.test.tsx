@@ -357,4 +357,125 @@ describe("A10 admin, review, and role navigation screens", () => {
     await waitFor(() => expect(screen.getByText("Cần rà soát lại câu AI trước khi gửi duyệt.")).toBeTruthy());
     expect(screen.getByText(messages.questions.markReviewed)).toBeTruthy();
   });
+
+  it("hides archive button for peer teachers and rejected questions, shows it for owner/head/admin on Approved, and rejects blank rubric criterion", async () => {
+    mocks.auth.me.role = "teacher";
+    const peerQuestion = {
+      id: mocks.searchId,
+      subjectId: "s1",
+      topicId: "t1",
+      departmentId: mocks.auth.me.departmentId,
+      grade: 10,
+      type: "Essay",
+      difficulty: "Application",
+      stem: "Peer question",
+      payload: {
+        modelAnswer: "Model",
+        rubric: [{ criterion: "   ", points: 1 }],
+      },
+      explanation: null,
+      status: "Approved",
+      revision: 1,
+      source: "Manual",
+      aiVerification: "NotChecked",
+      aiVerificationNote: null,
+      aiReviewedByAuthor: false,
+      createdBy: { id: "peer-teacher-id", fullName: "Peer Teacher" },
+      submittedAt: null,
+      createdAt: "2026-11-22T00:00:00.000Z",
+      updatedAt: "2026-11-22T00:00:00.000Z",
+    };
+
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") return { data: peerQuestion, error: undefined };
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Peer question")).toBeTruthy());
+    // Peer teacher cannot archive another author's Approved question.
+    expect(screen.queryByText(messages.questions.archive)).toBeNull();
+    cleanup();
+
+    // Owner on Rejected question cannot archive, and saving a blank rubric criterion shows a validation error.
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") {
+        return {
+          data: {
+            ...peerQuestion,
+            status: "Rejected",
+            createdBy: { id: mocks.auth.me.id, fullName: "Owner" },
+          },
+          error: undefined,
+        };
+      }
+      if (path === "/subjects") return { data: { items: [{ id: "s1", name: "Toán", departmentId: "d1" }] }, error: undefined };
+      if (path === "/topics") return { data: { items: [{ id: "t1", subjectId: "s1", grade: 10, name: "Chương 1", sortOrder: 1 }] }, error: undefined };
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Peer question")).toBeTruthy());
+    expect(screen.queryByText(messages.questions.archive)).toBeNull();
+
+    await waitFor(() => expect(screen.getByText("Chương 1")).toBeTruthy());
+    fireEvent.click(screen.getByText(messages.common.save));
+    await waitFor(() => expect(screen.getByText(messages.questions.criterionRequired)).toBeTruthy());
+    expect(mocks.apiPut).not.toHaveBeenCalled();
+  });
+
+  it("hides review decision buttons and shows self-review notice when a head views their own submitted question", async () => {
+    mocks.auth.me.role = "head";
+    const submittedAt = "2026-11-22T00:00:00.000Z";
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") {
+        return {
+          data: {
+            id: mocks.searchId,
+            subjectId: "s1",
+            topicId: "t1",
+            departmentId: mocks.auth.me.departmentId,
+            grade: 10,
+            type: "ShortAnswer",
+            difficulty: "HighApplication",
+            stem: "Self authored question",
+            payload: {
+              answerType: "number",
+              acceptedAnswers: ["9.8"],
+              unit: "m/s2",
+              tolerance: 0.05,
+            },
+            explanation: "Gravity",
+            status: "Submitted",
+            revision: 1,
+            source: "Manual",
+            aiVerification: "NotChecked",
+            aiVerificationNote: null,
+            aiReviewedByAuthor: false,
+            createdBy: { id: mocks.auth.me.id, fullName: "Head Self" },
+            submittedAt,
+            createdAt: submittedAt,
+            updatedAt: submittedAt,
+          },
+          error: undefined,
+        };
+      }
+      if (path === "/topics") {
+        return {
+          data: { items: [{ id: "t1", subjectId: "s1", grade: 10, name: "Động học", sortOrder: 1 }] },
+          error: undefined,
+        };
+      }
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<ReviewQuestionPage />);
+    await waitFor(() => expect(screen.getByText(messages.review.selfReviewNotice)).toBeTruthy());
+    expect(screen.queryByText(messages.review.approve)).toBeNull();
+    expect(screen.queryByText(messages.review.reject)).toBeNull();
+    // Topic name, difficulty, and ShortAnswer tolerance are all rendered.
+    expect(screen.getByText(/Vận dụng cao/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Động học/)).toBeTruthy());
+    expect(screen.getByText(/±0.05/)).toBeTruthy();
+  });
 });

@@ -138,12 +138,27 @@ function ReviewQuestionInner() {
     },
   });
 
+  const q = questionQuery.data;
+
+  const topicsQuery = useQuery({
+    queryKey: ["catalog", "topics", q?.subjectId, q?.grade],
+    enabled: Boolean(q?.subjectId) && canReview,
+    queryFn: async () => {
+      const { data, error } = await api.GET("/topics", {
+        params: { query: { pageSize: 100, subjectId: q!.subjectId, grade: q!.grade } },
+      });
+      if (error) throw new Error(getApiErrorMessage(error));
+      return data?.items ?? [];
+    },
+  });
+
   if (!canReview) {
     return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
   }
   if (!id) return <p className="text-sm text-rose-600">{vi.review.missingId}</p>;
 
-  const q = questionQuery.data;
+  const topicName = q ? topicsQuery.data?.find((t) => t.id === q.topicId)?.name : undefined;
+  const isSelfAuthor = Boolean(q && me?.id === q.createdBy.id);
 
   return (
     <section className="space-y-6">
@@ -167,8 +182,13 @@ function ReviewQuestionInner() {
                 {vi.questions.statuses[q.status]}
               </span>
               <span className="rounded bg-blue-50 px-2.5 py-1 text-blue-800">
-                {vi.questions.types[q.type]} · {vi.common.gradePrefix} {q.grade}
+                {vi.questions.types[q.type]} · {vi.common.gradePrefix} {q.grade} · {vi.questions.difficulties[q.difficulty]}
               </span>
+              {topicName && (
+                <span className="rounded bg-slate-100 px-2.5 py-1 text-slate-700">
+                  {vi.questions.topic}: {topicName}
+                </span>
+              )}
               <span className="rounded bg-amber-50 px-2.5 py-1 text-amber-800">
                 {vi.questions.aiFlags[q.aiVerification]}
                 {q.source === "AI" ? ` · ${q.aiReviewedByAuthor ? vi.questions.aiReviewed : vi.questions.aiNotReviewed}` : ""}
@@ -198,18 +218,24 @@ function ReviewQuestionInner() {
           </div>
 
           {q.status === "Submitted" && (
-            <QuestionDecisionForm
-              key={`${q.id}-${q.submittedAt ?? ""}-${q.status}`}
-              question={q}
-              onSuccess={(msg) => {
-                setErrorMsg(null);
-                setFeedback(msg);
-              }}
-              onError={(msg) => {
-                setFeedback(null);
-                setErrorMsg(msg);
-              }}
-            />
+            isSelfAuthor ? (
+              <p className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+                {vi.review.selfReviewNotice}
+              </p>
+            ) : (
+              <QuestionDecisionForm
+                key={`${q.id}-${q.submittedAt ?? ""}-${q.status}`}
+                question={q}
+                onSuccess={(msg) => {
+                  setErrorMsg(null);
+                  setFeedback(msg);
+                }}
+                onError={(msg) => {
+                  setFeedback(null);
+                  setErrorMsg(msg);
+                }}
+              />
+            )
           )}
         </div>
       )}

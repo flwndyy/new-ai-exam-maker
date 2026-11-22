@@ -44,7 +44,7 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
               </span>
             </div>
             <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium ${stmt.isTrue ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"}`}>
-              {stmt.isTrue ? "Đúng" : "Sai"}
+              {stmt.isTrue ? vi.questions.trueLabel : vi.questions.falseLabel}
             </span>
           </li>
         ))}
@@ -60,6 +60,11 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
           {payload.acceptedAnswers.join(" | ")}
           {payload.unit ? ` (${payload.unit})` : ""}
         </p>
+        {payload.tolerance != null && (
+          <p className="mt-1 text-xs text-slate-600">
+            {vi.questions.shortTolerance}: ±{payload.tolerance}
+          </p>
+        )}
       </div>
     );
   }
