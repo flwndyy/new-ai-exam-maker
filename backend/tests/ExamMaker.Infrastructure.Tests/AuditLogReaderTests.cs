@@ -306,4 +306,51 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(EntityId: movedUser), CancellationToken.None);
         Assert.Contains(adminPage.Items, x => x.Id == userLogId);
     }
+
+    [PostgresFact]
+    public async Task Migration_does_not_backfill_subject_or_topic_logs_from_current_department()
+    {
+        await using var db = fixture.CreateContext();
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261120071750_AddUserAdministration");
+
+        var localAdmin = Guid.NewGuid();
+        var localHeadB = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var topicId = Guid.NewGuid();
+        var subjectLogId = Guid.NewGuid();
+        var topicLogId = Guid.NewGuid();
+        var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO users (id, cognito_sub, email, full_name, role, department_id, is_active, created_at)
+            VALUES
+                ({localAdmin}, {"sub-admin-" + localAdmin}, {"admin-" + localAdmin + "@example.invalid"}, {"Local Admin"}, {Roles.Admin}, NULL, true, {t0}),
+                ({localHeadB}, {"sub-headb-" + localHeadB}, {"headb-" + localHeadB + "@example.invalid"}, {"Local Head B"}, {Roles.Head}, {DeptB}, true, {t0});
+
+            INSERT INTO subjects (id, name, department_id)
+            VALUES ({subjectId}, {"Movable Subject " + subjectId}, {DeptA});
+
+            INSERT INTO topics (id, subject_id, grade, name, sort_order)
+            VALUES ({topicId}, {subjectId}, 10, {"Movable Topic " + topicId}, 1);
+
+            INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, action, from_status, to_status, note, created_at)
+            VALUES
+                ({subjectLogId}, {localAdmin}, 'Subject', {subjectId}, 'CreateSubject', NULL, NULL, 'Before: (new); after: Movable Subject', {t0}),
+                ({topicLogId}, {localAdmin}, 'Topic', {topicId}, 'CreateTopic', NULL, NULL, 'Before: (new); after: Movable Topic', {t0.AddMinutes(1)});
+
+            -- Move the subject from DeptA to DeptB BEFORE the migration runs.
+            UPDATE subjects SET department_id = {DeptB} WHERE id = {subjectId};
+            """);
+
+        await db.Database.MigrateAsync();
+
+        var reader = new AuditLogReader(db);
+        var headBPage = await reader.ListAsync(localHeadB, new AuditLogQuery(), CancellationToken.None);
+        Assert.DoesNotContain(headBPage.Items, x => x.Id == subjectLogId || x.Id == topicLogId);
+
+        var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(), CancellationToken.None);
+        Assert.Contains(adminPage.Items, x => x.Id == subjectLogId);
+        Assert.Contains(adminPage.Items, x => x.Id == topicLogId);
+    }
 }

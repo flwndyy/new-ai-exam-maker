@@ -46,13 +46,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                                 LIMIT 1
                             )
                             WHEN 'Department' THEN (SELECT d.id FROM departments d WHERE d.id = a2.entity_id)
-                            WHEN 'Subject' THEN (SELECT s.department_id FROM subjects s WHERE s.id = a2.entity_id)
-                            WHEN 'Topic' THEN (
-                                SELECT s.department_id
-                                FROM topics t
-                                JOIN subjects s ON s.id = t.subject_id
-                                WHERE t.id = a2.entity_id
-                            )
                         END AS department_id
                     FROM audit_logs a2
                     WHERE a2.department_id IS NULL
