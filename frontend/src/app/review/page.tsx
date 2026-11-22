@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
 import { useAuth } from "@/lib/auth/auth-context";
@@ -22,23 +23,13 @@ export default function ReviewQueuePage() {
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
     enabled: canReview,
-    queryFn: async () => {
-      const { data, error } = await api.GET("/subjects", { params: { query: { pageSize: 100 } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllSubjects(),
   });
 
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", subjectId],
     enabled: canReview && tab === "questions" && Boolean(subjectId),
-    queryFn: async () => {
-      const { data, error } = await api.GET("/topics", {
-        params: { query: { pageSize: 100, subjectId } },
-      });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllTopics(subjectId),
   });
 
   const questionsQuery = useQuery({
@@ -56,6 +47,9 @@ export default function ReviewQueuePage() {
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (page > 1 && data && data.items.length === 0) {
+        setPage(Math.max(1, data.totalPages || page - 1));
+      }
       return data;
     },
   });
@@ -74,6 +68,9 @@ export default function ReviewQueuePage() {
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (page > 1 && data && data.items.length === 0) {
+        setPage(Math.max(1, data.totalPages || page - 1));
+      }
       return data;
     },
   });

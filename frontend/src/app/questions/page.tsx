@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
@@ -36,29 +37,13 @@ export default function QuestionsPage() {
 
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
-    queryFn: async () => {
-      const { data, error } = await api.GET("/subjects", { params: { query: { pageSize: 100 } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllSubjects(),
   });
 
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", subjectId, grade],
     enabled: Boolean(subjectId),
-    queryFn: async () => {
-      const { data, error } = await api.GET("/topics", {
-        params: {
-          query: {
-            pageSize: 100,
-            subjectId,
-            grade: grade ? (Number(grade) as Grade) : undefined,
-          },
-        },
-      });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllTopics(subjectId, grade ? (Number(grade) as Grade) : undefined),
   });
 
   const questionsQuery = useQuery({
@@ -80,6 +65,9 @@ export default function QuestionsPage() {
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (page > 1 && data && data.items.length === 0) {
+        setPage(Math.max(1, data.totalPages || page - 1));
+      }
       return data;
     },
   });

@@ -6,8 +6,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorCode, getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -95,23 +96,13 @@ function QuestionEditorForm({
 
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
-    queryFn: async () => {
-      const { data, error } = await api.GET("/subjects", { params: { query: { pageSize: 100 } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllSubjects(),
   });
 
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", subjectId, grade],
     enabled: Boolean(subjectId),
-    queryFn: async () => {
-      const { data, error } = await api.GET("/topics", {
-        params: { query: { pageSize: 100, subjectId, grade } },
-      });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllTopics(subjectId, grade),
   });
 
   const buildPayload = (): QuestionPayload => {
@@ -174,10 +165,14 @@ function QuestionEditorForm({
   };
 
   const saveMutation = useMutation({
-    mutationFn: persistQuestion,
-    onSuccess: (saved) => {
+    mutationFn: async () => {
+      const hadAiReview = Boolean(q?.source === "AI" && q.aiReviewedByAuthor);
+      const saved = await persistQuestion();
+      return { saved, aiReviewWasReset: hadAiReview && !saved.aiReviewedByAuthor };
+    },
+    onSuccess: ({ saved, aiReviewWasReset }) => {
       setIsDirty(false);
-      onFeedback(vi.questions.savedSuccess);
+      onFeedback(aiReviewWasReset ? vi.questions.aiReviewResetNotice : vi.questions.savedSuccess);
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
       void queryClient.invalidateQueries({ queryKey: ["question", saved.id] });
       if (!id) router.replace(`/questions/detail/?id=${saved.id}`);
@@ -216,6 +211,12 @@ function QuestionEditorForm({
       if (error) {
         if (savedBeforeAction) {
           queryClient.setQueryData(["question", savedBeforeAction.id], savedBeforeAction);
+        }
+        if (action === "submit" && (getApiErrorCode(error) === "AiReviewRequired" || q?.source === "AI")) {
+          void queryClient.invalidateQueries({ queryKey: ["question", id] });
+          if (getApiErrorCode(error) === "AiReviewRequired") {
+            throw new Error(vi.questions.aiReviewResetNotice);
+          }
         }
         throw new Error(getApiErrorMessage(error));
       }

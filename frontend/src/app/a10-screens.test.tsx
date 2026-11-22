@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AdminPage from "@/app/admin/page";
 import QuestionDetailPage from "@/app/questions/detail/page";
+import ReviewQueuePage from "@/app/review/page";
 import ReviewQuestionPage from "@/app/review/question/page";
 import { RoleNav } from "@/components/role-nav";
+import { fetchAllSubjects } from "@/lib/api/catalog";
 import { vi as messages } from "@/messages/vi";
 
 const mocks = vi.hoisted(() => ({
@@ -372,6 +374,14 @@ describe("A10 admin, review, and role navigation screens", () => {
     await waitFor(() =>
       expect(mocks.apiPost).toHaveBeenCalledWith("/questions/{id}/mark-reviewed", { params: { path: { id: mocks.searchId } } }),
     );
+
+    // If POST /questions/{id}/submit returns 409 AiReviewRequired (e.g. edited in another tab or after saving), show aiReviewResetNotice.
+    mocks.apiPost.mockResolvedValueOnce({
+      data: undefined,
+      error: { code: "AiReviewRequired", title: "Conflict", detail: "AI review required" },
+    });
+    fireEvent.click(screen.getByText(messages.questions.submit));
+    await waitFor(() => expect(screen.getByText(messages.questions.aiReviewResetNotice)).toBeTruthy());
   });
 
   it("hides archive button for peer teachers and rejected questions, shows it for owner/head/admin on Approved, and rejects blank rubric criterion", async () => {
@@ -556,5 +566,95 @@ describe("A10 admin, review, and role navigation screens", () => {
     fireEvent.click(screen.getByText(messages.admin.reconcile));
     await waitFor(() => expect(screen.getByText("drift@example.invalid")).toBeTruthy());
     expect(screen.getByText(messages.admin.reconcileIssues.RoleMismatch)).toBeTruthy();
+  });
+
+  it("paginates catalog dropdowns across multiple pages and clamps empty pages back to the previous page", async () => {
+    mocks.apiGet.mockImplementation(async (path: string, opts?: { params?: { query?: { page?: number } } }) => {
+      const page = opts?.params?.query?.page ?? 1;
+      if (path === "/subjects") {
+        return {
+          data: {
+            page,
+            pageSize: 100,
+            totalItems: 102,
+            totalPages: 2,
+            items: page === 1
+              ? [{ id: "s1", name: "Toán 1", departmentId: "d1" }]
+              : [{ id: "s2", name: "Toán 2", departmentId: "d1" }],
+          },
+          error: undefined,
+        };
+      }
+      if (path === "/review/questions") {
+        if (page === 1) {
+          return {
+            data: {
+              page: 1,
+              pageSize: 20,
+              totalItems: 21,
+              totalPages: 2,
+              items: [
+                {
+                  id: "q1",
+                  subjectId: "s1",
+                  topicId: "t1",
+                  departmentId: "d1",
+                  grade: 10,
+                  type: "MultipleChoice",
+                  difficulty: "Recognition",
+                  stem: "Page 1 question",
+                  payload: { options: [], correctLabel: "A" },
+                  explanation: null,
+                  status: "Submitted",
+                  revision: 1,
+                  source: "Manual",
+                  aiVerification: "NotChecked",
+                  aiVerificationNote: null,
+                  aiReviewedByAuthor: false,
+                  createdBy: { id: "u1", fullName: "Teacher" },
+                  submittedAt: "2026-11-22T00:00:00.000Z",
+                  createdAt: "2026-11-22T00:00:00.000Z",
+                  updatedAt: "2026-11-22T00:00:00.000Z",
+                },
+              ],
+            },
+            error: undefined,
+          };
+        }
+        // Simulate page 2 becoming empty after the last item on page 2 was reviewed.
+        return {
+          data: {
+            page: 2,
+            pageSize: 20,
+            totalItems: 20,
+            totalPages: 1,
+            items: [],
+          },
+          error: undefined,
+        };
+      }
+      return { data: { page: 1, pageSize: 20, totalItems: 0, totalPages: 1, items: [] }, error: undefined };
+    });
+
+    const allSubjects = await fetchAllSubjects();
+    expect(allSubjects.map((s) => s.id)).toEqual(["s1", "s2"]);
+
+    mocks.auth.me.role = "head";
+    renderWithQuery(<ReviewQueuePage />);
+    await waitFor(() => expect(screen.getByText("Page 1 question")).toBeTruthy());
+
+    // Navigate to page 2; because page 2 returns empty items with totalPages=1, ReviewQueuePage automatically clamps back to page 1.
+    fireEvent.click(screen.getByText(messages.common.nextPage));
+    await waitFor(() => {
+      expect(
+        mocks.apiGet.mock.calls.some(
+          (call) =>
+            call[0] === "/review/questions" &&
+            (call[1] as { params?: { query?: { page?: number } } } | undefined)?.params?.query?.page === 2,
+        ),
+      ).toBe(true);
+      expect(screen.getByText("Page 1 question")).toBeTruthy();
+      expect((screen.getByText(messages.common.previousPage) as HTMLButtonElement).disabled).toBe(true);
+    });
   });
 });

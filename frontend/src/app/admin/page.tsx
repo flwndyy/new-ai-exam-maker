@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { fetchAllDepartments, fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
@@ -54,11 +55,7 @@ export default function AdminPage() {
   const departmentsQuery = useQuery({
     queryKey: ["catalog", "departments"],
     enabled: isAdmin,
-    queryFn: async () => {
-      const { data, error } = await api.GET("/departments", { params: { query: { pageSize: 100 } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllDepartments(),
   });
 
   const departmentsListQuery = useQuery({
@@ -69,6 +66,9 @@ export default function AdminPage() {
         params: { query: { page: deptPage, pageSize: 20 } },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (deptPage > 1 && data && data.items.length === 0) {
+        setDeptPage(Math.max(1, data.totalPages || deptPage - 1));
+      }
       return data;
     },
   });
@@ -76,11 +76,7 @@ export default function AdminPage() {
   const subjectsQuery = useQuery({
     queryKey: ["catalog", "subjects"],
     enabled: isAdmin,
-    queryFn: async () => {
-      const { data, error } = await api.GET("/subjects", { params: { query: { pageSize: 100 } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data.items;
-    },
+    queryFn: () => fetchAllSubjects(),
   });
 
   const subjectsListQuery = useQuery({
@@ -91,6 +87,9 @@ export default function AdminPage() {
         params: { query: { page: subjectPage, pageSize: 20 } },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (subjectPage > 1 && data && data.items.length === 0) {
+        setSubjectPage(Math.max(1, data.totalPages || subjectPage - 1));
+      }
       return data;
     },
   });
@@ -109,6 +108,9 @@ export default function AdminPage() {
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (topicPage > 1 && data && data.items.length === 0) {
+        setTopicPage(Math.max(1, data.totalPages || topicPage - 1));
+      }
       return data;
     },
   });
@@ -121,6 +123,9 @@ export default function AdminPage() {
         params: { query: { page: userPage, pageSize: 20 } },
       });
       if (error) throw new Error(getApiErrorMessage(error));
+      if (userPage > 1 && data && data.items.length === 0) {
+        setUserPage(Math.max(1, data.totalPages || userPage - 1));
+      }
       return data;
     },
   });

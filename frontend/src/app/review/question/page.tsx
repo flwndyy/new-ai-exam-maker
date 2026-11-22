@@ -7,6 +7,7 @@ import { Suspense, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
+import { fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
@@ -148,13 +149,7 @@ function ReviewQuestionInner() {
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", q?.subjectId, q?.grade],
     enabled: Boolean(q?.subjectId) && canReview,
-    queryFn: async () => {
-      const { data, error } = await api.GET("/topics", {
-        params: { query: { pageSize: 100, subjectId: q!.subjectId, grade: q!.grade } },
-      });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return data?.items ?? [];
-    },
+    queryFn: () => fetchAllTopics(q!.subjectId, q!.grade),
   });
 
   if (!canReview) {
