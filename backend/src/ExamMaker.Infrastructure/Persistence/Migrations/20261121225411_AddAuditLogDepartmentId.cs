@@ -34,9 +34,9 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                 table: "audit_logs",
                 columns: new[] { "created_at", "id" });
 
-            // Backfill department_id only for entities with an immutable department (Question, Exam, ExamVersion, Department).
-            // Entities whose department can change over time (User, Subject, Topic, QuestionSet, AiJob) or pre-deleted
-            // entities without an existing department snapshot remain NULL (admin-only) so historical events are never misattributed.
+            // Backfill department_id only for existing entities with an immutable department (Question, Exam, ExamVersion, Department).
+            // Migration note (option b): entities whose department can change over time (User, Subject, Topic, QuestionSet, AiJob)
+            // or pre-deleted entities without an existing department snapshot remain NULL (admin-only) so historical events are never misattributed across departments.
             migrationBuilder.Sql("""
                 UPDATE audit_logs AS a
                 SET department_id = resolved.department_id
@@ -58,22 +58,6 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                 ) AS resolved
                 WHERE a.id = resolved.id
                   AND resolved.department_id IS NOT NULL;
-
-                UPDATE audit_logs AS a
-                SET department_id = sibling.department_id
-                FROM (
-                    SELECT DISTINCT ON (entity_type, entity_id)
-                        entity_type,
-                        entity_id,
-                        department_id
-                    FROM audit_logs
-                    WHERE department_id IS NOT NULL
-                      AND entity_type IN ('Question', 'Exam', 'ExamVersion', 'Department')
-                    ORDER BY entity_type, entity_id, created_at DESC, id DESC
-                ) AS sibling
-                WHERE a.department_id IS NULL
-                  AND a.entity_type = sibling.entity_type
-                  AND a.entity_id = sibling.entity_id;
                 """);
         }
 

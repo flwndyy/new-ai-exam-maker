@@ -98,7 +98,7 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
             AuditLog.Create(admin, "Subject", deletedSubjectA, DeptA, "DeleteSubject", null, null, "Deleted: Old subject", t0.AddMinutes(12)),
             AuditLog.Create(teacherA, "Exam", examA.Id, DeptA, "CreateExam", null, null, createdAt: t0.AddMinutes(15)),
             AuditLog.Create(teacherB, "Question", qB.Id, DeptB, "CreateQuestion", null, "Draft", createdAt: t0.AddMinutes(20)),
-            new AuditLog { Id = systemLogId, ActorId = null, EntityType = "User", EntityId = admin, DepartmentId = null, Action = "CreateUser", FromStatus = null, ToStatus = "Active", Note = "Bootstrap administrator CLI.", CreatedAt = t0.AddMinutes(25) });
+            AuditLog.Create(null, "User", admin, null, "CreateUser", null, "Active", "Bootstrap administrator CLI.", t0.AddMinutes(25), id: systemLogId));
 
         await db.SaveChangesAsync();
         return (qA.Id, qB.Id, examA.Id, deletedQuestionA, deletedSubjectA, systemLogId);
@@ -201,19 +201,17 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         };
         var adminProvisionLogId = Guid.NewGuid();
         db.Users.Add(movedAdmin);
-        db.AuditLogs.Add(new AuditLog
-        {
-            Id = adminProvisionLogId,
-            ActorId = admin,
-            EntityType = "User",
-            EntityId = movedAdmin.Id,
-            DepartmentId = null,
-            Action = "CreateUser",
-            FromStatus = null,
-            ToStatus = "Active",
-            Note = "Administrator provisioned an invited account.",
-            CreatedAt = DateTime.UtcNow
-        });
+        db.AuditLogs.Add(AuditLog.Create(
+            admin,
+            "User",
+            movedAdmin.Id,
+            null,
+            "CreateUser",
+            null,
+            "Active",
+            "Administrator provisioned an invited account.",
+            DateTime.UtcNow,
+            id: adminProvisionLogId));
         await db.SaveChangesAsync();
 
         // Simulate demoting and assigning the former administrator to DeptB.
@@ -343,9 +341,6 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var preDeletedQuestionId = Guid.NewGuid();
         var createLogId = Guid.NewGuid();
         var deleteLogId = Guid.NewGuid();
-        var siblingQuestionId = Guid.NewGuid();
-        var siblingResolvedLogId = Guid.NewGuid();
-        var siblingNullLogId = Guid.NewGuid();
         var t0 = new DateTime(2026, 11, 20, 9, 0, 0, DateTimeKind.Utc);
 
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -364,29 +359,6 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
 
         await db.Database.MigrateAsync();
 
-        // Also verify sibling backfill: if one row of a deleted entity already had department_id, sibling rows inherit it.
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO audit_logs (id, actor_id, entity_type, entity_id, department_id, action, from_status, to_status, note, created_at)
-            VALUES
-                ({siblingResolvedLogId}, {movedTeacher}, 'Question', {siblingQuestionId}, {DeptA}, 'CreateQuestion', NULL, 'Draft', 'Known department', {t0}),
-                ({siblingNullLogId}, {localAdmin}, 'Question', {siblingQuestionId}, NULL, 'DeleteQuestion', 'Draft', NULL, 'Admin action on same entity', {t0.AddMinutes(2)});
-
-            UPDATE audit_logs AS a
-            SET department_id = sibling.department_id
-            FROM (
-                SELECT DISTINCT ON (entity_type, entity_id)
-                    entity_type,
-                    entity_id,
-                    department_id
-                FROM audit_logs
-                WHERE department_id IS NOT NULL
-                ORDER BY entity_type, entity_id, created_at DESC, id DESC
-            ) AS sibling
-            WHERE a.department_id IS NULL
-              AND a.entity_type = sibling.entity_type
-              AND a.entity_id = sibling.entity_id;
-            """);
-
         var reader = new AuditLogReader(db);
 
         // Head B must NOT see preDeletedQuestionId even though movedTeacher is currently in DeptB.
@@ -396,10 +368,6 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         // Admin sees the unresolvable pre-deleted entity logs.
         var adminPage = await reader.ListAsync(localAdmin, new AuditLogQuery(EntityId: preDeletedQuestionId), CancellationToken.None);
         Assert.Equal(2, adminPage.TotalItems);
-
-        // Head A sees both rows of siblingQuestionId because sibling backfill resolved the NULL row to DeptA.
-        var headASiblingPage = await reader.ListAsync(localHeadA, new AuditLogQuery(EntityId: siblingQuestionId), CancellationToken.None);
-        Assert.Equal(2, headASiblingPage.TotalItems);
     }
 
     [PostgresFact]
@@ -409,9 +377,10 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         await using var db = fixture.CreateContext();
         var reader = new AuditLogReader(db);
 
-        // Move subject from DeptA to DeptB via CatalogManagement.
+        // Move subject (with a child topic) from DeptA to DeptB via CatalogManagement.
         var catalog = new ExamMaker.Infrastructure.Catalog.CatalogManagement(db, NullLogger<ExamMaker.Infrastructure.Catalog.CatalogManagement>.Instance);
         var subject = await catalog.SaveSubjectAsync(admin, null, new("Movable Subject", DeptA), CancellationToken.None);
+        var childTopic = await catalog.SaveTopicAsync(admin, null, new(subject.Id, 10, "Child Topic", 1), CancellationToken.None);
         await catalog.SaveSubjectAsync(admin, subject.Id, new("Movable Subject", DeptB), CancellationToken.None);
 
         var headASubjectLogs = await reader.ListAsync(headA, new AuditLogQuery(EntityType: "Subject", EntityId: subject.Id, Action: "UpdateSubject"), CancellationToken.None);
@@ -421,7 +390,23 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         Assert.Equal(1, headASubjectLogs.TotalItems);
         Assert.Equal(1, headBSubjectLogs.TotalItems);
         Assert.Equal(1, adminSubjectLogs.TotalItems);
-        Assert.Equal(headASubjectLogs.Items[0].Note, headBSubjectLogs.Items[0].Note);
+        // Head A sees DeptA but DeptB is redacted to "other"; Head B sees DeptB but DeptA is redacted to "other"; Admin sees both GUIDs.
+        Assert.Contains($"department={DeptA}", headASubjectLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptB.ToString(), headASubjectLogs.Items[0].Note);
+        Assert.Contains("department=other", headASubjectLogs.Items[0].Note);
+        Assert.Contains($"department={DeptB}", headBSubjectLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptA.ToString(), headBSubjectLogs.Items[0].Note);
+        Assert.Contains("department=other", headBSubjectLogs.Items[0].Note);
+        Assert.Contains($"department={DeptA}", adminSubjectLogs.Items[0].Note);
+        Assert.Contains($"department={DeptB}", adminSubjectLogs.Items[0].Note);
+
+        // Child topic also receives a department-move audit visible to both heads and once to admin.
+        var headATopicMoveLogs = await reader.ListAsync(headA, new AuditLogQuery(EntityType: "Topic", EntityId: childTopic.Id, Action: "UpdateTopic"), CancellationToken.None);
+        var headBTopicMoveLogs = await reader.ListAsync(headB, new AuditLogQuery(EntityType: "Topic", EntityId: childTopic.Id, Action: "UpdateTopic"), CancellationToken.None);
+        var adminTopicMoveLogs = await reader.ListAsync(admin, new AuditLogQuery(EntityType: "Topic", EntityId: childTopic.Id, Action: "UpdateTopic"), CancellationToken.None);
+        Assert.Equal(1, headATopicMoveLogs.TotalItems);
+        Assert.Equal(1, headBTopicMoveLogs.TotalItems);
+        Assert.Equal(1, adminTopicMoveLogs.TotalItems);
 
         // User-entered notes (such as ReviewNote ending with "[move-target]") are never hidden or truncated.
         var trickyLog = AuditLog.Create(headA, "ExamVersion", Guid.NewGuid(), DeptA, "RejectExamVersion", "Submitted", "Rejected", "Sai đáp án [move-target]");
@@ -439,11 +424,19 @@ public sealed class AuditLogReaderTests : IAsyncLifetime
         var users = new ExamMaker.Infrastructure.Users.UserManagementService(db, cognito, NullLogger<ExamMaker.Infrastructure.Users.UserManagementService>.Instance);
         var createdUser = await users.CreateAsync(admin, new("movable@example.invalid", "Movable", Roles.Teacher, DeptA), CancellationToken.None);
 
-        // Move DeptA -> DeptB: 2 rows in DB, 1 visible to Head A, 1 to Head B, 1 to Admin.
+        // Move DeptA -> DeptB: 2 rows in DB, 1 visible to Head A, 1 to Head B, 1 to Admin, with other department GUID redacted for heads.
         await users.UpdateAsync(admin, createdUser.Id, new("movable@example.invalid", "Movable", Roles.Teacher, DeptB, true), CancellationToken.None);
-        Assert.Equal(1, (await reader.ListAsync(headA, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None)).TotalItems);
-        Assert.Equal(1, (await reader.ListAsync(headB, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None)).TotalItems);
-        Assert.Equal(1, (await reader.ListAsync(admin, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None)).TotalItems);
+        var headAUserLogs = await reader.ListAsync(headA, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None);
+        var headBUserLogs = await reader.ListAsync(headB, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None);
+        var adminUserLogs = await reader.ListAsync(admin, new AuditLogQuery(EntityId: createdUser.Id, Action: "UpdateUser"), CancellationToken.None);
+        Assert.Equal(1, headAUserLogs.TotalItems);
+        Assert.Equal(1, headBUserLogs.TotalItems);
+        Assert.Equal(1, adminUserLogs.TotalItems);
+        Assert.Contains($"department {DeptA}->other", headAUserLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptB.ToString(), headAUserLogs.Items[0].Note);
+        Assert.Contains($"department other->{DeptB}", headBUserLogs.Items[0].Note);
+        Assert.DoesNotContain(DeptA.ToString(), headBUserLogs.Items[0].Note);
+        Assert.Contains($"department {DeptA}->{DeptB}", adminUserLogs.Items[0].Note);
 
         // Move DeptB -> NULL (promote to admin): only 1 row written (for DeptB), no NULL duplicate.
         await users.UpdateAsync(admin, createdUser.Id, new("movable@example.invalid", "Movable", Roles.Admin, null, true), CancellationToken.None);

@@ -5,20 +5,22 @@ namespace ExamMaker.Domain.Auditing;
 // A null actor identifies a system task; Note must identify that task.
 public class AuditLog
 {
-    public Guid Id { get; set; }
-    public Guid? ActorId { get; set; }
-    public User? Actor { get; set; }
-    public string EntityType { get; set; } = string.Empty;
-    public Guid EntityId { get; set; }
+    internal AuditLog() { }
+
+    public Guid Id { get; init; }
+    public Guid? ActorId { get; init; }
+    public User? Actor { get; init; }
+    public string EntityType { get; init; } = string.Empty;
+    public Guid EntityId { get; init; }
     // Snapshot the target entity's department at the time of the event so moves/deletes never leak or hide history.
-    public Guid? DepartmentId { get; set; }
+    public Guid? DepartmentId { get; init; }
     // Marks the target-department row of a dual-department move so administrators only see the event once.
-    public bool IsSecondary { get; set; }
-    public string Action { get; set; } = string.Empty;
-    public string? FromStatus { get; set; }
-    public string? ToStatus { get; set; }
-    public string? Note { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public bool IsSecondary { get; init; }
+    public string Action { get; init; } = string.Empty;
+    public string? FromStatus { get; init; }
+    public string? ToStatus { get; init; }
+    public string? Note { get; init; }
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     /// <summary>Create an audit log row with an explicit department snapshot (null only for departmentless system/admin events).</summary>
     public static AuditLog Create(
@@ -31,10 +33,11 @@ public class AuditLog
         string? toStatus = null,
         string? note = null,
         DateTime? createdAt = null,
-        bool isSecondary = false) =>
+        bool isSecondary = false,
+        Guid? id = null) =>
         new()
         {
-            Id = Guid.NewGuid(),
+            Id = id ?? Guid.NewGuid(),
             ActorId = actorId,
             EntityType = entityType,
             EntityId = entityId,

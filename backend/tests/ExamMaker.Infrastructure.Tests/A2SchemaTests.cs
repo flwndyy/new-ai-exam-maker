@@ -87,5 +87,8 @@ public class A2SchemaTests
         Assert.True(log.IsSecondary);
         Assert.Equal("UpdateSubject", log.Action);
         Assert.Equal("Before: A; after: B", log.Note);
+
+        // Public constructors and mutable public setters must remain disallowed so writers cannot omit departmentId.
+        Assert.Empty(typeof(AuditLog).GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
     }
 }

@@ -49,28 +49,22 @@ public sealed class AuditLogsController(IAuditLogReader auditLogs, ICurrentUser 
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var trimmed = raw.Trim();
-        if (endOfDayIfDateOnly && DateOnly.TryParseExact(trimmed, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateOnly))
-            return new DateTimeOffset(dateOnly.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc), TimeSpan.Zero);
+        if (DateOnly.TryParseExact(trimmed, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateOnly))
+        {
+            var time = endOfDayIfDateOnly ? TimeOnly.MaxValue : TimeOnly.MinValue;
+            return new DateTimeOffset(dateOnly.ToDateTime(time, DateTimeKind.Utc), TimeSpan.Zero);
+        }
+        // Require an explicit ISO-8601 time separator so non-canonical date strings (e.g., 2026-1-1) are rejected.
+        if (trimmed.IndexOfAny(['T', 't']) < 0)
+            throw new AuditException(400, "ValidationFailed", message, field);
         // Treat timestamps without an explicit offset as UTC rather than server local time.
         if (DateTimeOffset.TryParse(
                 trimmed,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var value))
-        {
-            if (endOfDayIfDateOnly && !HasFractionalSeconds(trimmed))
-                return value.AddTicks(TimeSpan.TicksPerSecond - 1);
             return value;
-        }
         throw new AuditException(400, "ValidationFailed", message, field);
-    }
-
-    /// <summary>Detect whether a timestamp string explicitly specifies fractional seconds after the time component.</summary>
-    private static bool HasFractionalSeconds(string trimmed)
-    {
-        var timeSeparator = trimmed.IndexOfAny(['T', 't', ' ']);
-        if (timeSeparator < 0) return false;
-        return trimmed.AsSpan(timeSeparator + 1).IndexOfAny(['.', ',']) >= 0;
     }
 }
 

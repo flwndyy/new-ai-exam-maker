@@ -49,7 +49,7 @@ public sealed class AuditLogsHttpTests
         Assert.Equal(actorId, app.Reader.LastQuery?.ActorId);
         Assert.Equal("ApproveQuestion", app.Reader.LastQuery?.Action);
         Assert.Equal(new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.From);
-        Assert.Equal(new DateTimeOffset(2026, 11, 22, 0, 0, 0, TimeSpan.Zero).AddTicks(TimeSpan.TicksPerSecond - 1), app.Reader.LastQuery?.To);
+        Assert.Equal(new DateTimeOffset(2026, 11, 22, 0, 0, 0, TimeSpan.Zero), app.Reader.LastQuery?.To);
 
         var items = body.GetProperty("items");
         Assert.Equal(2, items.GetArrayLength());
@@ -90,6 +90,12 @@ public sealed class AuditLogsHttpTests
         using var fractionalToResponse = await client.GetAsync("/api/v1/audit-logs?to=2026-11-20T10:00:00.250Z");
         Assert.Equal(HttpStatusCode.OK, fractionalToResponse.StatusCode);
         Assert.Equal(new DateTimeOffset(2026, 11, 20, 10, 0, 0, 250, TimeSpan.Zero), app.Reader.LastQuery?.To);
+
+        using var badDate = await client.GetAsync("/api/v1/audit-logs?to=2026-1-1");
+        Assert.Equal(HttpStatusCode.BadRequest, badDate.StatusCode);
+        var badDateBody = await badDate.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ValidationFailed", badDateBody.GetProperty("code").GetString());
+        Assert.True(badDateBody.GetProperty("errors").TryGetProperty("to", out _));
 
         using var badPage = await client.GetAsync("/api/v1/audit-logs?page=abc");
         Assert.Equal(HttpStatusCode.BadRequest, badPage.StatusCode);

@@ -92,7 +92,42 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
                 x.CreatedAt))
             .ToListAsync(cancellationToken);
 
+        if (headDepartmentId is Guid redactDeptId)
+        {
+            items = items
+                .Select(item => item with { Note = RedactOtherDepartmentGuids(item.Note, redactDeptId) })
+                .ToList();
+        }
+
         return new AuditLogPage(query.Page, query.PageSize, totalItems, totalPages, items);
+    }
+
+    /// <summary>Mask other departments' identifiers in department-transfer audit notes when viewed by a department head.</summary>
+    private static string? RedactOtherDepartmentGuids(string? note, Guid headDepartmentId)
+    {
+        if (string.IsNullOrEmpty(note)) return note;
+        var own = headDepartmentId.ToString();
+
+        // UserManagement format: "department <old> -> <new>" or "department <old>-><new>"
+        var result = System.Text.RegularExpressions.Regex.Replace(
+            note,
+            @"(?<=\bdepartment\s+)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|none)->([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|none)",
+            match =>
+            {
+                var left = match.Groups[1].Value;
+                var right = match.Groups[2].Value;
+                var safeLeft = left.Equals(own, StringComparison.OrdinalIgnoreCase) || left == "none" ? left : "other";
+                var safeRight = right.Equals(own, StringComparison.OrdinalIgnoreCase) || right == "none" ? right : "other";
+                return $"{safeLeft}->{safeRight}";
+            });
+
+        // CatalogManagement format: "department=<guid>"
+        result = System.Text.RegularExpressions.Regex.Replace(
+            result,
+            @"(?<=\bdepartment=)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+            match => match.Value.Equals(own, StringComparison.OrdinalIgnoreCase) ? match.Value : "other");
+
+        return result;
     }
 
     /// <summary>Validate pagination, offset overflow, entityType enum, and UTC time bounds before querying the database.</summary>

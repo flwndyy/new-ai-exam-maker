@@ -75,6 +75,17 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             {
                 Audit(actorId, "Subject", target, before.DepartmentId, false, beforeNote, afterNote);
                 Audit(actorId, "Subject", target, department, false, beforeNote, afterNote, secondaryMove: true);
+                var childTopics = await database.Topics.AsNoTracking()
+                    .Where(t => t.SubjectId == target)
+                    .OrderBy(t => t.Grade).ThenBy(t => t.SortOrder).ThenBy(t => t.Id)
+                    .ToListAsync(cancellationToken);
+                foreach (var topic in childTopics)
+                {
+                    var topicBefore = $"{topic.Name}; subject={target}; grade={topic.Grade}; order={topic.SortOrder}; department={before.DepartmentId}";
+                    var topicAfter = $"{topic.Name}; subject={target}; grade={topic.Grade}; order={topic.SortOrder}; department={department}";
+                    Audit(actorId, "Topic", topic.Id, before.DepartmentId, false, topicBefore, topicAfter);
+                    Audit(actorId, "Topic", topic.Id, department, false, topicBefore, topicAfter, secondaryMove: true);
+                }
             }
             else
             {
