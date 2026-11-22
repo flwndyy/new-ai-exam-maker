@@ -72,8 +72,14 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var beforeNote = before is null ? null : $"{before.Name}; department={before.DepartmentId}";
             var afterNote = $"{name}; department={department}";
             if (before is not null && before.DepartmentId != department)
+            {
                 Audit(actorId, "Subject", target, before.DepartmentId, false, beforeNote, afterNote);
-            Audit(actorId, "Subject", target, department, id is null, beforeNote, afterNote);
+                Audit(actorId, "Subject", target, department, false, beforeNote, afterNote, secondaryMove: true);
+            }
+            else
+            {
+                Audit(actorId, "Subject", target, department, id is null, beforeNote, afterNote);
+            }
             return new SubjectView(target, name, department);
         }, cancellationToken);
     }
@@ -106,8 +112,14 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             var beforeNote = before is null ? null : $"{before.Name}; subject={before.SubjectId}; grade={before.Grade}; order={before.SortOrder}";
             var afterNote = $"{name}; subject={subject}; grade={grade}; order={order}";
             if (before is not null && beforeDepartmentId != subjectDepartmentId)
+            {
                 Audit(actorId, "Topic", target, beforeDepartmentId, false, beforeNote, afterNote);
-            Audit(actorId, "Topic", target, subjectDepartmentId, id is null, beforeNote, afterNote);
+                Audit(actorId, "Topic", target, subjectDepartmentId, false, beforeNote, afterNote, secondaryMove: true);
+            }
+            else
+            {
+                Audit(actorId, "Topic", target, subjectDepartmentId, id is null, beforeNote, afterNote);
+            }
             return new TopicView(target, subject, grade, name, order);
         }, cancellationToken);
     }
@@ -140,16 +152,13 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
             if (target is null) throw Missing();
             await EnsureNoActiveJobsAsync(entityType, id, cancellationToken);
             if (await source.ExecuteDeleteAsync(cancellationToken) == 0) throw Missing();
-            database.AuditLogs.Add(new AuditLog
-            {
-                Id = Guid.NewGuid(),
-                ActorId = actorId,
-                EntityType = entityType,
-                EntityId = id,
-                DepartmentId = target.DepartmentId,
-                Action = "Delete" + entityType,
-                Note = $"Deleted: {target.Note}"
-            });
+            database.AuditLogs.Add(AuditLog.Create(
+                actorId,
+                entityType,
+                id,
+                target.DepartmentId,
+                "Delete" + entityType,
+                note: $"Deleted: {target.Note}"));
             return true;
         }, cancellationToken);
 
@@ -198,17 +207,14 @@ public sealed class CatalogManagement(ExamMakerDbContext database, ILogger<Catal
     }
 
     /// <summary>Record before/after catalog metadata without leaving successful audits for rolled-back changes.</summary>
-    private void Audit(Guid actorId, string entityType, Guid id, Guid departmentId, bool created, string? before, string after) =>
-        database.AuditLogs.Add(new AuditLog
-        {
-            Id = Guid.NewGuid(),
-            ActorId = actorId,
-            EntityType = entityType,
-            EntityId = id,
-            DepartmentId = departmentId,
-            Action = (created ? "Create" : "Update") + entityType,
-            Note = $"Before: {before ?? "(new)"}; after: {after}"
-        });
+    private void Audit(Guid actorId, string entityType, Guid id, Guid departmentId, bool created, string? before, string after, bool secondaryMove = false) =>
+        database.AuditLogs.Add(AuditLog.Create(
+            actorId,
+            entityType,
+            id,
+            departmentId,
+            (created ? "Create" : "Update") + entityType,
+            note: $"Before: {before ?? "(new)"}; after: {after}" + (secondaryMove ? AuditLog.SecondaryMoveSuffix : "")));
 
     /// <summary>Return a safe not-found response for missing update and delete targets.</summary>
     private static CatalogException Missing() => new(404, "NotFound", "Không tìm thấy danh mục.");

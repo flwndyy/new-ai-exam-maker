@@ -356,7 +356,7 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
         if (page < 1 || size is < 1 or > 100 || (long)(page - 1) * size > int.MaxValue) throw ExamRules.Invalid("query");
     }
     /// <summary>Record mutation history inside the transaction; no emails or question content enter audit notes.</summary>
-    private void Audit(Guid actor, string entity, Guid id, Guid departmentId, string action, string? from, string? to, string? note = null) => database.AuditLogs.Add(new AuditLog
-    { Id = Guid.NewGuid(), ActorId = actor, EntityType = entity, EntityId = id, DepartmentId = departmentId, Action = action, FromStatus = from, ToStatus = to, Note = note, CreatedAt = DateTime.UtcNow });
+    private void Audit(Guid actor, string entity, Guid id, Guid departmentId, string action, string? from, string? to, string? note = null) =>
+        database.AuditLogs.Add(AuditLog.Create(actor, entity, id, departmentId, action, from, to, note));
     private static ExamException Conflict(string message) => new(409, "Conflict", message);
 }

@@ -175,9 +175,16 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
             var auditNote = permissionChanges.Count == 0 ? "User profile and managed role synchronized." : string.Join("; ", permissionChanges);
             var fromStatus = user.IsActive ? "Active" : "Inactive";
             var toStatus = active ? "Active" : "Inactive";
-            Audit(actorId, user.Id, user.DepartmentId, "UpdateUser", fromStatus, toStatus, auditNote);
-            if (input.DepartmentId != user.DepartmentId)
+            if (user.DepartmentId is null)
+            {
                 Audit(actorId, user.Id, input.DepartmentId, "UpdateUser", fromStatus, toStatus, auditNote);
+            }
+            else
+            {
+                Audit(actorId, user.Id, user.DepartmentId, "UpdateUser", fromStatus, toStatus, auditNote);
+                if (input.DepartmentId is Guid newDeptId && newDeptId != user.DepartmentId)
+                    Audit(actorId, user.Id, newDeptId, "UpdateUser", fromStatus, toStatus, auditNote + AuditLog.SecondaryMoveSuffix);
+            }
             user.Email = input.Email;
             user.FullName = input.FullName;
             user.Role = input.Role;
@@ -298,18 +305,7 @@ public sealed class UserManagementService(ExamMakerDbContext database, ICognitoU
 
     /// <summary>Persist user-management audit events in the same database transaction as the local change.</summary>
     private void Audit(Guid? actorId, Guid id, Guid? departmentId, string action, string? from, string to, string note) =>
-        database.AuditLogs.Add(new AuditLog
-        {
-            Id = Guid.NewGuid(),
-            ActorId = actorId,
-            EntityType = "User",
-            EntityId = id,
-            DepartmentId = departmentId,
-            Action = action,
-            FromStatus = from,
-            ToStatus = to,
-            Note = note
-        });
+        database.AuditLogs.Add(AuditLog.Create(actorId, "User", id, departmentId, action, from, to, note));
     private static UserOperationException Invalid() => new(400, "ValidationFailed", "Thông tin người dùng không hợp lệ.");
     private static UserOperationException Missing() => new(404, "NotFound", "Không tìm thấy người dùng.");
 }

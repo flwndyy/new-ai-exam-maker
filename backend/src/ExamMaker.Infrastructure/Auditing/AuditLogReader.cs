@@ -47,6 +47,12 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
             // departmentless entries (e.g., admin provisioning or legacy unresolvable rows) remain admin-only.
             logs = logs.Where(log => log.DepartmentId == scopedDeptId);
         }
+        else
+        {
+            // Dual-department move events emit a primary row for the source department and a secondary row
+            // tagged with SecondaryMoveSuffix for the target department; administrators see the event once.
+            logs = logs.Where(log => log.Note == null || !log.Note.EndsWith(AuditLog.SecondaryMoveSuffix));
+        }
 
         if (entityType is not null)
             logs = logs.Where(x => x.EntityType == entityType);
@@ -82,7 +88,7 @@ public sealed class AuditLogReader(ExamMakerDbContext database) : IAuditLogReade
                 x.Action,
                 x.FromStatus,
                 x.ToStatus,
-                x.Note,
+                AuditLog.CleanNote(x.Note),
                 x.CreatedAt))
             .ToListAsync(cancellationToken);
 

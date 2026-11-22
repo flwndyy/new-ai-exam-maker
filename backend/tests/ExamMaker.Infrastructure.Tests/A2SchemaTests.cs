@@ -70,4 +70,23 @@ public class A2SchemaTests
         var model = context.GetService<IDesignTimeModel>().Model;
         Assert.Contains(model.FindEntityType(type)!.GetCheckConstraints(), check => check.Name == name);
     }
+
+    [Fact]
+    public void AuditLog_factory_and_clean_note_handle_department_snapshots_and_move_markers()
+    {
+        var deptId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var entityId = Guid.NewGuid();
+        var log = AuditLog.Create(actorId, "Subject", entityId, deptId, "UpdateSubject", note: "Before: A; after: B" + AuditLog.SecondaryMoveSuffix);
+
+        Assert.NotEqual(Guid.Empty, log.Id);
+        Assert.Equal(actorId, log.ActorId);
+        Assert.Equal("Subject", log.EntityType);
+        Assert.Equal(entityId, log.EntityId);
+        Assert.Equal(deptId, log.DepartmentId);
+        Assert.Equal("UpdateSubject", log.Action);
+        Assert.Equal("Before: A; after: B", AuditLog.CleanNote(log.Note));
+        Assert.Equal("Before: A; after: B", AuditLog.CleanNote("Before: A; after: B"));
+        Assert.Null(AuditLog.CleanNote(null));
+    }
 }
