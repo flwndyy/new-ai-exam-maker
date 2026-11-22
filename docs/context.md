@@ -348,7 +348,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 - **Region & Thời gian:** `ap-southeast-1` (Singapore) · **2 tháng** (giai đoạn dev + demo).
 - **Lịch vận hành máy chủ:** Bật EC2 và RDS từ **07:00 đến 23:00 hàng ngày (16 giờ/ngày ≈ 480 giờ/tháng)**, tắt ban đêm 23:00–07:00.
 - **Quy mô & Quota AI:** ≤ 20 người dùng đồng thời (~30 tài khoản giáo viên demo) · quota tối đa **10 lần sinh/user/ngày** (tối đa 10 câu/lần).
-- **Ước lượng Bedrock:** Trung bình 1 job (5–10 câu + bước kiểm chứng đáp án `ai_verification` + hệ số retry 1.2×) tiêu thụ **~4,000 input tokens + ~4,000 output tokens**. Kết hợp **Claude 3.5 Haiku** ($0.80/1M input, $4.00/1M output → ~$0.0192/job) cho ~500 jobs/tháng quá trình dev/test và **Claude 3.5 Sonnet v2** ($3.00/1M input, $15.00/1M output → ~$0.072/job) cho ~100 jobs/tháng demo chính.
+- **Ước lượng Bedrock:** Trung bình 1 job (5–10 câu + bước kiểm chứng đáp án `ai_verification` + hệ số retry 1.2×) tiêu thụ **~4,000 input tokens + ~4,000 output tokens**. Kết hợp **Claude 3 Haiku** (`apac.anthropic.claude-3-haiku-20240307-v1:0`, $0.25/1M input, $1.25/1M output — rẻ hơn dự toán ban đầu $0.80/$4.00, có sẵn inference profile APAC tại `ap-southeast-1`) cho ~500 jobs/tháng quá trình dev/test và **Claude 3.5 Sonnet v2** (`apac.anthropic.claude-3-5-sonnet-20241022-v2:0`, $3.00/1M input, $15.00/1M output → ~$0.072/job) cho ~100 jobs/tháng demo chính.
 
 | Hạng mục                                   | Cách tính                                                                                       | Chi phí/tháng (USD)                            | Số tháng | Tổng               |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------- | ------------------ |
@@ -597,7 +597,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 - **Quy mô dự kiến** (mục 12). _Chốt 17/11/2026._
 - **Mức dự phòng ngân sách ≥ 20% (≈ $40)** (mục 6). _Chốt 18/11/2026._
 - **Domain & chứng chỉ origin**: `app.<domain>` (CloudFront) và `origin.<domain>` (A record → Elastic IP); Let's Encrypt cấp bằng **HTTP-01** — port 80 chỉ phục vụ `/.well-known/acme-challenge/`, port 443 chỉ nhận từ CloudFront (mục 5.3). Không cấp quyền sửa Route 53 cho EC2. _Chốt 19/11/2026._
-- **Bedrock & quota AI**: region `ap-southeast-1`; Claude 3.5 Haiku cho dev/test, Claude 3.5 Sonnet v2 cho demo (ModelId đọc từ Parameter Store); quota **10 job/user/ngày**, **10 câu/job**, **100.000 token/user/ngày**, trần hệ thống **500.000 token/ngày**; bước kiểm chứng đáp án bật/tắt bằng cấu hình — **tắt khi dev, bật khi demo** (mục 4.1.2, 6). _Chốt 19/11/2026._
+- **Bedrock & quota AI**: region `ap-southeast-1`; Claude 3 Haiku (`apac.anthropic.claude-3-haiku-20240307-v1:0`) cho dev/test (do `ap-southeast-1` hỗ trợ inference profile APAC cho Claude 3 Haiku, không có profile APAC cho Claude 3.5 Haiku), Claude 3.5 Sonnet v2 (`apac.anthropic.claude-3-5-sonnet-20241022-v2:0`) cho demo (ModelId đọc từ Parameter Store); quota **10 job/user/ngày**, **10 câu/job**, **100.000 token/user/ngày**, trần hệ thống **500.000 token/ngày**; bước kiểm chứng đáp án bật/tắt bằng cấu hình — **tắt khi dev, bật khi demo** (mục 4.1.2, 6). _Chốt 19/11/2026; cập nhật model Haiku APAC 22/11/2026._
 - **Kiến trúc CPU**: **`t4g.small`** (ARM64) cho EC2 và **`db.t4g.micro`** cho RDS; backend publish `linux-arm64` (mục 5.2, 11). _Chốt 19/11/2026._
 - **Công cụ hạ tầng**: dựng qua **AWS Console + script/file cấu hình mẫu trong `/infra`** (Nginx, systemd, CloudFront Function, bootstrap) và **ghi runbook trong `docs/`**; IaC hoàn chỉnh để sau MVP (mục 5.4). _Chốt 19/11/2026._
 
@@ -622,6 +622,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.17 — 22/11/2026**
+- Chuẩn hóa AWS Systems Manager Parameter Store (O12): xác nhận inference profile APAC hợp lệ tại `ap-southeast-1` là `apac.anthropic.claude-3-haiku-20240307-v1:0` (dev/test) và `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` (demo); cập nhật mục 6 và 14 tương ứng.
 
 **0.16 — 21/11/2026**
 - Triển khai Amazon SQS + DLQ (O11): Standard queue `exammaker-dev-ai-jobs` (`VisibilityTimeout = 300s`, Long Polling `20s`, `maxReceiveCount = 3`, SSE-SQS $0) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày, `RedriveAllowPolicy`); ghi rõ ràng buộc timeout Bedrock / heartbeat của Worker B6 trong mục 4.1.1.

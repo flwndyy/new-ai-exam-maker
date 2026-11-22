@@ -36,7 +36,8 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 | **SQS (O11)** | `/exammaker/dev/Sqs/AiJobsQueueUrl` | `String` | Do O11 tạo | `Sqs:AiJobsQueueUrl` (`AiServiceCollectionExtensions.cs`) |
 | | `/exammaker/dev/Sqs/{AiJobsQueueArn,AiJobsDlqUrl,AiJobsDlqArn}` | `String` | Do O11 tạo | EC2 IAM (O3), CloudWatch (O13) |
 | **Bedrock (O12)** | `/exammaker/dev/Bedrock/Region` | `String` | `ap-southeast-1` | `Bedrock:Region` (Worker B6) |
-| | `/exammaker/dev/Bedrock/ModelId` | `String` | `apac.anthropic.claude-3-5-haiku-20241022-v1:0` | `Bedrock:ModelId` (model đang chạy: Haiku cho dev, đổi sang Sonnet v2 khi demo) |
+| | `/exammaker/dev/Bedrock/ModelId` | `String` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | `Bedrock:ModelId` (model đang chạy: Claude 3 Haiku cho dev, đổi sang Sonnet v2 khi demo) |
+| | `/exammaker/dev/Bedrock/DevModelId` | `String` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | Tham chiếu model dev/tiết kiệm chi phí (Claude 3 Haiku) để rollback sau demo |
 | | `/exammaker/dev/Bedrock/DemoModelId` | `String` | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | Tham chiếu model demo (Claude 3.5 Sonnet v2) |
 | | `/exammaker/dev/Bedrock/EnableAnswerVerification` | `String` | `false` (`true` khi demo) | `Bedrock:EnableAnswerVerification` (`docs/context.md` §14) |
 | **AI Quota (O12)** | `/exammaker/dev/AiQuota/JobsPerUserPerDay` | `String` | `10` | `AiQuota:JobsPerUserPerDay` (`AiQuotaOptions.cs`) |
@@ -71,12 +72,13 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 ./infra/ssm/verify-ssm.sh
 ```
 
-Script kiểm tra tự động **15 tiêu chí**:
-1. Đủ nhóm tham số O9 (Cognito), O10 (RDS connection string + metadata), O11 (SQS + DLQ), O12 (AWS, Bedrock, AI Quota, AI Rate Limit, Origin Secret, CloudWatch).
-2. `ConnectionStrings/ExamMaker` và `Origin/VerifySecret` bắt buộc là `SecureString` (và `Origin/VerifySecret` ≥ 32 ký tự); tuyệt đối không in giá trị secret ra terminal.
-3. Các giá trị quota là số nguyên dương hợp lệ, `MaxAttempts == 3` khớp SQS `maxReceiveCount=3`, `SystemTokensPerDay >= TokensPerUserPerDay`.
-4. **Kiểm soát chi phí ($0):** 100% tham số dưới `/exammaker/dev/` dùng **Standard tier** và 100% `SecureString` dùng khóa AWS-managed `alias/aws/ssm`.
-5. **Kiểm soát bảo mật:** không có tham số nào chứa `Secret`, `Password` hoặc `ConnectionStrings` bị lưu ở dạng `String` thuần.
+Script kiểm tra tự động **18 tiêu chí** cho **32 tham số chuẩn hóa** (5 O9 + 6 O10 + 4 O11 + 17 O12; riêng `Rds/MasterPassword` của O10 là tham số nội bộ OPS nên không liệt kê vào danh sách app config):
+1. Đủ nhóm tham số O9 (Cognito), O10 (RDS connection string + metadata), O11 (SQS + DLQ), O12 (AWS, Bedrock gồm `ModelId`/`DevModelId`/`DemoModelId`, AI Quota, AI Rate Limit, Origin Secret, CloudWatch).
+2. Xác thực trực tiếp `Bedrock/ModelId`, `Bedrock/DevModelId`, `Bedrock/DemoModelId` là inference profile `ACTIVE` (hoặc foundation model `ON_DEMAND`) tại `Bedrock/Region`.
+3. `ConnectionStrings/ExamMaker` và `Origin/VerifySecret` bắt buộc là `SecureString` (và `Origin/VerifySecret` ≥ 32 ký tự); tuyệt đối không in giá trị secret ra terminal.
+4. Các giá trị quota là số nguyên dương hợp lệ, `MaxAttempts == 3` khớp SQS `maxReceiveCount=3`, `SystemTokensPerDay >= TokensPerUserPerDay`, và `AiRateLimit/Window` là `.NET TimeSpan > 0`.
+5. **Kiểm soát chi phí ($0):** 100% tham số dưới `/exammaker/dev/` dùng **Standard tier** và 100% `SecureString` dùng khóa AWS-managed `alias/aws/ssm`.
+6. **Kiểm soát bảo mật:** không có tham số nào chứa `Secret`, `Password` hoặc `ConnectionStrings` bị lưu ở dạng `String` thuần.
 
 ---
 
@@ -90,7 +92,7 @@ Script kiểm tra tự động **15 tiêu chí**:
 ParameterStore__Path=/exammaker/dev
 ```
 
-Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-ec2-policy.example.json`) chỉ cần quyền `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` giới hạn trong `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev*` (khóa `alias/aws/ssm` được giải mã mặc định mà không cần cấp `kms:Decrypt` riêng cho CMK).
+Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-ec2-policy.example.json`) chỉ cần quyền `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` giới hạn đúng 2 ARN `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev` và `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev/*` (khớp `${PARAMETER_ARN_PREFIX}` và `${PARAMETER_ARN_PREFIX}/*` trong policy mẫu; khóa `alias/aws/ssm` được giải mã mặc định mà không cần cấp `kms:Decrypt` riêng cho CMK).
 
 ### 4.2 Chuyển đổi cấu hình Dev (Haiku) ↔ Demo (Sonnet v2)
 
@@ -108,10 +110,11 @@ Sau đó restart dịch vụ trên EC2 qua SSM Session Manager để nạp cấu
 sudo systemctl restart exammaker-api exammaker-worker
 ```
 
-**Sau buổi demo (đưa về Haiku + tắt kiểm chứng để tiết kiệm chi phí):**
+**Sau buổi demo (đưa về `DevModelId` + tắt kiểm chứng để tiết kiệm chi phí):**
 
 ```bash
-aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/ModelId --type String --value "apac.anthropic.claude-3-5-haiku-20241022-v1:0" --overwrite
+DEV_MODEL="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/DevModelId --query Parameter.Value --output text)"
+aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/ModelId --type String --value "$DEV_MODEL" --overwrite
 aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/EnableAnswerVerification --type String --value "false" --overwrite
 ```
 
@@ -132,4 +135,7 @@ unset SECRET
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-> **Lưu ý khi xoay vòng secret (`ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh`):** cần cập nhật đồng thời header `X-Origin-Verify` trên CloudFront Origin (O5) và `/etc/exammaker/origin-secret.conf` trên Nginx (O4).
+> **Quy trình xoay vòng secret không downtime (2 bước — khi chạy `ROTATE_ORIGIN_SECRET=1 ./infra/ssm/setup-ssm.sh`):**
+> 1. Trên Nginx (EC2), cập nhật `/etc/exammaker/origin-secret.conf` để tạm thời chấp nhận **cả secret cũ và secret mới** (`"${OLD_SECRET}" 1;` và `"${NEW_SECRET}" 1;`) rồi `sudo nginx -t && sudo systemctl reload nginx`.
+> 2. Cập nhật custom header `X-Origin-Verify` trên CloudFront Origin (O5) sang secret mới và chờ CloudFront chuyển sang trạng thái `Deployed`.
+> 3. Gỡ dòng `"${OLD_SECRET}" 1;` khỏi `/etc/exammaker/origin-secret.conf` và reload Nginx lại.

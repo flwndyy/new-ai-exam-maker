@@ -132,8 +132,43 @@ fi
 check_group_present "O12 Bedrock" \
   "Bedrock/Region" \
   "Bedrock/ModelId" \
+  "Bedrock/DevModelId" \
   "Bedrock/DemoModelId" \
   "Bedrock/EnableAnswerVerification"
+
+BEDROCK_REGION_VAL="$(param_val "Bedrock/Region")"
+BEDROCK_ACTIVE_MODEL="$(param_val "Bedrock/ModelId")"
+BEDROCK_DEV_MODEL="$(param_val "Bedrock/DevModelId")"
+BEDROCK_DEMO_MODEL="$(param_val "Bedrock/DemoModelId")"
+
+PROFILES_JSON="$(aws bedrock list-inference-profiles \
+  --region "$BEDROCK_REGION_VAL" \
+  --output json)"
+FOUNDATION_JSON="$(aws bedrock list-foundation-models \
+  --region "$BEDROCK_REGION_VAL" \
+  --output json)"
+
+is_valid_bedrock_id() {
+  local mid="$1"
+  local active_profile=""
+  local on_demand_fm=""
+  active_profile="$(jq -r --arg id "$mid" '.inferenceProfileSummaries[]? | select(.inferenceProfileId == $id and .status == "ACTIVE") | .inferenceProfileId' <<<"$PROFILES_JSON" | tr -d '\r\n')"
+  if [ -n "$active_profile" ]; then
+    return 0
+  fi
+  on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null)) | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
+  [ -n "$on_demand_fm" ]
+}
+
+for label_id in "ModelId:${BEDROCK_ACTIVE_MODEL}" "DevModelId:${BEDROCK_DEV_MODEL}" "DemoModelId:${BEDROCK_DEMO_MODEL}"; do
+  key_name="${label_id%%:*}"
+  model_val="${label_id#*:}"
+  if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
+    pass "O12 Bedrock: ${key_name} ('${model_val}') is valid & ACTIVE in '${BEDROCK_REGION_VAL}'"
+  else
+    fail "O12 Bedrock: ${key_name} ('${model_val}') not found as ACTIVE inference profile or ON_DEMAND model in '${BEDROCK_REGION_VAL}'"
+  fi
+done
 
 BEDROCK_VERIFY="$(param_val "Bedrock/EnableAnswerVerification")"
 if [ "$BEDROCK_VERIFY" = "true" ] || [ "$BEDROCK_VERIFY" = "false" ]; then
@@ -165,12 +200,14 @@ else
 fi
 
 # 8. O12 AI Rate Limit parameters (AiRateLimitOptions)
+# Accepts .NET TimeSpan format [d.]hh:mm:ss[.fffffff] (single- or two-digit hours) and rejects zero duration.
 RL_PERMIT="$(param_val "AiRateLimit/PermitLimit")"
 RL_WINDOW="$(param_val "AiRateLimit/Window")"
-if is_pos_int "$RL_PERMIT" && [[ "$RL_WINDOW" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+RL_NONZERO="${RL_WINDOW//[0.:]/}"
+if is_pos_int "$RL_PERMIT" && [[ "$RL_WINDOW" =~ ^([0-9]+\.)?(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,7})?$ ]] && [ -n "$RL_NONZERO" ]; then
   pass "O12 AI Rate Limit valid (PermitLimit=${RL_PERMIT}, Window=${RL_WINDOW})"
 else
-  fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}')"
+  fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}' — must be positive .NET TimeSpan > 0)"
 fi
 
 # 9. O12 Origin VerifySecret (SecureString, >= 32 chars, never printed)

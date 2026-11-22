@@ -37,8 +37,11 @@ ROTATE_ORIGIN_SECRET="${ROTATE_ORIGIN_SECRET:-0}"
 ORIGIN_VERIFY_SECRET="${ORIGIN_VERIFY_SECRET:-}"
 
 # Bedrock defaults (docs/context.md §6, §14 & docs/aws-o3-ec2-ssm.md §2.1)
+# Verified against `aws bedrock list-inference-profiles --region ap-southeast-1`:
+# APAC supports Claude 3 Haiku (`apac.anthropic.claude-3-haiku-20240307-v1:0`), not Claude 3.5 Haiku.
 BEDROCK_REGION="${BEDROCK_REGION:-ap-southeast-1}"
-BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-apac.anthropic.claude-3-5-haiku-20241022-v1:0}"
+BEDROCK_DEV_MODEL_ID="${BEDROCK_DEV_MODEL_ID:-apac.anthropic.claude-3-haiku-20240307-v1:0}"
+BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-$BEDROCK_DEV_MODEL_ID}"
 BEDROCK_DEMO_MODEL_ID="${BEDROCK_DEMO_MODEL_ID:-apac.anthropic.claude-3-5-sonnet-20241022-v2:0}"
 BEDROCK_ENABLE_VERIFICATION="${BEDROCK_ENABLE_VERIFICATION:-false}"
 
@@ -148,32 +151,57 @@ put_origin_secret_param() {
     secret_val="$(generate_origin_secret)"
   fi
 
-  if [ "${#secret_val}" -lt 32 ] || [[ ! "$secret_val" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    echo "ERROR: Origin/VerifySecret must be at least 32 chars and contain only [A-Za-z0-9._-] (safe for CloudFront header and Nginx config)." >&2
+  if [ "${#secret_val}" -lt 32 ] || [[ ! "$secret_val" =~ ^[A-Za-z0-9][A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: Origin/VerifySecret must be at least 32 chars, start with [A-Za-z0-9], and contain only [A-Za-z0-9._-]." >&2
     exit 1
   fi
 
+  # Write parameter payload via temporary file (0600) so the secret is never exposed in process argv (`ps`).
+  local tmp_json=""
+  tmp_json="$(mktemp)"
+  chmod 600 "$tmp_json"
+  trap 'rm -f "$tmp_json"' RETURN
+
   if [ "$status" = "exists" ]; then
+    jq -nc \
+      --arg name "$name" \
+      --arg val "$secret_val" \
+      --arg desc "$desc" \
+      '{
+        Name: $name,
+        Type: "SecureString",
+        Tier: "Standard",
+        KeyId: "alias/aws/ssm",
+        Value: $val,
+        Description: $desc,
+        Overwrite: true
+      }' >"$tmp_json"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --name "$name" \
-      --type SecureString \
-      --tier Standard \
-      --key-id "alias/aws/ssm" \
-      --value "$secret_val" \
-      --description "$desc" \
-      --overwrite >/dev/null
-    echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — remember to update CloudFront and Nginx!)"
+      --cli-input-json "file://${tmp_json}" >/dev/null
+    echo "    [ROTATED]  ${name} (SecureString via alias/aws/ssm — follow 2-step Nginx -> CloudFront rotation in runbook!)"
   else
+    jq -nc \
+      --arg name "$name" \
+      --arg val "$secret_val" \
+      --arg desc "$desc" \
+      --arg env "$ENV_NAME" \
+      '{
+        Name: $name,
+        Type: "SecureString",
+        Tier: "Standard",
+        KeyId: "alias/aws/ssm",
+        Value: $val,
+        Description: $desc,
+        Tags: [
+          {Key: "Project", Value: "ai-exam-maker"},
+          {Key: "Environment", Value: $env},
+          {Key: "Task", Value: "O12"}
+        ]
+      }' >"$tmp_json"
     aws ssm put-parameter \
       --region "$AWS_REGION" \
-      --name "$name" \
-      --type SecureString \
-      --tier Standard \
-      --key-id "alias/aws/ssm" \
-      --value "$secret_val" \
-      --description "$desc" \
-      --tags "Key=Project,Value=ai-exam-maker" "Key=Environment,Value=${ENV_NAME}" "Key=Task,Value=O12" >/dev/null
+      --cli-input-json "file://${tmp_json}" >/dev/null
     echo "    [CREATED]  ${name} (SecureString via alias/aws/ssm; value not printed)"
   fi
 }
@@ -188,7 +216,8 @@ put_string_param "${SSM_PREFIX}/AWS/Region" "$AWS_REGION" "Default AWS region fo
 echo ""
 echo "==> 2. Amazon Bedrock parameters..."
 put_string_param "${SSM_PREFIX}/Bedrock/Region" "$BEDROCK_REGION" "AWS region for Amazon Bedrock invocation (Bedrock:Region)"
-put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bedrock model/inference profile ID (Haiku for dev, Sonnet v2 for demo)"
+put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bedrock model/inference profile ID (Claude 3 Haiku for dev, Sonnet v2 for demo)"
+put_string_param "${SSM_PREFIX}/Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID" "Target Bedrock model/inference profile ID for dev/cost-saving rollback (Claude 3 Haiku)"
 put_string_param "${SSM_PREFIX}/Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID" "Target Bedrock model/inference profile ID for demo (Claude 3.5 Sonnet v2)"
 put_string_param "${SSM_PREFIX}/Bedrock/EnableAnswerVerification" "$BEDROCK_ENABLE_VERIFICATION" "Toggle optional AI answer verification pass (false for dev, true for demo)"
 
