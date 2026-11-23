@@ -58,6 +58,11 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("input_tokens");
 
+                    b.Property<DateTime>("LastEnqueuedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()")
+                        .HasColumnName("last_enqueued_at");
+
                     b.Property<DateTime?>("LeaseExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_expires_at");

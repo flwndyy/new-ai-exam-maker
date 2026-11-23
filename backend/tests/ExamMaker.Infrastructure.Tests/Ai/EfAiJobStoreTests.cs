@@ -50,6 +50,18 @@ public sealed class EfAiJobStoreTests(PostgresFixture fixture) : IClassFixture<P
     }
 
     [PostgresFact]
+    public async Task Creates_queued_job_with_last_enqueued_at_equal_to_created_at()
+    {
+        var userId = await AiTestData.CreateUserAsync(fixture);
+
+        var jobId = await CreateAsync(userId, AiTestData.UniqueDate(), limit: 10);
+
+        await using var context = fixture.CreateContext();
+        var job = await context.AiGenerationJobs.AsNoTracking().SingleAsync(j => j.Id == jobId);
+        Assert.Equal(job.CreatedAt, job.LastEnqueuedAt);
+    }
+
+    [PostgresFact]
     public async Task Each_job_increments_the_daily_counter()
     {
         var userId = await AiTestData.CreateUserAsync(fixture);

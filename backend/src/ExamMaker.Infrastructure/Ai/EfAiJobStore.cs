@@ -46,6 +46,7 @@ public sealed class EfAiJobStore(ExamMakerDbContext db) : IAiJobStore
             return null;
         }
 
+        var now = DateTime.UtcNow;
         var job = new AiGenerationJob
         {
             Id = Guid.NewGuid(),
@@ -53,7 +54,8 @@ public sealed class EfAiJobStore(ExamMakerDbContext db) : IAiJobStore
             Params = JsonSerializer.Serialize(request, JsonSerializerOptions.Web),
             Status = "Queued",
             MaxAttempts = maxAttempts,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            LastEnqueuedAt = now,
         };
 
         db.AiGenerationJobs.Add(job);

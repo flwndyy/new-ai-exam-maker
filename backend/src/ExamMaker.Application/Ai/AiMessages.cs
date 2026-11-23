@@ -44,6 +44,9 @@ internal static class AiMessages
         "InvalidJson" => "Kết quả AI không đúng định dạng JSON.",
         "SchemaViolation" => "Kết quả AI không đúng cấu trúc câu hỏi.",
         "OutputTruncated" => "Kết quả AI bị cắt ngắn, hãy giảm số câu rồi thử lại.",
+        "QuotaExceeded" => "Đã hết hạn mức token AI trong ngày, hãy thử lại vào ngày mai.",
+        "RequesterUnavailable" => "Tài khoản yêu cầu không còn quyền tạo câu hỏi trong tổ của môn này.",
+        "AttemptsExhausted" => "Đã thử lại nhiều lần nhưng không xử lý được yêu cầu.",
         _ => "Lỗi không xác định khi sinh câu hỏi.",
     };
 }

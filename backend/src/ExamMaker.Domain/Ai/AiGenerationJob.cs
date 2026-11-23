@@ -42,6 +42,9 @@ namespace ExamMaker.Domain.Ai
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+        // Last time a message for this job was sent to SQS; the recovery task re-sends stale Queued jobs.
+        public DateTime LastEnqueuedAt { get; set; } = DateTime.UtcNow;
+
         public DateTime? StartedAt { get; set; }
 
         public DateTime? FinishedAt { get; set; }
