@@ -225,13 +225,17 @@ if [ "$INSTANCE_EXISTS" = "false" ]; then
   LEGACY_PASSWORD_PARAM_NAME="${SSM_PREFIX}/Rds/MasterPassword"
   if [ -z "$DB_PASSWORD" ]; then
     # Check if MasterPassword already exists in SSM (under ops prefix first, then legacy app prefix)
+    PASSWORD_SOURCE_PARAM="$PASSWORD_PARAM_NAME"
     EXISTING_SSM_PASS="$(get_ssm_param_safe "$PASSWORD_PARAM_NAME" "true")"
     if [ -z "$EXISTING_SSM_PASS" ]; then
       EXISTING_SSM_PASS="$(get_ssm_param_safe "$LEGACY_PASSWORD_PARAM_NAME" "true")"
+      if [ -n "$EXISTING_SSM_PASS" ]; then
+        PASSWORD_SOURCE_PARAM="$LEGACY_PASSWORD_PARAM_NAME"
+      fi
     fi
     if [ -n "$EXISTING_SSM_PASS" ]; then
       DB_PASSWORD="$EXISTING_SSM_PASS"
-      echo "==> Reusing existing master password from SSM '${PASSWORD_PARAM_NAME}'."
+      echo "==> Reusing existing master password from SSM '${PASSWORD_SOURCE_PARAM}'."
     else
       # Alphanumeric 32-char password avoids Npgsql delimiter/quoting issues (;, =, ', ", @, /) and avoids SIGPIPE under pipefail
       DB_PASSWORD="A$(openssl rand -hex 15)9"
@@ -362,8 +366,12 @@ if [ -n "$DB_PASSWORD" ]; then
     --overwrite >/dev/null
   echo "    Stored SSM SecureString parameter: ${PASSWORD_PARAM_NAME} (value hidden)"
   if [ -n "$(get_ssm_param_safe "$LEGACY_PASSWORD_PARAM_NAME" "false")" ]; then
-    aws ssm delete-parameter --region "$AWS_REGION" --name "$LEGACY_PASSWORD_PARAM_NAME" >/dev/null || true
-    echo "    Removed legacy parameter from app prefix: ${LEGACY_PASSWORD_PARAM_NAME}"
+    if aws ssm delete-parameter --region "$AWS_REGION" --name "$LEGACY_PASSWORD_PARAM_NAME" >/dev/null; then
+      echo "    Removed legacy parameter from app prefix: ${LEGACY_PASSWORD_PARAM_NAME}"
+    else
+      echo "ERROR: Failed to delete legacy parameter '${LEGACY_PASSWORD_PARAM_NAME}' after updating '${PASSWORD_PARAM_NAME}'." >&2
+      exit 1
+    fi
   fi
 
   CONN_STRING="Host=${DB_ENDPOINT};Port=${DB_PORT};Database=${ACTUAL_DB_NAME:-$DB_NAME};Username=${ACTUAL_USERNAME:-$DB_USERNAME};Password=${DB_PASSWORD};SSL Mode=Require"
@@ -384,9 +392,13 @@ else
     echo "    Kept existing SSM SecureString parameter: ${CONN_PARAM_NAME}"
   else
     # Connection string does NOT exist, try to construct it from MasterPassword if available
+    SAVED_PASSWORD_SOURCE="$PASSWORD_PARAM_NAME"
     SAVED_PASSWORD="$(get_ssm_param_safe "$PASSWORD_PARAM_NAME" "true")"
     if [ -z "$SAVED_PASSWORD" ]; then
       SAVED_PASSWORD="$(get_ssm_param_safe "$LEGACY_PASSWORD_PARAM_NAME" "true")"
+      if [ -n "$SAVED_PASSWORD" ]; then
+        SAVED_PASSWORD_SOURCE="$LEGACY_PASSWORD_PARAM_NAME"
+      fi
     fi
     if [ -n "$SAVED_PASSWORD" ]; then
       CONN_STRING="Host=${DB_ENDPOINT};Port=${DB_PORT};Database=${ACTUAL_DB_NAME:-$DB_NAME};Username=${ACTUAL_USERNAME:-$DB_USERNAME};Password=${SAVED_PASSWORD};SSL Mode=Require"
@@ -398,7 +410,7 @@ else
         --description "Npgsql PostgreSQL connection string for AI Exam Maker (AWS-managed aws/ssm)" \
         --overwrite >/dev/null
       unset SAVED_PASSWORD CONN_STRING
-      echo "    Stored SSM SecureString parameter: ${CONN_PARAM_NAME} from ${PASSWORD_PARAM_NAME} (value hidden)"
+      echo "    Stored SSM SecureString parameter: ${CONN_PARAM_NAME} from ${SAVED_PASSWORD_SOURCE} (value hidden)"
     else
       echo "WARNING: Existing RDS instance reused, but neither '${CONN_PARAM_NAME}' nor '${PASSWORD_PARAM_NAME}' was found in SSM." >&2
       echo "         Re-run with DB_PASSWORD='<existing-password>' ./infra/rds/setup-rds.sh to populate them." >&2

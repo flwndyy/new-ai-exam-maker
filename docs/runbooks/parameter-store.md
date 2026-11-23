@@ -137,7 +137,7 @@ SECRET="$(printf '%s' "$SECRET" | tr -d '\r\n')"
 if [ -z "$SECRET" ] || [ "${#SECRET}" -lt 32 ]; then
   echo "ERROR: Origin/VerifySecret is empty or shorter than 32 chars" >&2
 else
-  sudo install -d -o root -g nginx -m 0750 /etc/exammaker
+  [ -d /etc/exammaker ] || sudo install -d -o root -g root -m 0755 /etc/exammaker
   sudo install -o root -g nginx -m 0640 /dev/null /etc/exammaker/origin-secret.conf.tmp
   if sudo tee /etc/exammaker/origin-secret.conf.tmp >/dev/null <<EOF
 map \$http_x_origin_verify \$origin_header_valid {

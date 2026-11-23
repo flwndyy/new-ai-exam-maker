@@ -411,24 +411,8 @@ put_origin_secret_param() {
       local ops_val=""
       ops_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --with-decryption --query "Parameter.Value" --output text)"
       if [ "$legacy_val" != "$ops_val" ]; then
-        local sync_payload=""
-        sync_payload="$(SECRET_PAYLOAD_VAL="$legacy_val" jq -nc \
-          --arg name "$name" \
-          --arg desc "$desc" \
-          '{
-            Name: $name,
-            Type: "SecureString",
-            Tier: "Standard",
-            KeyId: "alias/aws/ssm",
-            Value: env.SECRET_PAYLOAD_VAL,
-            Description: $desc,
-            Overwrite: true
-          }')"
-        if ! put_secret_json_payload "$sync_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
-          echo "ERROR: Failed to sync legacy ${legacy_name} into ${name} before removal." >&2
-          return 1
-        fi
-        echo "    [SYNCED]   ${legacy_name} -> ${name} (version ${LAST_PUT_SECRET_VERSION} preserved before removal)"
+        echo "ERROR: Both legacy '${legacy_name}' and ops '${name}' exist in SSM with DIFFERENT values. Refusing to overwrite '${name}' with legacy value. Inspect both and delete the stale '${legacy_name}' manually ('aws ssm delete-parameter --region ${AWS_REGION} --name ${legacy_name}')." >&2
+        return 1
       fi
     fi
 
@@ -563,24 +547,8 @@ migrate_ops_rds_master_password() {
       local ops_pw_val=""
       ops_pw_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$ops_rds_pw" --with-decryption --query "Parameter.Value" --output text)"
       if [ "$pw_val" != "$ops_pw_val" ]; then
-        local sync_pw_payload=""
-        sync_pw_payload="$(SECRET_PAYLOAD_VAL="$pw_val" jq -nc \
-          --arg name "$ops_rds_pw" \
-          --arg desc "RDS master password synced from app prefix before removal (O10/O12)" \
-          '{
-            Name: $name,
-            Type: "SecureString",
-            Tier: "Standard",
-            KeyId: "alias/aws/ssm",
-            Value: env.SECRET_PAYLOAD_VAL,
-            Description: $desc,
-            Overwrite: true
-          }')"
-        if ! put_secret_json_payload "$sync_pw_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
-          echo "ERROR: Failed to sync ${legacy_rds_pw} to ${ops_rds_pw}." >&2
-          return 1
-        fi
-        echo "    [SYNCED]   ${legacy_rds_pw} -> ${ops_rds_pw} (version ${LAST_PUT_SECRET_VERSION})"
+        echo "ERROR: Both legacy '${legacy_rds_pw}' and ops '${ops_rds_pw}' exist in SSM with DIFFERENT values. Refusing to overwrite '${ops_rds_pw}' with legacy value. Inspect both and delete the stale '${legacy_rds_pw}' manually ('aws ssm delete-parameter --region ${AWS_REGION} --name ${legacy_rds_pw}')." >&2
+        return 1
       fi
     fi
 
