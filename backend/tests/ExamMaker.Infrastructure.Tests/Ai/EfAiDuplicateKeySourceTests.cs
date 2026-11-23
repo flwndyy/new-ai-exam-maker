@@ -94,8 +94,11 @@ public sealed class EfAiDuplicateKeySourceTests(PostgresFixture fixture) : IClas
         var (subjectId, topicId, _) = await PickTopicsAsync();
         var userId = await AiTestData.CreateUserAsync(fixture);
         var suffix = Guid.NewGuid().ToString("N");
-        // Valid JSON but no "options": the key computation throws for this row.
+        // Valid JSON but malformed payloads: no "options", a null option text, options that are not an array.
         await InsertQuestionAsync(userId, topicId, "Draft", "Broken stem " + suffix, "{}");
+        await InsertQuestionAsync(userId, topicId, "Draft", "Null text stem " + suffix,
+            """{"options":[{"label":"A","text":null},{"label":"B","text":"b"},{"label":"C","text":"c"},{"label":"D","text":"d"}],"correctLabel":"A"}""");
+        await InsertQuestionAsync(userId, topicId, "Draft", "Object options stem " + suffix, """{"options":{"label":"A"}}""");
         var validKey = await AddQuestionAsync(userId, topicId, "Draft", "Valid stem " + suffix, PayloadFor("v" + suffix));
 
         var keys = await GetKeysAsync(subjectId, topicId);

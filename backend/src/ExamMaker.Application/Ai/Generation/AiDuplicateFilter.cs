@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace ExamMaker.Application.Ai.Generation;
@@ -16,23 +17,35 @@ public static class AiDuplicateFilter
 
     /// <summary>
     /// Duplicate key = question type + normalized stem + normalized text of the question part of the payload (option texts or
-    /// statement texts, in array order). Answers are deliberately excluded; questions of different types never collide. The payload has already passed
-    /// <c>QuestionRules</c>, so its shape is trusted.
+    /// statement texts, in array order). Answers are deliberately excluded; questions of different types never collide.
+    /// For payloads that passed <c>QuestionRules</c>; throws <see cref="ArgumentException"/> on a malformed payload.
     /// </summary>
-    public static string Key(string type, string stem, JsonElement payload)
-    {
-        var parts = new List<string> { type, AiTextNormalizer.Normalize(stem) };
-        switch (type)
-        {
-            case "MultipleChoice":
-                AddTexts(parts, payload.GetProperty("options"));
-                break;
-            case "TrueFalse":
-                AddTexts(parts, payload.GetProperty("statements"));
-                break;
-        }
+    public static string Key(string type, string stem, JsonElement payload) =>
+        TryKey(type, stem, payload, out var key)
+            ? key
+            : throw new ArgumentException("Payload does not have the shape required for a duplicate key.", nameof(payload));
 
-        return string.Join(Separator, parts);
+    /// <summary>
+    /// Same key as <see cref="Key"/>, but returns false instead of throwing when the stem or payload shape is unusable
+    /// (missing/non-array options or statements, items without a string "text"). Used for stored rows, which the DB does
+    /// not shape-check.
+    /// </summary>
+    public static bool TryKey(string type, string stem, JsonElement payload, [NotNullWhen(true)] out string? key)
+    {
+        key = null;
+        if (stem is null) return false;
+
+        var parts = new List<string> { type, AiTextNormalizer.Normalize(stem) };
+        var itemsProperty = type switch
+        {
+            "MultipleChoice" => "options",
+            "TrueFalse" => "statements",
+            _ => null,
+        };
+        if (itemsProperty is not null && !TryAddTexts(parts, payload, itemsProperty)) return false;
+
+        key = string.Join(Separator, parts);
+        return true;
     }
 
     /// <summary>Walks the questions in order; the first occurrence of a key wins, so the lowest ordinal is kept.</summary>
@@ -52,9 +65,31 @@ public static class AiDuplicateFilter
         return new AiDuplicateFilterResult(kept, questions.Count - kept.Count);
     }
 
-    private static void AddTexts(List<string> parts, JsonElement items)
+    private static bool TryAddTexts(List<string> parts, JsonElement payload, string itemsProperty)
     {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty(itemsProperty, out var items)
+            || items.ValueKind != JsonValueKind.Array)
+            return false;
+
         foreach (var item in items.EnumerateArray())
-            parts.Add(AiTextNormalizer.Normalize(item.GetProperty("text").GetString()!));
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("text", out var text)
+                || text.ValueKind != JsonValueKind.String)
+                return false;
+
+            try
+            {
+                parts.Add(AiTextNormalizer.Normalize(text.GetString()!));
+            }
+            catch (InvalidOperationException)
+            {
+                // Unpaired surrogate escape: the string cannot be decoded.
+                return false;
+            }
+        }
+
+        return true;
     }
 }

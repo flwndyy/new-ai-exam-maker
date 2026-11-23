@@ -117,4 +117,30 @@ public sealed class AiDuplicateFilterTests
         => Assert.NotEqual(
             AiDuplicateFilter.Key("ShortAnswer", "Tính x", ShortPayload()),
             AiDuplicateFilter.Key("Essay", "Tính x", EssayPayload()));
+
+    [Theory]
+    [InlineData("MultipleChoice", "{}")]
+    [InlineData("MultipleChoice", """{"options":{"label":"A"}}""")]
+    [InlineData("MultipleChoice", """{"options":[{"label":"A","text":null}]}""")]
+    [InlineData("MultipleChoice", """{"options":[{"label":"A"}]}""")]
+    [InlineData("MultipleChoice", """{"options":["A"]}""")]
+    [InlineData("TrueFalse", """{"statements":[{"label":"a","text":1,"isTrue":true}]}""")]
+    [InlineData("TrueFalse", "[]")]
+    public void TryKey_rejects_malformed_payload_without_throwing(string type, string payload)
+    {
+        Assert.False(AiDuplicateFilter.TryKey(type, "Câu", Json(payload), out var key));
+        Assert.Null(key);
+    }
+
+    [Fact]
+    public void TryKey_rejects_null_stem()
+        => Assert.False(AiDuplicateFilter.TryKey("ShortAnswer", null!, ShortPayload(), out _));
+
+    [Fact]
+    public void TryKey_matches_Key_for_valid_payload()
+    {
+        var q = Mc(1, "Câu A", "1", "2", "3", "4", "A");
+        Assert.True(AiDuplicateFilter.TryKey("MultipleChoice", q.Stem, q.Payload, out var key));
+        Assert.Equal(AiDuplicateFilter.Key("MultipleChoice", q.Stem, q.Payload), key);
+    }
 }

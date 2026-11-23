@@ -155,6 +155,9 @@ public sealed class AiAnswerVerifierTests
         { "ShortAnswer", """{"answers":[{"ordinal":1,"answer":12}]}""", AiStopReason.EndTurn },
         { "ShortAnswer", "{\"answers\":[{\"ordinal\":1,\"answer\":\"x\\ud800y\"}]}", AiStopReason.EndTurn },
         { "MultipleChoice", "{\"answers\":[{\"ordinal\":1,\"answer\":\"\\ud800\"}]}", AiStopReason.EndTurn },
+        { "MultipleChoice", "{\"answers\":[],\"\\ud800\":0}", AiStopReason.EndTurn },
+        { "MultipleChoice", "{\"answers\":[{\"ordinal\":1,\"answer\":\"A\",\"\\udc00\":0}]}", AiStopReason.EndTurn },
+        { "TrueFalse", "{\"answers\":[{\"ordinal\":1,\"answer\":{\"a\":true,\"b\":false,\"c\":true,\"\\ud800\":false}}]}", AiStopReason.EndTurn },
         { "MultipleChoice", """{"answers":[{"ordinal":1,"answer":"A"}]}""", AiStopReason.MaxTokens },
         { "MultipleChoice", """{"answers":[{"ordinal":1,"answer":"A"}]}""", AiStopReason.ContentFiltered },
     };

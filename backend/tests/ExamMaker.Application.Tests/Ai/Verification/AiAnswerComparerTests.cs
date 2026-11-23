@@ -55,6 +55,13 @@ public sealed class AiAnswerComparerTests
     [InlineData("12", """["12"]""", "1e-500", "Agree")]
     [InlineData("13", """["12"]""", "1e-500", "Disagree")]
     [InlineData("12", """["12"]""", "null", "Agree")]
+    // Exact arithmetic: decimal would round 1e-29 to 0 and cannot hold 1e30.
+    [InlineData("0.00000000000000000000000000001", """["0"]""", null, "Disagree")]
+    [InlineData("0", """["1000000000000000000000000000000"]""", "1e31", "Agree")]
+    [InlineData("0", """["1000000000000000000000000000000"]""", "1e29", "Disagree")]
+    [InlineData("-3,5", """["-3.5"]""", null, "Agree")]
+    [InlineData("12.50", """["12,5"]""", null, "Agree")]
+    [InlineData("1e1", """["10"]""", null, "Disagree")]
     public void Number_answers(string model, string accepted, string? tolerance, string expected)
     {
         var outcome = Compare("ShortAnswer", Number(accepted, tolerance), JsonSerializer.Serialize(model));

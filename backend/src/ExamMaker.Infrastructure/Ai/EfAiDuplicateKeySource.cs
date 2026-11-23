@@ -22,16 +22,11 @@ public sealed class EfAiDuplicateKeySource(ExamMakerDbContext db) : IAiDuplicate
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows)
         {
-            try
-            {
-                using var document = JsonDocument.Parse(row.Payload);
-                keys.Add(AiDuplicateFilter.Key(row.Type, row.Stem, document.RootElement));
-            }
-            catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
-            {
-                // Payloads are validated in the application layer and the DB only enforces NOT NULL, so a malformed
-                // row can exist. Skip it: one bad row must not block generation for the whole topic.
-            }
+            // Payloads are validated in the application layer and the DB only enforces NOT NULL (jsonb guarantees valid
+            // JSON), so a row with the wrong shape can exist. Skip it: one bad row must not block generation for the topic.
+            using var document = JsonDocument.Parse(row.Payload);
+            if (AiDuplicateFilter.TryKey(row.Type, row.Stem, document.RootElement, out var key))
+                keys.Add(key);
         }
 
         return keys;

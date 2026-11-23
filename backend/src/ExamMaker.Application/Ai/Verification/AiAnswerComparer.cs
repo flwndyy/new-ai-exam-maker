@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 namespace ExamMaker.Application.Ai.Verification;
@@ -65,77 +64,29 @@ public static class AiAnswerComparer
         return accepted.Any(answer => AiTextNormalizer.Normalize(answer) == normalized);
     }
 
-    private static bool MatchesNumber(string model, IEnumerable<string> accepted, decimal? tolerance)
+    /// <summary>
+    /// Exact comparison (no <see cref="decimal"/> rounding or range limits): the model answer matches when it is within
+    /// the tolerance of any accepted answer. Text that is not a plain number (unit, exponent, spaces) never matches.
+    /// </summary>
+    private static bool MatchesNumber(string model, IEnumerable<string> accepted, ExactNumber tolerance)
     {
-        // Exact text match first: accepted answers with more digits than decimal can hold would never parse.
-        var modelText = NormalizeNumberText(model);
-        var acceptedList = accepted.ToList();
-        if (acceptedList.Any(answer => NormalizeNumberText(answer) == modelText))
-        {
-            return true;
-        }
-
-        if (!TryParseNumber(model, out var modelValue))
+        if (!ExactNumber.TryParsePlain(model, out var modelValue))
         {
             return false;
         }
 
-        foreach (var answer in acceptedList)
-        {
-            if (!TryParseNumber(answer, out var acceptedValue))
-            {
-                continue;
-            }
-
-            if (tolerance is null)
-            {
-                return true;
-            }
-
-            try
-            {
-                if (Math.Abs(modelValue - acceptedValue) <= tolerance.Value)
-                {
-                    return true;
-                }
-            }
-            catch (OverflowException)
-            {
-                // Difference exceeds decimal range, so it is larger than any representable tolerance.
-            }
-        }
-
-        return false;
+        return accepted.Any(answer =>
+            ExactNumber.TryParsePlain(answer, out var acceptedValue)
+            && ExactNumber.WithinTolerance(modelValue, acceptedValue, tolerance));
     }
 
-    private static string NormalizeNumberText(string text) => text.Trim().Replace(',', '.');
-
-    private static bool TryParseNumber(string text, out decimal value) =>
-        decimal.TryParse(
-            NormalizeNumberText(text),
-            NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
-            CultureInfo.InvariantCulture,
-            out value);
-
-    /// <summary>
-    /// Returns the tolerance, 0 when absent, or null when it is too large for decimal (every number then matches).
-    /// Stored tolerance exponents reach +-1000, so decimal parsing alone could throw or lose meaning.
-    /// </summary>
-    private static decimal? ReadTolerance(JsonElement payload)
-    {
-        if (!payload.TryGetProperty("tolerance", out var tolerance) || tolerance.ValueKind != JsonValueKind.Number)
-        {
-            return 0m;
-        }
-
-        if (tolerance.TryGetDecimal(out var exact))
-        {
-            return exact;
-        }
-
-        // Not representable as decimal: huge magnitude matches everything, tiny magnitude counts as 0.
-        return Math.Abs(tolerance.GetDouble()) >= 1 ? null : 0m;
-    }
+    /// <summary>The stored tolerance, or 0 (exact match) when it is absent or null.</summary>
+    private static ExactNumber ReadTolerance(JsonElement payload) =>
+        payload.TryGetProperty("tolerance", out var tolerance)
+        && tolerance.ValueKind == JsonValueKind.Number
+        && ExactNumber.TryParseJson(tolerance.GetRawText(), out var value)
+            ? value
+            : ExactNumber.Zero;
 
     private static AiVerificationOutcome Agree() => new(AiVerificationValues.Agree, null);
 

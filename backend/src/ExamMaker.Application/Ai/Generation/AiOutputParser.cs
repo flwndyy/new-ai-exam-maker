@@ -109,7 +109,17 @@ public static class AiOutputParser
     internal static bool HasExactKeys(JsonElement value, string[] required, string[] optional)
     {
         if (value.ValueKind != JsonValueKind.Object) return false;
-        var keys = value.EnumerateObject().Select(x => x.Name).ToArray();
+        string[] keys;
+        try
+        {
+            keys = value.EnumerateObject().Select(x => x.Name).ToArray();
+        }
+        catch (InvalidOperationException)
+        {
+            // A property name with an unpaired surrogate escape cannot be decoded; treat it as an unknown property.
+            return false;
+        }
+
         return keys.Distinct(StringComparer.Ordinal).Count() == keys.Length
             && required.All(keys.Contains)
             && keys.All(x => required.Contains(x) || optional.Contains(x));
