@@ -71,6 +71,14 @@ internal static class AiTestData
     public static DateOnly UniqueDate() =>
         new DateOnly(2100, 1, 1).AddDays(Random.Shared.Next(0, 36_000));
 
+    /// <summary>Model output with <paramref name="count"/> valid MultipleChoice questions, unique per call (no duplicates).</summary>
+    public static string ModelOutput(int count)
+    {
+        var tag = Guid.NewGuid().ToString("N");
+        return "{\"questions\":[" + string.Join(",", Enumerable.Range(1, count).Select(i =>
+            $$"""{"stem":"Stem {{i}} {{tag}}","payload":{"options":[{"label":"A","text":"a{{i}}"},{"label":"B","text":"b{{i}}"},{"label":"C","text":"c{{i}}"},{"label":"D","text":"d{{i}}"}],"correctLabel":"B"},"explanation":null}""")) + "]}";
+    }
+
     public static AiGenerateRequest Request() => new(
         SubjectId: Guid.Parse("20000000-0000-0000-0000-000000000001"),
         TopicId: Guid.Parse("30000000-0000-0000-0000-000000000011"),

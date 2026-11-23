@@ -33,13 +33,6 @@ public sealed class AiJobProcessorPostgresTests(PostgresFixture fixture) : IClas
         public Task DeleteAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
-    private static string Output(int count)
-    {
-        var tag = Guid.NewGuid().ToString("N");
-        return "{\"questions\":[" + string.Join(",", Enumerable.Range(1, count).Select(i =>
-            $$"""{"stem":"Stem {{i}} {{tag}}","payload":{"options":[{"label":"A","text":"a{{i}}"},{"label":"B","text":"b{{i}}"},{"label":"C","text":"c{{i}}"},{"label":"D","text":"d{{i}}"}],"correctLabel":"B"},"explanation":null}""")) + "]}";
-    }
-
     private async Task<DateTime?> LeaseAsync(Guid jobId)
     {
         await using var context = fixture.CreateContext();
@@ -64,7 +57,7 @@ public sealed class AiJobProcessorPostgresTests(PostgresFixture fixture) : IClas
             after = await LeaseAsync(jobId);
         });
         var processor = new AiJobProcessor(new EfAiJobWorkStore(db), keys,
-            new ScriptedModel(Output(AiTestData.Request().Count)), new EfAiUsageReader(db), new AiQuotaOptions(),
+            new ScriptedModel(AiTestData.ModelOutput(AiTestData.Request().Count)), new EfAiUsageReader(db), new AiQuotaOptions(),
             new AiGenerationOptions(), new AiWorkerOptions(), time, NullLogger<AiJobProcessor>.Instance);
 
         var outcome = await processor.ProcessAsync(jobId, new NoopMessage(), CancellationToken.None);
