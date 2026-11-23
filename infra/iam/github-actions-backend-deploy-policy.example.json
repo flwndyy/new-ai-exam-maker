@@ -1,0 +1,72 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UploadBackendReleaseArtifacts",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "${BACKEND_ARTIFACTS_BUCKET_ARN}/backend/releases/*"
+    },
+    {
+      "Sid": "ListBackendReleaseBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "${BACKEND_ARTIFACTS_BUCKET_ARN}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "backend/releases/*"
+        }
+      }
+    },
+    {
+      "Sid": "ResolveTaggedEc2Instance",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SendSsmRunShellScriptToEc2",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:ap-southeast-1::document/AWS-RunShellScript"
+      ]
+    },
+    {
+      "Sid": "SendSsmCommandToAppInstanceOnly",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:ap-southeast-1:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Name": "aem-exammaker-ec2"
+        }
+      }
+    },
+    {
+      "Sid": "PollSsmCommandInvocation",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OptionalPreMigrationRdsSnapshot",
+      "Effect": "Allow",
+      "Action": [
+        "rds:CreateDBSnapshot",
+        "rds:DescribeDBSnapshots",
+        "rds:DescribeDBInstances"
+      ],
+      "Resource": [
+        "${RDS_INSTANCE_ARN}",
+        "arn:aws:rds:ap-southeast-1:${AWS_ACCOUNT_ID}:snapshot:exammaker-dev-pre-mig-*"
+      ]
+    }
+  ]
+}
