@@ -174,7 +174,7 @@ else
   echo "    [CREATED]  Role '${BACKEND_ROLE_NAME}'"
 fi
 
-DEPLOY_POLICY="$(ACCT_ENV="$ACCOUNT_ID" REG_ENV="$AWS_REGION" BUCKET_ENV="$BACKEND_ARTIFACTS_BUCKET" TAG_ENV="$EC2_TAG_NAME" RDS_ENV="$RDS_INSTANCE_ID" jq -nc '{
+DEPLOY_POLICY="$(ACCT_ENV="$ACCOUNT_ID" REG_ENV="$AWS_REGION" ENV_ENV="$ENV_NAME" BUCKET_ENV="$BACKEND_ARTIFACTS_BUCKET" TAG_ENV="$EC2_TAG_NAME" RDS_ENV="$RDS_INSTANCE_ID" jq -nc '{
   Version: "2012-10-17",
   Statement: [
     {
@@ -221,7 +221,7 @@ DEPLOY_POLICY="$(ACCT_ENV="$ACCOUNT_ID" REG_ENV="$AWS_REGION" BUCKET_ENV="$BACKE
       Action: ["rds:CreateDBSnapshot", "rds:DescribeDBSnapshots", "rds:DescribeDBInstances"],
       Resource: [
         ("arn:aws:rds:" + env.REG_ENV + ":" + env.ACCT_ENV + ":db:" + env.RDS_ENV),
-        ("arn:aws:rds:" + env.REG_ENV + ":" + env.ACCT_ENV + ":snapshot:exammaker-dev-pre-mig-*")
+        ("arn:aws:rds:" + env.REG_ENV + ":" + env.ACCT_ENV + ":snapshot:exammaker-" + env.ENV_ENV + "-pre-mig-*")
       ]
     }
   ]
