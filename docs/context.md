@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.18** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.19** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -194,6 +194,15 @@ AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và
 - **Token theo từng lần gọi**: generator gọi callback sau **mọi** lần gọi model hoàn tất (kể cả đầu ra bị loại) để worker cộng dồn token vào job/`ai_usage_daily`; callback ném lỗi (ví dụ vượt trần token ngày) thì dừng, không gọi tiếp.
 - **Phân loại lỗi** (`AiErrorClassifier`): retryable gồm `Throttled`, `Timeout` (kể cả hủy/timeout HTTP), `ServiceUnavailable`, `NetworkError` và `Unknown` (giới hạn bởi `maxReceiveCount`, sau đó vào DLQ); non-retryable gồm `InvalidRequest`, `AccessDenied`, `ContentRefused`, `InvalidJson`, `SchemaViolation`, `OutputTruncated`. Adapter Bedrock phải ánh xạ lỗi SDK sang `AiModelException` theo loại. `error_message` của job là câu tiếng Việt cố định theo mã lỗi, không chứa nội dung lỗi gốc hay đầu ra model.
 - **Backoff** (`AiRetryPolicy`): sau lần thử 1/2/≥3 đặt visibility 30/120/300 giây, không vượt visibility timeout 300 giây của hàng đợi.
+
+#### Chi tiết triển khai B4
+
+- Lõi B4 nằm ở `Application/Ai`, thuần logic, không gọi AWS; worker (B6) ghép theo thứ tự: sinh câu (B3) → **lọc trùng** → (nếu bật) **kiểm chứng đáp án** → lưu Draft và cập nhật job trong một transaction.
+- **Khóa trùng** (`AiDuplicateFilter.Key`) = dạng câu + stem + text phần đề trong payload (`MultipleChoice`: text các phương án theo thứ tự mảng; `TrueFalse`: text các ý a–d; `ShortAnswer`/`Essay`: chỉ stem). Khóa có tiền tố là dạng câu nên hai câu khác dạng (vd `ShortAnswer` và `Essay` cùng stem) không bị coi là trùng. Không đưa đáp án (`correctLabel`, `isTrue`, `acceptedAnswers`...) vào khóa. Chuẩn hóa (`AiTextNormalizer`): NFC → lowercase invariant → gộp mọi chuỗi khoảng trắng thành một dấu cách → trim; giữ dấu câu và LaTeX.
+- So khóa với **mọi câu cùng môn + chương** trong ngân hàng (mọi trạng thái, mọi tác giả; khóa tính bằng cùng hàm C#) và với các câu khác trong cùng lô. Nguồn khóa là `IAiDuplicateKeySource` (triển khai `EfAiDuplicateKeySource`) đọc toàn bộ câu cùng môn + chương **và cùng dạng với job** (khóa đã có tiền tố dạng nên lọc theo dạng chỉ giảm IO/parse JSON) vào bộ nhớ (đủ cho quy mô MVP) và bỏ qua hàng có payload sai cấu trúc (thiếu/không phải mảng `options`/`statements`, phần tử thiếu `text` dạng chuỗi — kiểm bằng `AiDuplicateFilter.TryKey`, không dựa vào bắt exception) để một câu lỗi không chặn mọi job của chương. Parser đầu ra model (sinh câu và kiểm chứng) coi tên khóa JSON có surrogate lẻ là vi phạm schema, không để exception thoát ra. Câu trùng bị bỏ (trong lô giữ câu có ordinal nhỏ nhất), **giữ nguyên ordinal gốc** của câu còn lại (chấp nhận khoảng trống), số câu bỏ cộng vào `ai_generation_jobs.duplicates_dropped`. Tất cả câu trùng thì job vẫn `Succeeded` với 0 câu. Hai job song song cùng chương có thể cùng chèn một câu trùng (chấp nhận trong MVP).
+- **Kiểm chứng đáp án** (`AiAnswerVerifier`): bật bằng `AiGeneration:VerifyAnswers` (mặc định `false`; tắt khi dev, bật khi demo). Một lần gọi model cho cả lô, chỉ với `MultipleChoice`/`TrueFalse`/`ShortAnswer`; prompt phiên bản `answer-verify-v1` không chứa đáp án hay lời giải, nội dung câu được mã hóa như dữ liệu không tin cậy. Lần gọi dùng temperature 0 và giới hạn đầu ra `AiGeneration:VerifyMaxOutputTokens` (mặc định 2048). Tắt cờ hoặc không có câu kiểm được thì không gọi model và câu là `NotChecked`; câu mà model bỏ qua trong kết quả có note "Mô hình không trả lời câu này.".
+- **Lỗi kiểm chứng không làm hỏng job**: mọi lỗi từ lần gọi model (kể cả lỗi lạ ngoài `AiModelException`), JSON/schema sai, bị cắt token/lọc nội dung → mọi câu `NotChecked` với note cố định, không có vòng sửa lại. Chỉ hủy do token của worker (`OperationCanceledException`, hoặc lỗi khác khi token đã bị hủy) và lỗi từ callback token (vd vượt trần token ngày) vẫn được ném lên, không bị nuốt. Token của lần gọi kiểm chứng đi qua cùng callback `onModelCall`.
+- **So sánh theo dạng**: MC so nhãn với `correctLabel`; TF so cả 4 ý, `Disagree` nếu lệch bất kỳ ý nào; ShortAnswer `number` khớp nếu giá trị số nằm trong `tolerance` (không có thì so bằng) của một đáp án chấp nhận, tính **chính xác** bằng số nguyên lớn (không qua `decimal`, nên không làm tròn số rất nhỏ và không giới hạn phạm vi; hỗ trợ đủ phạm vi validator cho phép: chuỗi số dài, `tolerance` số mũ ±1000; `tolerance` có số mũ vượt ±10000 bị bỏ qua, coi như 0, để tránh tràn số/tính `10^n` quá lớn); đáp án model không phải số thuần (có đơn vị, số mũ, khoảng trắng) → `Disagree`; ShortAnswer `text` so sau chuẩn hóa như khóa trùng; `Essay` luôn `NotChecked`. `ai_verification_note` là câu tiếng Việt cố định theo mẫu (giá trị model là dữ liệu không tin cậy: ký tự điều khiển đổi thành khoảng trắng, bỏ surrogate lẻ, rồi cắt tối đa 100 ký tự); `Agree` thì note null.
 
 ### 4.2 Vòng đời câu hỏi
 
@@ -434,7 +443,7 @@ Cấu trúc repo (monorepo):
 - **exams**: id, title, subject_id, grade, department_id, created_by
 - **exam_versions**: id, exam_id, **version_no**, status, duration_minutes, total_points, content_hash, submitted_at, reviewed_by, reviewed_at, review_note, published_by, published_at · unique `(exam_id, version_no)`; partial unique index: tối đa 1 version `Published` / exam
 - **exam_version_questions**: exam_version_id, `sort_order`, points, **source_question_id**, **source_revision**, và (đóng băng khi Submit) **type, difficulty, stem_snapshot, payload_snapshot, explanation_snapshot** · sau `Submitted` chỉ đọc (chặn ở tầng app **và** trigger/ràng buộc nếu kịp)
-- **ai_generation_jobs**: id, requested_by, params (jsonb), status (`Queued/Running/Succeeded/Failed`), attempt, max_attempts, lease_expires_at, error_code, error_message, model_id, prompt_version, input_tokens, output_tokens (cộng dồn), created_at, started_at, finished_at
+- **ai_generation_jobs**: id, requested_by, params (jsonb), status (`Queued/Running/Succeeded/Failed`), attempt, max_attempts, lease_expires_at, error_code, error_message, model_id, prompt_version, input_tokens, output_tokens (cộng dồn), duplicates_dropped (số câu AI trùng bị bỏ, mặc định 0), created_at, started_at, finished_at
 - **ai_usage_daily** (quota): user_id, date, jobs, tokens
 - **audit_logs**: id, actor_id, entity_type (`Question/ExamVersion/User/AiJob/...`), entity_id, department_id, action, from_status, to_status, note, created_at
 
@@ -635,6 +644,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.19 — 22/11/2026**
+- Triển khai lõi AI B4: lọc câu trùng theo khóa chuẩn hóa (stem + text phương án/ý) với ngân hàng cùng môn/chương và trong lô, giữ ordinal gốc, thêm `ai_generation_jobs.duplicates_dropped`; kiểm chứng đáp án tùy chọn bằng một lần gọi model (`answer-verify-v1`, cờ `AiGeneration:VerifyAnswers`), lỗi chỉ đưa câu về `NotChecked`. Thêm mục "Chi tiết triển khai B4" ở 4.1.2 và cập nhật 8.1.
 
 **0.18 — 22/11/2026**
 - Triển khai `GET /api/v1/audit-logs` (A8), cột `audit_logs.department_id` và `audit_logs.is_secondary`, index `(created_at, id)`: lọc phạm vi Head theo snapshot tổ tại thời điểm sự kiện (giữ hiển thị `actor.fullName` kể cả khi actor đã chuyển tổ), dòng `department_id` NULL chỉ Admin xem, khóa constructor/setter của `AuditLog` để bắt buộc tạo dòng qua `AuditLog.Create`, dùng `is_secondary` chống trùng dòng trên danh sách Admin khi chuyển tổ giữa hai tổ khác NULL (kèm ghi audit chuyển tổ cho các `Topic` con khi chuyển `Subject`, và che GUID tổ/môn của tổ khác trong `note` khi Head xem thông qua hằng định dạng dùng chung), lấy tổ cố định của câu bị xóa cho `RemoveQuestionFromSet`, đổi cận `to` của `GET /audit-logs` sang inclusive (`<=`, chưa có consumer phụ thuộc cận exclusive cũ) với kiểm tra chặt định dạng ISO-8601 / `YYYY-MM-DD`, và chốt backfill phương án (b) chỉ cho thực thể hiện có mang tổ bất biến (`Question`, `Exam`, `ExamVersion`, `Department`). Cập nhật mục 3.2, A3, 8.1/A2, 14, `docs/erd.md` và `docs/api/openapi.yaml`.

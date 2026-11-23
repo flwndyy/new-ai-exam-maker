@@ -343,7 +343,7 @@ public sealed class AiEndpointsTests : IDisposable
         {
             var job = new AiJobView(
                 Guid.NewGuid(), new AiUserRef(ownerId, "Synthetic"), "Queued", request, 0, 3,
-                null, null, null, null, 0, 0, [], DateTimeOffset.UtcNow, null, null);
+                null, null, null, null, 0, 0, 0, [], DateTimeOffset.UtcNow, null, null);
             Jobs[job.Id] = job;
             return job;
         }

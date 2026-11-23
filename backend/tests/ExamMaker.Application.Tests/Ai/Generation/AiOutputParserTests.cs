@@ -90,6 +90,7 @@ public sealed class AiOutputParserTests
     [InlineData("{\"questions\":{}}")]
     [InlineData("{\"questions\":[],\"extra\":1}")]
     [InlineData("{\"questions\":[],\"questions\":[]}")]
+    [InlineData("{\"questions\":[],\"\\ud800\":1}")] // property name with an unpaired surrogate escape
     public void Wrong_root_shape_is_schema_violation(string text) =>
         Assert.Equal(AiErrorCodes.SchemaViolation, Invalid(text, Spec()).Code);
 

@@ -37,6 +37,9 @@ namespace ExamMaker.Domain.Ai
 
         public long OutputTokens { get; set; }
 
+        // Generated questions discarded as duplicates (within the batch or against the bank).
+        public int DuplicatesDropped { get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         public DateTime? StartedAt { get; set; }
