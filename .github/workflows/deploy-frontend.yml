@@ -6,7 +6,6 @@ on:
     paths:
       - "frontend/**"
       - "docs/api/openapi.yaml"
-      - "infra/cloudfront-function/**"
       - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
@@ -20,6 +19,7 @@ concurrency:
 
 env:
   AWS_REGION: ap-southeast-1
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   FRONTEND_BUCKET_NAME: ${{ vars.FRONTEND_BUCKET_NAME }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
   NEXT_PUBLIC_COGNITO_DOMAIN: ${{ vars.NEXT_PUBLIC_COGNITO_DOMAIN }}
@@ -28,6 +28,7 @@ env:
 jobs:
   deploy:
     name: Deploy frontend
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -49,10 +50,14 @@ jobs:
 
       - name: Validate public build configuration
         run: |
-          test -n "$NEXT_PUBLIC_COGNITO_DOMAIN"
+          [[ "$NEXT_PUBLIC_COGNITO_DOMAIN" == https://* ]] || {
+            echo "NEXT_PUBLIC_COGNITO_DOMAIN must start with https://"
+            exit 1
+          }
           test -n "$NEXT_PUBLIC_COGNITO_CLIENT_ID"
           test -n "$FRONTEND_BUCKET_NAME"
           test -n "$CLOUDFRONT_DISTRIBUTION_ID"
+          test -n "$AWS_ROLE_ARN"
 
       - name: Build static frontend
         run: npm run build
@@ -63,7 +68,8 @@ jobs:
           name: frontend-out-${{ github.sha }}
           path: frontend/out
           if-no-files-found: error
-          retention-days: 14
+          overwrite: true
+          retention-days: 90
 
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
@@ -72,13 +78,6 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-session-name: frontend-deploy-${{ github.run_id }}
 
-      - name: Upload HTML and non-fingerprinted assets
-        run: |
-          aws s3 sync out/ "s3://$FRONTEND_BUCKET_NAME/" --delete \
-            --exclude "_next/static/*" \
-            --exclude "assets/*" \
-            --cache-control "public,max-age=60,must-revalidate"
-
       - name: Upload fingerprinted assets
         run: |
           aws s3 cp out/ "s3://$FRONTEND_BUCKET_NAME/" --recursive \
@@ -86,6 +85,13 @@ jobs:
             --include "_next/static/*" \
             --include "assets/*" \
             --cache-control "public,max-age=31536000,immutable"
+
+      - name: Upload HTML and non-fingerprinted assets
+        run: |
+          aws s3 sync out/ "s3://$FRONTEND_BUCKET_NAME/" --delete \
+            --exclude "_next/static/*" \
+            --exclude "assets/*" \
+            --cache-control "public,max-age=60,must-revalidate"
 
       - name: Invalidate CloudFront cache
         run: aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/*"
