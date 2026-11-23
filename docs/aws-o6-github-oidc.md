@@ -17,14 +17,27 @@ Chỉ tạo một provider cho account. Không commit Account ID hoặc ARN th�
 
 ## 2. IAM role
 
-Tạo role tên ví dụ `ExamMakerGitHubActionsDeploy` và chọn **Web identity**.
+OIDC provider là tài nguyên dùng chung ở cấp AWS account. O6 tạo role riêng cho
+frontend, tên ví dụ `aem-github-frontend-deploy-role`; O15 sẽ tạo role backend
+riêng với quyền EC2/SSM theo nguyên tắc least privilege.
+
+Trong IAM → **Roles → Create role → Web identity**:
 
 - Identity provider: `token.actions.githubusercontent.com`.
+- GitHub organization: `flwndyy`.
+- GitHub repository: `new-ai-exam-maker`.
+- GitHub branch: `main`.
 - Audience: `sts.amazonaws.com`.
 - Sau khi tạo role, thay trust policy bằng mẫu tại
-  `infra/iam/github-actions-oidc-trust-policy.json`.
+  `infra/iam/github-actions-oidc-trust-policy.example.json`.
 - Thay `<ACCOUNT_ID>` bằng Account ID ngay trong IAM Console, không sửa file trong
   repository.
+
+Đối chiếu JSON sau khi wizard tạo role. Với policy khóa theo `ref:refs/heads/main`,
+workflow O7 phải dùng **Repository Variables/Secrets** và **không được khai báo
+`environment:` trong job deploy**. Nếu sau này dùng GitHub Environment, phải đổi
+trust policy để cho phép claim `repo:flwndyy/new-ai-exam-maker:environment:<name>`
+và giới hạn environment đó chỉ chạy từ `main`.
 
 Trust policy bắt buộc giới hạn đồng thời:
 
@@ -42,15 +55,21 @@ Không dùng `AdministratorAccess`.
 Các quyền O7 dự kiến cần cấp:
 
 - S3: `ListBucket` trên đúng bucket frontend.
-- S3 object: `PutObject`, `GetObject`, `DeleteObject` trên đúng prefix frontend.
+- S3 object: `PutObject`, `GetObject`, `DeleteObject` trên toàn bộ object của
+  bucket frontend (`arn:aws:s3:::<bucket-name>/*`), vì O5 upload build vào root
+  bucket (`index.html`, `/_next/static/*`, `/assets/*`).
 - CloudFront: `CreateInvalidation` trên đúng distribution.
 
-Giới hạn resource bằng ARN thật trong IAM Console; không ghi ARN thật vào repo.
+Policy mẫu tại `infra/iam/github-actions-frontend-deploy-policy.example.json` dùng
+placeholder `${FRONTEND_BUCKET_ARN}`, `${FRONTEND_BUCKET_OBJECT_ARN}` và
+`${CLOUDFRONT_DISTRIBUTION_ARN}`. Thay placeholder bằng ARN thật trực tiếp trong
+IAM Console; không ghi ARN thật vào repo.
 
 ## 4. Kiểm tra an toàn
 
 - [ ] Provider URL và audience đúng.
 - [ ] `sub` chỉ cho phép `repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main`.
+- [ ] Workflow O7 dùng Repository Variables/Secrets và không đặt `environment:`.
 - [ ] Role không có `AdministratorAccess`.
 - [ ] Không có access key, secret, Account ID, ARN thật hoặc bucket thật trong Git.
 - [ ] Chưa bật deploy tự động trong O6; workflow deploy làm ở O7.
@@ -60,7 +79,7 @@ Giới hạn resource bằng ARN thật trong IAM Console; không ghi ARN thật
 Ghi các giá trị thật ngoài repository hoặc trong GitHub Actions Variables/Secrets
 theo quy định của nhóm:
 
-- Role ARN.
+- Frontend role ARN (`aem-github-frontend-deploy-role`).
 - Tên bucket frontend.
 - CloudFront distribution ID.
 
