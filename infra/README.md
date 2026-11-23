@@ -20,6 +20,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
 - `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).
 - `ssm/`: script chuẩn hóa và xác minh cây tham số AWS Systems Manager Parameter Store (Task O12 — xem [`../docs/runbooks/parameter-store.md`](../docs/runbooks/parameter-store.md)).
+- `cloudwatch/`: script dựng và xác minh CloudWatch Log Group (retention 7 ngày), 4 Metric Filters, SNS Topic và 10 CloudWatch Alarms trong ngưỡng Free Tier (Task O13 — xem [`../docs/runbooks/cloudwatch.md`](../docs/runbooks/cloudwatch.md)).
 - `budgets/`: script thiết lập và kiểm tra cảnh báo ngân sách AWS Budgets $200 (Task O14 — xem [`../docs/runbooks/budgets.md`](../docs/runbooks/budgets.md)).
 
 ## Quy tắc placeholder
