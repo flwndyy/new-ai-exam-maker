@@ -63,9 +63,9 @@ EXPECT_DELETION_PROTECTION=true ./infra/rds/verify-rds.sh
 
 **Hành vi create-if-absent & an toàn mật khẩu:**
 - Tự động tìm `aem-demo-vpc`, `aem-private-a`, `aem-private-b`, `aem-rds-sg` theo tên (có thể ghi đè qua biến `VPC_NAME`, `PRIVATE_SUBNET_NAMES`, `RDS_SG_NAME`, hoặc truyền trực tiếp `SUBNET_IDS` và `RDS_SG_ID`).
-- **An toàn mật khẩu:** Nếu tạo mới, script sinh mật khẩu ngẫu nhiên 32 ký tự chữ-số và **lưu ngay vào SSM Parameter Store dạng `SecureString` (`${SSM_PREFIX}/Rds/MasterPassword`) TRƯỚC KHI gọi `create-db-instance`**. Điều này đảm bảo mật khẩu không bao giờ bị mất nếu phiên CloudShell bị timeout hay rớt mạng giữa chừng khi đang chờ RDS khởi tạo.
+- **An toàn mật khẩu:** Nếu tạo mới, script sinh mật khẩu ngẫu nhiên 32 ký tự chữ-số và **lưu ngay vào SSM Parameter Store dưới prefix nội bộ OPS dạng `SecureString` (`${SSM_OPS_PREFIX}/Rds/MasterPassword`, mặc định `/exammaker-ops/dev/Rds/MasterPassword`) TRƯỚC KHI gọi `create-db-instance`**. Điều này đảm bảo mật khẩu không bao giờ bị mất nếu phiên CloudShell bị timeout hay rớt mạng giữa chừng khi đang chờ RDS khởi tạo, đồng thời không để tham số `Rds/MasterPassword` nằm trong cây `/exammaker/dev/*` mà `AddSystemsManager` của ứng dụng nạp.
 - Đợi RDS `available` (~4–7 phút), lưu `${SSM_PREFIX}/ConnectionStrings/ExamMaker` dạng **`SecureString`** (không in mật khẩu ra màn hình) và 5 metadata key dưới `${SSM_PREFIX}/Rds/*`.
-- Nếu chạy lại trên instance đã tồn tại: script đọc lại `${SSM_PREFIX}/Rds/MasterPassword` từ SSM để đảm bảo connection string luôn đầy đủ và không ghi đè làm mất mật khẩu DB. Để kiểm tra độ sai lệch cấu hình (drift), hãy chạy `./infra/rds/verify-rds.sh`.
+- Nếu chạy lại trên instance đã tồn tại: script đọc lại `${SSM_OPS_PREFIX}/Rds/MasterPassword` từ SSM để đảm bảo connection string luôn đầy đủ và không ghi đè làm mất mật khẩu DB. Để kiểm tra độ sai lệch cấu hình (drift), hãy chạy `./infra/rds/verify-rds.sh`.
 
 ---
 
@@ -96,7 +96,7 @@ EXPECT_DELETION_PROTECTION=true ./infra/rds/verify-rds.sh
      - Encryption: **Enable encryption** với AWS-managed key `(default) aws/rds`.
      - Deletion protection: **Tắt** cho `dev` (hoặc **Bật** trước ngày demo).
 3. **Lưu cấu hình vào SSM Parameter Store** (*Systems Manager → Parameter Store → Create parameter*):
-   - `${SSM_PREFIX}/Rds/MasterPassword` — Type: **`SecureString`** (KMS key mặc định `alias/aws/ssm`), Value: `<mat-khau>`
+   - `${SSM_OPS_PREFIX}/Rds/MasterPassword` (`/exammaker-ops/dev/Rds/MasterPassword`) — Type: **`SecureString`** (KMS key mặc định `alias/aws/ssm`), Value: `<mat-khau>`
    - `${SSM_PREFIX}/ConnectionStrings/ExamMaker` — Type: **`SecureString`** (KMS key mặc định `alias/aws/ssm`), Value:
      `Host=<endpoint>;Port=5432;Database=exammaker;Username=exammaker_admin;Password=<mat-khau>;SSL Mode=Require`
    - Các metadata dạng `String` (Standard, miễn phí):
@@ -159,12 +159,7 @@ export ConnectionStrings__ExamMaker="$(aws ssm get-parameter --region ap-southea
   --name /exammaker/dev/ConnectionStrings/ExamMaker --with-decryption \
   --query Parameter.Value --output text)"
 
-export PGPASSWORD="$(aws ssm get-parameter --region ap-southeast-1 \
-  --name /exammaker/dev/Rds/MasterPassword --with-decryption \
-  --query Parameter.Value --output text 2>/dev/null || \
-  aws ssm get-parameter --region ap-southeast-1 \
-  --name /exammaker/dev/ConnectionStrings/ExamMaker --with-decryption \
-  --query Parameter.Value --output text | sed -n 's/.*Password=\([^;]*\).*/\1/p')"
+export PGPASSWORD="$(printf '%s' "$ConnectionStrings__ExamMaker" | sed -n 's/.*Password=\([^;]*\).*/\1/p')"
 
 # 3. Chạy EF Core migration bundle (hoặc dotnet ef database update trên máy build)
 # 4. Xác nhận dữ liệu seed A2 (kỳ vọng: departments=4, subjects=4, topics=82)

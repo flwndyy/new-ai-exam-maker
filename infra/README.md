@@ -19,6 +19,7 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `cognito/`: script dựng và xác minh Cognito User Pool, nhóm người dùng và App Client (Task O9 — xem [`../docs/runbooks/cognito.md`](../docs/runbooks/cognito.md)).
 - `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
 - `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).
+- `ssm/`: script chuẩn hóa và xác minh cây tham số AWS Systems Manager Parameter Store (Task O12 — xem [`../docs/runbooks/parameter-store.md`](../docs/runbooks/parameter-store.md)).
 
 ## Quy tắc placeholder
 
