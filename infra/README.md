@@ -11,17 +11,20 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `systemd/`: mẫu service cho API, Worker và timer gia hạn Certbot.
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
-- `iam/`: policy mẫu cho instance profile EC2 và GitHub Actions OIDC frontend; thay
+- `iam/`: policy mẫu cho instance profile EC2 và GitHub Actions OIDC frontend/backend; thay
   placeholder trong AWS, không commit ARN thật. Xem thêm
   [`../docs/aws-o6-github-oidc.md`](../docs/aws-o6-github-oidc.md),
-  [`iam/github-actions-oidc-trust-policy.example.json`](iam/github-actions-oidc-trust-policy.example.json)
-  và [`iam/github-actions-frontend-deploy-policy.example.json`](iam/github-actions-frontend-deploy-policy.example.json).
+  [`iam/github-actions-oidc-trust-policy.example.json`](iam/github-actions-oidc-trust-policy.example.json),
+  [`iam/github-actions-frontend-deploy-policy.example.json`](iam/github-actions-frontend-deploy-policy.example.json),
+  [`iam/github-actions-backend-oidc-trust-policy.example.json`](iam/github-actions-backend-oidc-trust-policy.example.json)
+  và [`iam/github-actions-backend-deploy-policy.example.json`](iam/github-actions-backend-deploy-policy.example.json).
 - `cognito/`: script dựng và xác minh Cognito User Pool, nhóm người dùng và App Client (Task O9 — xem [`../docs/runbooks/cognito.md`](../docs/runbooks/cognito.md)).
 - `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
 - `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).
 - `ssm/`: script chuẩn hóa và xác minh cây tham số AWS Systems Manager Parameter Store (Task O12 — xem [`../docs/runbooks/parameter-store.md`](../docs/runbooks/parameter-store.md)).
 - `cloudwatch/`: script dựng và xác minh CloudWatch Log Group (retention 7 ngày), 4 Metric Filters, SNS Topic và 10 CloudWatch Alarms trong ngưỡng Free Tier (Task O13 — xem [`../docs/runbooks/cloudwatch.md`](../docs/runbooks/cloudwatch.md)).
 - `budgets/`: script thiết lập và kiểm tra cảnh báo ngân sách AWS Budgets $200 (Task O14 — xem [`../docs/runbooks/budgets.md`](../docs/runbooks/budgets.md)).
+- `deploy/`: script thiết lập hạ tầng OIDC/S3, triển khai trên EC2 (kèm EF migration bundle & auto-rollback), rollback thủ công và xác minh CI/CD backend (Task O15 — xem [`../docs/runbooks/cd-backend.md`](../docs/runbooks/cd-backend.md)).
 
 ## Quy tắc placeholder
 

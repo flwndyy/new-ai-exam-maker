@@ -183,6 +183,7 @@ public IP idle hoặc CloudFront distribution thử nghiệm.
 - Runbook AWS Systems Manager Parameter Store (O12): [`runbooks/parameter-store.md`](runbooks/parameter-store.md)
 - Runbook Amazon CloudWatch Logs & Alarms (O13): [`runbooks/cloudwatch.md`](runbooks/cloudwatch.md)
 - Runbook AWS Budgets $200 (O14): [`runbooks/budgets.md`](runbooks/budgets.md)
+- Runbook CI/CD Backend, EF Core Migration Bundle & Rollback (O15): [`runbooks/cd-backend.md`](runbooks/cd-backend.md)
 - Runbook cấu hình AWS CLI cục bộ cho thành viên: [`runbooks/aws-local-cli.md`](runbooks/aws-local-cli.md)
 
 ## 6. Tài liệu AWS tham khảo

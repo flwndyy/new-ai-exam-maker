@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GitHubActionsBackendMainOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main",
+          "token.actions.githubusercontent.com:workflow": "Deploy backend",
+          "token.actions.githubusercontent.com:ref": "refs/heads/main"
+        }
+      }
+    }
+  ]
+}
