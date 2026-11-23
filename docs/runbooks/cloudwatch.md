@@ -18,9 +18,9 @@ Tài liệu hướng dẫn thiết lập, xác minh và quy trình xử lý sự
 | Tên Metric Filter | Filter Pattern | Metric đích (`ExamMaker/Dev`) | Ý nghĩa |
 |---|---|---|---|
 | `exammaker-dev-api-5xx-filter` | `?"responded 500" ?"responded 501" ?"responded 502" ?"responded 503" ?"responded 504" ?"\"StatusCode\":5"` | `Api5xxCount` | Đếm số response HTTP `5xx` từ middleware `app.UseSerilogRequestLogging()` của API |
-| `exammaker-dev-worker-heartbeat-filter` | `?"WorkerHeartbeat" ?"worker_heartbeat"` | `WorkerHeartbeat` | Ghi nhận nhịp sống định kỳ của Worker từ log (song song với `cloudwatch:PutMetricData`) |
-| `exammaker-dev-worker-stuck-jobs-filter` | `?"StuckRunningJob" ?"LeaseExpired" ?"stuck_running_job"` | `StuckRunningJobs` | Ghi nhận khi tác vụ phục hồi phát hiện job `Running` quá hạn lease |
-| `exammaker-dev-worker-errors-filter` | `?"[ERR]" ?"[FTL]" ?"\"Level\":\"Error\"" ?"\"Level\":\"Fatal\""` | `WorkerErrorCount` | Đếm lỗi `[ERR]` / `[FTL]` từ Worker và ứng dụng |
+| `exammaker-dev-worker-heartbeat-filter` | `?"AI worker heartbeat" ?"WorkerHeartbeat" ?"worker_heartbeat"` | `WorkerHeartbeat` | Ghi nhận nhịp sống định kỳ của Worker từ log `AiJobConsumerService` (`"AI worker heartbeat."`, song song với `cloudwatch:PutMetricData`) |
+| `exammaker-dev-worker-stuck-jobs-filter` | `?"expired leases" ?"StuckRunningJob" ?"LeaseExpired" ?"stuck_running_job"` | `StuckRunningJobs` | Ghi nhận khi `AiJobRecovery` phát hiện job `Running` quá hạn lease (`"Recovered AI jobs with expired leases: ..."`) |
+| `exammaker-dev-worker-errors-filter` | `?" ERR]" ?" FTL]" ?"[ERR]" ?"[FTL]" ?"\"Level\":\"Error\"" ?"\"Level\":\"Fatal\""` | `WorkerErrorCount` | Đếm lỗi `[HH:mm:ss ERR]` / `[HH:mm:ss FTL]` (format mặc định của `Serilog.Sinks.Console`) hoặc JSON Error/Fatal từ Worker và API |
 
 ### 1.2 Danh mục 10 CloudWatch Alarms (Đúng trần 10/10 Free Tier = $0.00/tháng)
 
@@ -86,7 +86,7 @@ Script `verify-cloudwatch.sh` kiểm tra tự động **15 tiêu chí** (không 
      - `PublishApplicationMetrics`: cho phép `cloudwatch:PutMetricData` có điều kiện `cloudwatch:namespace == "ExamMaker/Dev"`.
 2. **Cách Worker (B6) phát Heartbeat & báo cáo Job kẹt:**
    - **Cách 1 (Gọi trực tiếp CloudWatch SDK hoặc CLI):** Định kỳ mỗi 1–2 phút, Worker đẩy metric `WorkerHeartbeat = 1` (`Unit = Count`) lên namespace `ExamMaker/Dev`; khi vòng quét phát hiện job `Running` quá hạn lease, đẩy `StuckRunningJobs = <count>`.
-   - **Cách 2 (Qua CloudWatch Logs Metric Filter đã cài sẵn):** Khi log của `exammaker-api` và `exammaker-worker` được đẩy lên Log Group `/exammaker/dev/app`, bất kỳ dòng log nào chứa chuỗi `WorkerHeartbeat` sẽ tự động cộng `+1` vào metric `ExamMaker/Dev :: WorkerHeartbeat`, và dòng log chứa `StuckRunningJob` / `LeaseExpired` sẽ tự động cộng `+1` vào `ExamMaker/Dev :: StuckRunningJobs`.
+   - **Cách 2 (Qua CloudWatch Logs Metric Filter đã cài sẵn — khớp sẵn với Worker B6):** Khi log của `exammaker-api` và `exammaker-worker` được đẩy lên Log Group `/exammaker/dev/app`, dòng log `"AI worker heartbeat."` của `AiJobConsumerService` sẽ tự động cộng `+1` vào `ExamMaker/Dev :: WorkerHeartbeat`, dòng `"Recovered AI jobs with expired leases: ..."` của `AiJobRecovery` sẽ cộng `+1` vào `ExamMaker/Dev :: StuckRunningJobs`, và các dòng `[HH:mm:ss ERR]` / `[HH:mm:ss FTL]` của `Serilog.Sinks.Console` sẽ cộng `+1` vào `ExamMaker/Dev :: WorkerErrorCount`.
 3. **Lưu ý về trạng thái của `exammaker-dev-worker-heartbeat` trước khi deploy B6 & trong khung giờ tắt máy ban đêm (23:00–07:00):**
    - Vì `exammaker-dev-worker-heartbeat` cấu hình `TreatMissingData = breaching` (đúng yêu cầu *"không có heartbeat → cảnh báo"* tại `docs/context.md` §10), khi Worker B6 chưa được deploy hoặc khi EC2 dừng ban đêm (23:00–07:00), alarm này sẽ chuyển sang trạng thái `ALARM` **một lần duy nhất** (CloudWatch chỉ gửi email SNS khi chuyển trạng thái `OK → ALARM`, không gửi lặp lại mỗi 5 phút).
    - Nếu muốn tạm tắt gửi email cảnh báo heartbeat trước khi tắt EC2 ban đêm và bật lại vào buổi sáng:

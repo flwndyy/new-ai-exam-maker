@@ -111,20 +111,21 @@ MF_JSON="$(aws logs describe-metric-filters \
 check_filter_present() {
   local fname="$1"
   local mname="$2"
+  local required_token="$3"
   local match=""
-  match="$(jq -r --arg fn "$fname" --arg mn "$mname" --arg ns "$CW_METRIC_NAMESPACE" \
-    '[.metricFilters[]? | select(.filterName == $fn and (.metricTransformations[0].metricName // "") == $mn and (.metricTransformations[0].metricNamespace // "") == $ns)] | length' \
+  match="$(jq -r --arg fn "$fname" --arg mn "$mname" --arg ns "$CW_METRIC_NAMESPACE" --arg tok "$required_token" \
+    '[.metricFilters[]? | select(.filterName == $fn and (.metricTransformations[0].metricName // "") == $mn and (.metricTransformations[0].metricNamespace // "") == $ns and ((.filterPattern // "") | contains($tok)))] | length' \
     <<<"$MF_JSON" | tr -d '\r\n')"
   [ "$match" -eq 1 ]
 }
 
-if check_filter_present "exammaker-${ENV_NAME}-api-5xx-filter" "Api5xxCount" \
-  && check_filter_present "exammaker-${ENV_NAME}-worker-heartbeat-filter" "WorkerHeartbeat" \
-  && check_filter_present "exammaker-${ENV_NAME}-worker-stuck-jobs-filter" "StuckRunningJobs" \
-  && check_filter_present "exammaker-${ENV_NAME}-worker-errors-filter" "WorkerErrorCount"; then
-  pass "All 4 Metric Filters exist on '${CW_LOG_GROUP_NAME}' -> namespace '${CW_METRIC_NAMESPACE}' (Api5xxCount, WorkerHeartbeat, StuckRunningJobs, WorkerErrorCount)"
+if check_filter_present "exammaker-${ENV_NAME}-api-5xx-filter" "Api5xxCount" "responded 500" \
+  && check_filter_present "exammaker-${ENV_NAME}-worker-heartbeat-filter" "WorkerHeartbeat" "AI worker heartbeat" \
+  && check_filter_present "exammaker-${ENV_NAME}-worker-stuck-jobs-filter" "StuckRunningJobs" "expired leases" \
+  && check_filter_present "exammaker-${ENV_NAME}-worker-errors-filter" "WorkerErrorCount" " ERR]"; then
+  pass "All 4 Metric Filters exist on '${CW_LOG_GROUP_NAME}' -> namespace '${CW_METRIC_NAMESPACE}' with B6/Serilog patterns (Api5xxCount, WorkerHeartbeat, StuckRunningJobs, WorkerErrorCount)"
 else
-  fail "One or more required Metric Filters missing or misconfigured on '${CW_LOG_GROUP_NAME}'"
+  fail "One or more required Metric Filters missing or pattern mismatch on '${CW_LOG_GROUP_NAME}'"
 fi
 
 # 4. Amazon SNS Alert Topic & Email Subscriptions (privacy-safe: never prints emails or Account ID)

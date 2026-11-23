@@ -273,22 +273,23 @@ put_metric_filter \
   '?"responded 500" ?"responded 501" ?"responded 502" ?"responded 503" ?"responded 504" ?"\"StatusCode\":5"' \
   "Api5xxCount"
 
-# Matches periodic worker heartbeat log lines ("WorkerHeartbeat" / "worker_heartbeat"); B6 may also call PutMetricData directly
+# Matches periodic worker heartbeat log lines ("AI worker heartbeat." from AiJobConsumerService.cs, plus fallback tokens);
+# Worker B6 may also call PutMetricData directly
 put_metric_filter \
   "exammaker-${ENV_NAME}-worker-heartbeat-filter" \
-  '?"WorkerHeartbeat" ?"worker_heartbeat"' \
+  '?"AI worker heartbeat" ?"WorkerHeartbeat" ?"worker_heartbeat"' \
   "WorkerHeartbeat"
 
-# Matches worker lease recovery log lines when a job stays Running past lease timeout
+# Matches worker lease recovery log lines ("Recovered AI jobs with expired leases: ..." from AiJobRecovery.cs)
 put_metric_filter \
   "exammaker-${ENV_NAME}-worker-stuck-jobs-filter" \
-  '?"StuckRunningJob" ?"LeaseExpired" ?"stuck_running_job"' \
+  '?"expired leases" ?"StuckRunningJob" ?"LeaseExpired" ?"stuck_running_job"' \
   "StuckRunningJobs"
 
-# Matches Serilog error/fatal log lines ([ERR], [FTL], or JSON Level Error/Fatal)
+# Matches Serilog.Sinks.Console default template ([HH:mm:ss ERR] / [HH:mm:ss FTL]), standalone [ERR]/[FTL], and JSON Level Error/Fatal
 put_metric_filter \
   "exammaker-${ENV_NAME}-worker-errors-filter" \
-  '?"[ERR]" ?"[FTL]" ?"\"Level\":\"Error\"" ?"\"Level\":\"Fatal\""' \
+  '?" ERR]" ?" FTL]" ?"[ERR]" ?"[FTL]" ?"\"Level\":\"Error\"" ?"\"Level\":\"Fatal\""' \
   "WorkerErrorCount"
 
 # ---------------------------------------------------------------------------
