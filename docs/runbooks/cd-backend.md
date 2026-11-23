@@ -55,7 +55,7 @@ Vào **GitHub Repo → Settings → Secrets and variables → Actions → Variab
 *(Lưu ý: giống O6/O7, không khai báo `environment:` trong job `Deploy backend` để khớp điều kiện `sub = repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main` của OIDC trust policy).*
 
 ### Checklist điều kiện tiên quyết trên EC2 trước lần chạy `Deploy backend` đầu tiên trên `main`
-- Đã cài đủ 2 systemd unit `/etc/systemd/system/exammaker-api.service` và `/etc/systemd/system/exammaker-worker.service` (từ `infra/systemd/*.service.example`) kèm `/etc/exammaker/api.env` và `/etc/exammaker/worker.env` (chỉ định `AWS__Region=ap-southeast-1`, `ExamMaker__ParameterStorePrefix=/exammaker/dev`).
+- Đã cài đủ 2 systemd unit `/etc/systemd/system/exammaker-api.service` và `/etc/systemd/system/exammaker-worker.service` (từ `infra/systemd/*.service.example`) kèm `/etc/exammaker/api.env` và `/etc/exammaker/worker.env` (chỉ định `ParameterStore__Path=/exammaker/dev` khớp `ParameterStoreConfiguration.cs` và `docs/runbooks/parameter-store.md` §4.1).
 - Parameter Store đã có đủ `/exammaker/dev/Sqs/AiJobsQueueUrl` và `/exammaker/dev/Bedrock/ModelId` (đã dựng ở O11/O12). Nếu thiếu một trong hai khóa này, `exammaker-worker` ở môi trường Production sẽ chủ động **fail-fast** (`InvalidOperationException` trong `ExamMaker.Worker/Program.cs`) và `deploy-on-ec2.sh` sẽ tự động kích hoạt **auto-rollback** đúng như thiết kế.
 
 ---
