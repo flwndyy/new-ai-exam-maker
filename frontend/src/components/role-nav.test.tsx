@@ -22,6 +22,12 @@ describe("RoleNav AI links", () => {
     expect(screen.queryByRole("link", { name: messages.nav.aiUsage })).toBeNull();
   });
 
+  it.each(["teacher", "head", "admin"])("%s sees the exams link", (role) => {
+    auth.me.role = role;
+    render(<RoleNav />);
+    expect(screen.getByRole("link", { name: messages.nav.exams }).getAttribute("href")).toMatch(/^\/exams\/?$/);
+  });
+
   it("admin sees the usage report but not the AI generation link", () => {
     auth.me.role = "admin";
     render(<RoleNav />);

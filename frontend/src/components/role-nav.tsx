@@ -12,7 +12,10 @@ export function RoleNav() {
 
   return (
     <>
-      <Link href="/questions/" className="text-sm text-slate-600 hover:text-slate-900">
+      <Link href="/exams/" className="text-sm text-slate-600 hover:text-slate-900">
+        {vi.nav.exams}
+      </Link>
+      <Link href="/questions/"className="text-sm text-slate-600 hover:text-slate-900">
         {vi.nav.questions}
       </Link>
       {(me.role === "teacher" || me.role === "head") && (

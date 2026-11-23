@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.22** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.23** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -553,6 +553,18 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 - **Hiển thị nội dung AI** chỉ qua `MathMarkdown` (sanitize trước KaTeX); ghi chú giáo viên hiển thị text thường.
 - **`GET /admin/ai-usage`** (admin): dòng (user, ngày UTC) lấy từ `ai_usage_daily`, sắp ngày giảm dần; `from`/`to` là cận gồm, đúng định dạng `YYYY-MM-DD`; `totals` tính trên toàn bộ kết quả lọc. `estimatedCostUsd` là **ước tính, không phải hóa đơn AWS**: tổng trên `ai_generation_jobs` của người đó theo `model_id`, gom vào ngày UTC của `COALESCE(finished_at, started_at, created_at)` (ngày job chạy khớp ngày token được cộng hơn ngày tạo, vì EC2 tắt 16:00–24:00 UTC), nhân bảng giá `AiPricing:Models:{i}:ModelId|InputPer1MUsd|OutputPer1MUsd` (USD/1M token). Bảng giá là **danh sách** vì model id chứa `:` (ký tự phân cấp key cấu hình .NET); không cấu hình thì dùng mặc định theo mục 6 (Haiku 4.5: 1/5, Sonnet 4.6: 3/15); giá âm hoặc trùng model id làm khởi động thất bại. Model không có giá → chi phí 0 và log `Warning`. Làm tròn 4 chữ số.
 
+#### Chi tiết triển khai B9
+
+- **Không đổi backend**: frontend dùng các endpoint A7 (`/exams`, `/exams/{id}`, `/exams/{id}/versions`, `/exam-versions/{vid}` cùng `submit`/`withdraw`/`archive`). Thiết kế: `docs/superpowers/specs/2026-11-23-b9-exam-composer-design.md`.
+- **Trang**: `/exams/` (mọi role; lọc môn/khối, "Chỉ đề của tôi"; teacher/head có tổ được "Tạo đề" — chỉ môn trong tổ mình, tạo xong mở bản v1) và `/exams/view/?id=<examId>&vid=<versionId>`. Menu "Đề thi" cho mọi role đã đăng nhập.
+- **Phiên bản mặc định**: `vid` trên URL nếu thuộc đề; nếu không thì bản `Draft`/`Rejected` mới nhất, nếu không có thì bản mới nhất.
+- **Quyền trên UI**: chỉ tác giả (teacher/head) sửa được, và chỉ khi phiên bản `Draft`/`Rejected`; người khác/trạng thái khác xem chỉ đọc. Đọc phiên bản trả 403 → thông báo chỉ được xem bản đề học sinh (B10). Admin không thấy nút tạo/sửa; archive ở màn này chỉ cho tác giả (head/admin dùng màn duyệt A10).
+- **Màn soạn**: hai cột (xếp chồng dưới mốc `lg`) — câu trong đề (↑ ↓ ✕, điểm) và ngân hàng (`GET /questions` khóa môn/khối của đề, lọc chương/dạng/mức độ/của tôi). Nút "Thêm" chỉ cho câu của mình chưa `Archived` hoặc câu `Approved`; câu chưa duyệt có nhãn "Phải được duyệt trước khi gửi đề". Câu mới mặc định 1 điểm; "Chia đều 10 điểm" lấy 2 chữ số thập phân, phần dư dồn vào câu cuối.
+- **Điểm**: giữ dạng chuỗi trong form (nhận dấu phẩy), cộng/chia bằng số nguyên lớn, không dùng float; chỉ chuyển sang số khi gửi `PUT`. Ràng buộc khớp API: thời gian 1–600 phút, tối đa 200 câu, không trùng câu, điểm > 0.
+- **Lưu**: bấm "Lưu" (không tự lưu) gửi toàn bộ danh sách; 409 → báo "đề vừa thay đổi" kèm nút tải lại. Có thay đổi chưa lưu: đổi phiên bản phải xác nhận, đóng/tải lại tab có hộp cảnh báo của trình duyệt (App Router không chặn được link menu).
+- **Cảnh báo**: câu có `currentSourceRevision` khác `sourceRevision` hiện "Câu nguồn đã thay đổi so với lúc chọn"; `warnings` của server hiện thành danh sách; câu không xem được nội dung vẫn giữ dòng, điểm và nút bỏ.
+- **Thao tác**: "Gửi duyệt" chỉ bật khi đã lưu và có ít nhất 1 câu; 409 `QuestionsNotApproved` tô đỏ các câu trong `invalidQuestionIds`. "Rút lại" cho `Submitted`; "Lưu trữ" (có xác nhận) cho `Approved`/`Rejected`; "Tạo phiên bản mới" sao chép từ bản đang xem, ẩn khi đề đã có bản `Draft`.
+
 ---
 
 ## 10. Bảo mật & giám sát
@@ -672,6 +684,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.23 — 23/11/2026**
+- Triển khai frontend soạn đề B9 trên API A7: danh sách/tạo đề, trang soạn phiên bản hai cột (ngân hàng câu, sắp xếp ↑ ↓, điểm thập phân chính xác, "Chia đều 10 điểm"), lưu thủ công, gửi duyệt/rút lại/lưu trữ/tạo phiên bản mới, cảnh báo câu nguồn đổi `revision` và tô câu chưa duyệt. Không đổi backend. Thêm "Chi tiết triển khai B9" ở 9.2.
 
 **0.22 — 23/11/2026**
 - Triển khai frontend AI B8: form sinh câu kèm cảnh báo cố định dưới ô ghi chú, polling job có backoff, trang job rà soát từng câu với nút "Đã rà soát", sinh lại từ job cũ; trang và endpoint `GET /admin/ai-usage` với chi phí ước tính theo bảng giá model cấu hình (`AiPricing:Models`). `POST /ai/generate` từ chối môn ngoài tổ người gửi trước khi giữ quota. Thêm "Chi tiết triển khai B8" ở 9.2, cập nhật 4.1.
