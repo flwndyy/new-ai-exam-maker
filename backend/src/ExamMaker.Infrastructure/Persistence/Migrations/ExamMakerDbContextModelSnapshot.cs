@@ -36,6 +36,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("DuplicatesDropped")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("duplicates_dropped");
+
                     b.Property<string>("ErrorCode")
                         .HasColumnType("text")
                         .HasColumnName("error_code");
@@ -103,6 +109,8 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_ai_generation_jobs_attempts", "attempt >= 0 AND max_attempts >= 1 AND attempt <= max_attempts");
 
+                            t.HasCheckConstraint("ck_ai_generation_jobs_duplicates_dropped", "duplicates_dropped >= 0");
+
                             t.HasCheckConstraint("ck_ai_generation_jobs_error", "(status <> 'Failed' OR (error_code IS NOT NULL AND length(btrim(error_code)) > 0)) AND (status <> 'Succeeded' OR error_code IS NULL)");
 
                             t.HasCheckConstraint("ck_ai_generation_jobs_finished", "status NOT IN ('Succeeded', 'Failed') OR finished_at IS NOT NULL");
@@ -161,6 +169,10 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("department_id");
+
                     b.Property<Guid>("EntityId")
                         .HasColumnType("uuid")
                         .HasColumnName("entity_id");
@@ -173,6 +185,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                     b.Property<string>("FromStatus")
                         .HasColumnType("text")
                         .HasColumnName("from_status");
+
+                    b.Property<bool>("IsSecondary")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_secondary");
 
                     b.Property<string>("Note")
                         .HasColumnType("text")
@@ -187,6 +205,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ActorId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_actor_created");
+
+                    b.HasIndex("CreatedAt", "Id")
+                        .HasDatabaseName("ix_audit_logs_created_id");
+
+                    b.HasIndex("DepartmentId", "CreatedAt")
+                        .HasDatabaseName("ix_audit_logs_department_created");
 
                     b.HasIndex("EntityType", "EntityId", "CreatedAt")
                         .HasDatabaseName("ix_audit_logs_entity_created");

@@ -9,14 +9,16 @@
 #
 # Security & Privacy:
 #   - Never hardcode email addresses or AWS Account ID in Git.
-#   - Pass team emails via BUDGET_EMAILS="email1@...,email2@...,email3@...,email4@..."
-#   - Script never prints raw email addresses or Account ID to stdout.
+#   - Pass team emails via BUDGET_EMAILS_STDIN=1 (recommended on shared shells to avoid shell history)
+#     or BUDGET_EMAILS="email1@...,email2@...,email3@...,email4@..." (private shell only).
+#   - Script never prints raw email addresses or Account ID to stdout and never passes emails in jq/aws argv.
 #
 # Dependencies: aws (CLI v2), jq (both pre-installed in AWS CloudShell).
 #
 # Usage (AWS CloudShell, Linux, macOS, or Git Bash with jq):
+#   BUDGET_EMAILS_STDIN=1 ./infra/budgets/setup-budgets.sh
 #   BUDGET_EMAILS="devA@example.com,devB@example.com,ops1@example.com,ops2@example.com" ./infra/budgets/setup-budgets.sh
-#   UPDATE_BUDGET=1 BUDGET_EMAILS="..." ./infra/budgets/setup-budgets.sh
+#   UPDATE_BUDGET=1 BUDGET_EMAILS_STDIN=1 ./infra/budgets/setup-budgets.sh
 
 set -euo pipefail
 
@@ -30,6 +32,7 @@ BUDGET_LIMIT_USD="${BUDGET_LIMIT_USD:-200}"
 BUDGET_TIME_UNIT="${BUDGET_TIME_UNIT:-QUARTERLY}"
 UPDATE_BUDGET="${UPDATE_BUDGET:-0}"
 BUDGET_EMAILS="${BUDGET_EMAILS:-}"
+BUDGET_EMAILS_STDIN="${BUDGET_EMAILS_STDIN:-0}"
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
@@ -47,13 +50,25 @@ case "$BUDGET_TIME_UNIT" in
     ;;
 esac
 
+if [ "$BUDGET_EMAILS_STDIN" = "1" ]; then
+  if [ -t 0 ]; then
+    echo "Enter comma-separated team email addresses for AWS Budget notifications:" >&2
+  fi
+  if ! IFS= read -r BUDGET_EMAILS && [ -z "$BUDGET_EMAILS" ]; then
+    echo "ERROR: Failed to read BUDGET_EMAILS from stdin (EOF)." >&2
+    exit 1
+  fi
+fi
+
 if [ -z "$BUDGET_EMAILS" ]; then
   echo "ERROR: BUDGET_EMAILS is required (comma-separated team emails, never committed to Git)." >&2
-  echo "Example: BUDGET_EMAILS=\"member1@example.com,member2@example.com\" ./infra/budgets/setup-budgets.sh" >&2
+  echo "Preferred (no shell history): BUDGET_EMAILS_STDIN=1 ./infra/budgets/setup-budgets.sh" >&2
+  echo "Or in a private shell:        BUDGET_EMAILS=\"member1@example.com,member2@example.com\" ./infra/budgets/setup-budgets.sh" >&2
   exit 1
 fi
 
-# Parse, trim, validate, and deduplicate email subscribers without echoing raw addresses.
+# Parse, trim, validate, and deduplicate email subscribers without echoing raw addresses
+# or exposing email addresses in jq process argv (ps -ef).
 SUBSCRIBERS_JSON="[]"
 SUBSCRIBER_COUNT=0
 IFS=',' read -r -a RAW_EMAILS <<<"$BUDGET_EMAILS"
@@ -64,8 +79,8 @@ for raw in "${RAW_EMAILS[@]}"; do
     echo "ERROR: Invalid email format detected in BUDGET_EMAILS." >&2
     exit 1
   fi
-  if [ "$(jq -r --arg e "$email" '[.[] | select(.Address == $e)] | length' <<<"$SUBSCRIBERS_JSON")" -eq 0 ]; then
-    SUBSCRIBERS_JSON="$(jq -nc --argjson arr "$SUBSCRIBERS_JSON" --arg e "$email" '$arr + [{SubscriptionType: "EMAIL", Address: $e}]')"
+  if [ "$(EMAIL_VAL="$email" jq -r '[.[] | select(.Address == env.EMAIL_VAL)] | length' <<<"$SUBSCRIBERS_JSON")" -eq 0 ]; then
+    SUBSCRIBERS_JSON="$(EMAIL_VAL="$email" jq -c '. + [{SubscriptionType: "EMAIL", Address: env.EMAIL_VAL}]' <<<"$SUBSCRIBERS_JSON")"
     SUBSCRIBER_COUNT=$((SUBSCRIBER_COUNT + 1))
   fi
 done
@@ -80,11 +95,56 @@ if [ "$SUBSCRIBER_COUNT" -gt 10 ]; then
   exit 1
 fi
 
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text | tr -d '\r\n')"
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null | tr -d '\r\n' || true)"
 if [ -z "$ACCOUNT_ID" ] || ! [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
   echo "ERROR: Failed to resolve 12-digit AWS Account ID via sts get-caller-identity." >&2
   exit 1
 fi
+
+# Secure temporary directory for --cli-input-json payloads on Windows/Git Bash where /dev/stdin is unsupported by AWS CLI.
+TMP_PAYLOAD_DIR=""
+cleanup_tmp() {
+  if [ -n "$TMP_PAYLOAD_DIR" ] && [ -d "$TMP_PAYLOAD_DIR" ]; then
+    rm -rf "$TMP_PAYLOAD_DIR"
+  fi
+}
+trap cleanup_tmp EXIT
+trap 'cleanup_tmp; exit 130' INT
+trap 'cleanup_tmp; exit 143' TERM
+
+run_budgets_cli_json() {
+  local subcommand="$1"
+  local payload="$2"
+
+  if [ -e /dev/stdin ] && ! [[ "$(uname -s 2>/dev/null || true)" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
+    printf '%s' "$payload" | aws budgets "$subcommand" \
+      --region "$AWS_BILLING_REGION" \
+      --cli-input-json file:///dev/stdin >/dev/null
+    return 0
+  fi
+
+  if [ -z "$TMP_PAYLOAD_DIR" ]; then
+    TMP_PAYLOAD_DIR="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/exammaker-budgets.XXXXXXXXXX")"
+    chmod 700 "$TMP_PAYLOAD_DIR" 2>/dev/null || true
+    if command -v icacls >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+      local win_dir
+      win_dir="$(cygpath -w "$TMP_PAYLOAD_DIR")"
+      icacls "$win_dir" /inheritance:r /grant:r "${USERNAME:-$(id -un)}:(OI)(CI)F" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  local tmp_file="${TMP_PAYLOAD_DIR}/payload.json"
+  (umask 077 && printf '%s' "$payload" >"$tmp_file")
+  local file_arg="$tmp_file"
+  if command -v cygpath >/dev/null 2>&1 && [[ "$(uname -s 2>/dev/null || true)" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
+    file_arg="$(cygpath -m "$tmp_file")"
+  fi
+
+  aws budgets "$subcommand" \
+    --region "$AWS_BILLING_REGION" \
+    --cli-input-json "file://${file_arg}" >/dev/null
+  rm -f "$tmp_file"
+}
 
 check_budget_status() {
   local out=""
@@ -138,9 +198,8 @@ BUDGET_JSON="$(jq -nc \
     BudgetType: "COST"
   }')"
 
-NOTIFICATIONS_JSON="$(jq -nc \
-  --argjson subs "$SUBSCRIBERS_JSON" \
-  '[
+NOTIFICATIONS_JSON="$(SUBS_ENV="$SUBSCRIBERS_JSON" jq -nc \
+  '(env.SUBS_ENV | fromjson) as $subs | [
     {
       Notification: {
         NotificationType: "ACTUAL",
@@ -188,10 +247,9 @@ if [ "$STATUS" = "exists" ]; then
     echo "==> [KEPT] Budget '${BUDGET_NAME}' already exists (set UPDATE_BUDGET=1 to update limit and notifications)."
   else
     echo "==> [UPDATING] Updating budget '${BUDGET_NAME}' configuration..."
-    aws budgets update-budget \
-      --region "$AWS_BILLING_REGION" \
-      --account-id "$ACCOUNT_ID" \
-      --new-budget "$BUDGET_JSON" >/dev/null
+    UPDATE_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BUDGET_ENV="$BUDGET_JSON" jq -nc \
+      '{AccountId: env.ACCT_ENV, NewBudget: (env.BUDGET_ENV | fromjson)}')"
+    run_budgets_cli_json "update-budget" "$UPDATE_PAYLOAD"
 
     # Ensure each required notification exists and has the requested subscribers
     EXISTING_NOTIFS="$(aws budgets describe-notifications-for-budget \
@@ -205,16 +263,13 @@ if [ "$STATUS" = "exists" ]; then
       ntype="$(jq -r '.NotificationType' <<<"$notif_obj")"
       nthresh="$(jq -r '.Threshold' <<<"$notif_obj")"
       exists_notif="$(jq -r --arg t "$ntype" --argjson th "$nthresh" \
-        '[.Notifications[]? | select(.NotificationType == $t and (.Threshold | tonumber) == $th)] | length' \
+        '[.Notifications[]? | select(.NotificationType == $t and (.Threshold | tonumber) == $th and ((.ThresholdType // "PERCENTAGE") == "PERCENTAGE") and .ComparisonOperator == "GREATER_THAN")] | length' \
         <<<"$EXISTING_NOTIFS")"
 
       if [ "$exists_notif" -eq 0 ]; then
-        aws budgets create-notification \
-          --region "$AWS_BILLING_REGION" \
-          --account-id "$ACCOUNT_ID" \
-          --budget-name "$BUDGET_NAME" \
-          --notification "$notif_obj" \
-          --subscribers "$SUBSCRIBERS_JSON" >/dev/null
+        CREATE_NOTIF_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BNAME_ENV="$BUDGET_NAME" NOTIF_ENV="$notif_obj" SUBS_ENV="$SUBSCRIBERS_JSON" jq -nc \
+          '{AccountId: env.ACCT_ENV, BudgetName: env.BNAME_ENV, Notification: (env.NOTIF_ENV | fromjson), Subscribers: (env.SUBS_ENV | fromjson)}')"
+        run_budgets_cli_json "create-notification" "$CREATE_NOTIF_PAYLOAD"
         echo "    [CREATED]  Notification ${ntype} > ${nthresh}% (${SUBSCRIBER_COUNT} subscriber(s))"
       else
         # 1. Add any missing subscribers first (so a notification is never left with 0 subscribers)
@@ -227,33 +282,25 @@ if [ "$STATUS" = "exists" ]; then
         for sidx in $(seq 0 $((SUBSCRIBER_COUNT - 1))); do
           sub_obj="$(jq -c ".[$sidx]" <<<"$SUBSCRIBERS_JSON")"
           sub_addr="$(jq -r '.Address' <<<"$sub_obj")"
-          has_sub="$(jq -r --arg a "$sub_addr" '[.Subscribers[]? | select(.SubscriptionType == "EMAIL" and .Address == $a)] | length' <<<"$existing_subs")"
+          has_sub="$(EMAIL_VAL="$sub_addr" jq -r '[.Subscribers[]? | select(.SubscriptionType == "EMAIL" and .Address == env.EMAIL_VAL)] | length' <<<"$existing_subs")"
           if [ "$has_sub" -eq 0 ]; then
-            aws budgets create-subscriber \
-              --region "$AWS_BILLING_REGION" \
-              --account-id "$ACCOUNT_ID" \
-              --budget-name "$BUDGET_NAME" \
-              --notification "$notif_obj" \
-              --subscriber "$sub_obj" >/dev/null
+            CREATE_SUB_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BNAME_ENV="$BUDGET_NAME" NOTIF_ENV="$notif_obj" SUB_ENV="$sub_obj" jq -nc \
+              '{AccountId: env.ACCT_ENV, BudgetName: env.BNAME_ENV, Notification: (env.NOTIF_ENV | fromjson), Subscriber: (env.SUB_ENV | fromjson)}')"
+            run_budgets_cli_json "create-subscriber" "$CREATE_SUB_PAYLOAD"
           fi
         done
 
         # 2. Remove stale EMAIL subscribers not in BUDGET_EMAILS
-        stale_count="$(jq -r --argjson desired "$SUBSCRIBERS_JSON" \
-          '[.Subscribers[]? | select(.SubscriptionType == "EMAIL") | .Address as $a | select(($desired | map(.Address) | index($a)) == null)] | length' \
+        stale_list="$(DESIRED_ENV="$SUBSCRIBERS_JSON" jq -c \
+          '(env.DESIRED_ENV | fromjson) as $desired | [.Subscribers[]? | select(.SubscriptionType == "EMAIL") | .Address as $a | select(($desired | map(.Address) | index($a)) == null) | {SubscriptionType: "EMAIL", Address: $a}]' \
           <<<"$existing_subs")"
+        stale_count="$(jq -r 'length' <<<"$stale_list")"
         if [ "$stale_count" -gt 0 ]; then
-          stale_list="$(jq -c --argjson desired "$SUBSCRIBERS_JSON" \
-            '[.Subscribers[]? | select(.SubscriptionType == "EMAIL") | .Address as $a | select(($desired | map(.Address) | index($a)) == null) | {SubscriptionType: "EMAIL", Address: $a}]' \
-            <<<"$existing_subs")"
           for ridx in $(seq 0 $((stale_count - 1))); do
             rm_sub="$(jq -c ".[$ridx]" <<<"$stale_list")"
-            aws budgets delete-subscriber \
-              --region "$AWS_BILLING_REGION" \
-              --account-id "$ACCOUNT_ID" \
-              --budget-name "$BUDGET_NAME" \
-              --notification "$notif_obj" \
-              --subscriber "$rm_sub" >/dev/null
+            DEL_SUB_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BNAME_ENV="$BUDGET_NAME" NOTIF_ENV="$notif_obj" SUB_ENV="$rm_sub" jq -nc \
+              '{AccountId: env.ACCT_ENV, BudgetName: env.BNAME_ENV, Notification: (env.NOTIF_ENV | fromjson), Subscriber: (env.SUB_ENV | fromjson)}')"
+            run_budgets_cli_json "delete-subscriber" "$DEL_SUB_PAYLOAD"
           done
         fi
         echo "    [SYNCED]   Notification ${ntype} > ${nthresh}% (${SUBSCRIBER_COUNT} subscriber(s), removed ${stale_count} stale)"
@@ -262,11 +309,9 @@ if [ "$STATUS" = "exists" ]; then
   fi
 else
   echo "==> [CREATING] Creating AWS Budget '${BUDGET_NAME}' with 4 alert thresholds (50%/80%/100% ACTUAL + 80% FORECASTED)..."
-  aws budgets create-budget \
-    --region "$AWS_BILLING_REGION" \
-    --account-id "$ACCOUNT_ID" \
-    --budget "$BUDGET_JSON" \
-    --notifications-with-subscribers "$NOTIFICATIONS_JSON" >/dev/null
+  CREATE_BUDGET_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BUDGET_ENV="$BUDGET_JSON" NOTIFS_ENV="$NOTIFICATIONS_JSON" jq -nc \
+    '{AccountId: env.ACCT_ENV, Budget: (env.BUDGET_ENV | fromjson), NotificationsWithSubscribers: (env.NOTIFS_ENV | fromjson)}')"
+  run_budgets_cli_json "create-budget" "$CREATE_BUDGET_PAYLOAD"
   echo "    [CREATED]  Budget '${BUDGET_NAME}' (\$${BUDGET_LIMIT_USD} USD ${BUDGET_TIME_UNIT}, ${SUBSCRIBER_COUNT} email subscriber(s))"
 fi
 

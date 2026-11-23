@@ -121,14 +121,19 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Chi tiết câu hỏi */
+        /**
+         * Chi tiết câu hỏi
+         * @description Tác giả xem câu của mình; câu Approved dùng chung trong tổ; Head được xem Submitted cùng tổ để duyệt; Admin xem tất cả. Ngoài phạm vi hoặc không tồn tại trả 404.
+         */
         get: operations["getQuestion"];
         /**
          * Sửa câu hỏi
          * @description Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
          *     - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
          *     - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
+         *       Nếu còn đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
          *     - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
+         *     Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
          *     Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
          */
         put: operations["updateQuestion"];
@@ -136,7 +141,8 @@ export interface paths {
         /**
          * Xóa câu hỏi
          * @description Chỉ người tạo, chỉ câu `Draft`/`Rejected` và **chưa được đề nào tham chiếu**
-         *     (`409 QuestionReferenced`). Câu đã `Approved` dùng `archive`.
+         *     (`409 QuestionReferenced`). Liên kết question_set_items được xóa trong cùng transaction trước khi xóa câu,
+         *     kể cả bộ của người khác. Câu đã `Approved` dùng `archive`.
          */
         delete: operations["deleteQuestion"];
         options?: never;
@@ -237,7 +243,8 @@ export interface paths {
         put?: never;
         /**
          * Lưu trữ câu hỏi
-         * @description `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: cùng tổ; Admin: tất cả.
+         * @description `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: của mình hoặc cùng tổ; Admin: tất cả.
+         *     Còn phiên bản đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; snapshot Approved/Published/Archived không chặn archive nguồn.
          *     Các đề đã snapshot không bị ảnh hưởng.
          */
         post: operations["archiveQuestion"];
@@ -259,6 +266,7 @@ export interface paths {
         /**
          * Đánh dấu "Đã rà soát" câu do AI sinh
          * @description Đặt `aiReviewedByAuthor=true`. Chỉ người tạo, chỉ câu `source=AI` đang `Draft`/`Rejected`.
+         *     Nếu cờ đã true thì trả nguyên dữ liệu, không thêm audit hoặc đổi updatedAt.
          *     Điều kiện bắt buộc trước khi `submit` (context 4.1.2).
          */
         post: operations["markQuestionReviewed"];
@@ -788,7 +796,7 @@ export interface paths {
         };
         /**
          * Nhật ký audit
-         * @description Head: giới hạn trong tổ của mình. Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
+         * @description Head: giới hạn trong tổ của mình theo snapshot `departmentId` tại thời điểm sự kiện (lịch sử cũ trước migration của `User`, `Subject`, `Topic`, `QuestionSet`, `AiJob` và thực thể đã xóa trước migration có `departmentId = null` nên chỉ Admin xem được; `actor.fullName` luôn giữ tên người thực hiện sự kiện dù sau đó người đó chuyển tổ). Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
          */
         get: operations["listAuditLogs"];
         put?: never;
@@ -1044,14 +1052,28 @@ export interface components {
             code: components["schemas"]["ErrorCode"];
             /** @description Dùng để tra log; không chứa dữ liệu nhạy cảm. */
             traceId?: string;
-            /** @description Chỉ có khi `code=ValidationFailed`. Khóa là đường dẫn trường (`payload.options[2].text`). */
+            /** @description Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload), gồm cả catalog, admin user và AI. Lỗi nội dung payload câu hỏi dùng chung key payload, không trả đường dẫn từng phần tử. */
             errors?: {
                 [key: string]: string[];
             };
+            references?: components["schemas"]["QuestionReferencePage"];
             /** @description Chỉ có khi `code=QuestionsNotApproved`. */
             invalidQuestionIds?: string[];
         } & {
             [key: string]: unknown;
+        };
+        /** @description Chỉ có cho 409 QuestionReferenced do sửa/archive; metadata liên hệ chủ đề, không trả nội dung hoặc tiêu đề đề. */
+        QuestionReferencePage: {
+            totalItems: number;
+            items: {
+                /** Format: uuid */
+                examId: string;
+                /** Format: uuid */
+                versionId: string;
+                /** @enum {string} */
+                status: "Draft" | "Rejected" | "Submitted";
+                createdBy: components["schemas"]["UserRef"];
+            }[];
         };
         /**
          * @description Mã lỗi máy đọc được, ổn định. Có thể **thêm** mã mới; client phải xử lý mã lạ như lỗi chung theo HTTP status.
@@ -1059,7 +1081,7 @@ export interface components {
          *     - `SelfReview` (403): tự duyệt nội dung của mình
          *     - `InvalidStateTransition` (409): thao tác không hợp lệ ở trạng thái hiện tại
          *     - `AiReviewRequired` (409): câu AI chưa bấm "Đã rà soát"
-         *     - `QuestionReferenced` (409): câu đang được đề tham chiếu nên không xóa được
+         *     - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
          *     - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
          *     - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
          *     - `QuotaExceeded` (429) · `RateLimited` (429)
@@ -1161,7 +1183,7 @@ export interface components {
         TopicPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["Topic"][];
         };
-        /** @description Đúng 4 phương án A–D, đúng 1 đáp án đúng. */
+        /** @description Đúng 4 phương án theo thứ tự A, B, C, D; đúng 1 đáp án đúng. */
         MultipleChoicePayload: {
             options: {
                 /** @enum {string} */
@@ -1171,7 +1193,7 @@ export interface components {
             /** @enum {string} */
             correctLabel: "A" | "B" | "C" | "D";
         };
-        /** @description Đúng 4 ý a–d, mỗi ý có đúng/sai. */
+        /** @description Đúng 4 ý theo thứ tự a, b, c, d; mỗi ý có đúng/sai. */
         TrueFalsePayload: {
             statements: {
                 /** @enum {string} */
@@ -1180,12 +1202,13 @@ export interface components {
                 isTrue: boolean;
             }[];
         };
-        /** @description ≥ 1 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. */
+        /** @description 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi thập phân hữu hạn theo dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng, số mũ hoặc phân cách hàng nghìn. */
         ShortAnswerPayload: {
             /** @enum {string} */
             answerType: "number" | "text";
             acceptedAnswers: string[];
             unit?: string | null;
+            /** @description Dùng chung quy tắc lưu số với points; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Không làm tròn qua decimal. */
             tolerance?: number | null;
         };
         /** @description Tổng điểm rubric = điểm câu (khi đưa vào đề). */
@@ -1193,6 +1216,7 @@ export interface components {
             modelAnswer: string;
             rubric: {
                 criterion: string;
+                /** @description Điểm dương theo JSON gốc; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Kiểm cùng quy tắc với tolerance, không giới hạn riêng độ dài token khoa học hoặc làm tròn qua decimal. */
                 points: number;
             }[];
         };
@@ -1261,10 +1285,37 @@ export interface components {
         QuestionPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["Question"][];
         };
+        QuestionApproveRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+             */
+            submittedAt: string;
+            note?: string | null;
+        };
+        QuestionRejectRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+             */
+            submittedAt: string;
+            /** @description Lý do từ chối — bắt buộc. */
+            note: string;
+        };
         ApproveRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+             */
+            submittedAt: string;
             note?: string | null;
         };
         RejectRequest: {
+            /**
+             * Format: date-time
+             * @description Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+             */
+            submittedAt: string;
             /** @description Lý do từ chối — bắt buộc. */
             note: string;
         };
@@ -1321,6 +1372,8 @@ export interface components {
             promptVersion?: string | null;
             inputTokens: number;
             outputTokens: number;
+            /** @description Số câu AI sinh ra bị bỏ vì trùng (trong lô hoặc với ngân hàng cùng môn + chương). */
+            duplicatesDropped: number;
             /** @description Các câu `Draft` đã sinh, theo `aiOrdinal`; rỗng nếu chưa `Succeeded`. */
             questionIds?: string[];
             /** Format: date-time */
@@ -1401,6 +1454,7 @@ export interface components {
             /** @description Thứ tự mảng = `sortOrder`. Không trùng `sourceQuestionId`. */
             items: components["schemas"]["ExamVersionItemInput"][];
         };
+        /** @description Item giữ metadata liên kết/điểm; nội dung trả null khi người xem không có quyền đọc nguồn Draft/Rejected hoặc bản Archived không có snapshot đầy đủ. Xem warnings của phiên bản. */
         ExamVersionItem: {
             sortOrder: number;
             points: number;
@@ -1410,14 +1464,14 @@ export interface components {
             sourceRevision: number;
             /**
              * @description Chỉ có khi `Draft`/`Rejected`: `revision` hiện tại của câu nguồn; khác `sourceRevision` → cảnh báo.
-             *     Từ `Submitted` trở đi luôn `null`.
+             *     Null khi nội dung nguồn không được phép xem, hoặc khi dùng snapshot.
              */
             currentSourceRevision?: number | null;
-            type: components["schemas"]["QuestionType"];
-            difficulty: components["schemas"]["Difficulty"];
-            /** @description Nội dung hiện tại (Draft) hoặc `stem_snapshot`. */
-            stem: string;
-            payload: components["schemas"]["QuestionPayload"];
+            type: components["schemas"]["QuestionType"] | null;
+            difficulty: components["schemas"]["Difficulty"] | null;
+            /** @description Nội dung được phép đọc hiện tại hoặc snapshot; null nếu không khả dụng. */
+            stem: string | null;
+            payload: components["schemas"]["QuestionPayload"] | null;
             explanation?: string | null;
         };
         ExamVersionSummary: {
@@ -1438,7 +1492,7 @@ export interface components {
             durationMinutes: number;
             totalPoints: number;
             questionCount: number;
-            /** @description Chỉ có từ `Submitted` trở đi. */
+            /** @description Null khi Draft/Rejected hoặc snapshot chưa đầy đủ; các trạng thái còn lại trả hash của snapshot được trả về. */
             contentHash?: string | null;
             /** Format: date-time */
             submittedAt?: string | null;
@@ -2023,6 +2077,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["QuestionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -2056,13 +2111,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["ApproveRequest"];
+                "application/json": components["schemas"]["QuestionApproveRequest"];
             };
         };
         responses: {
             200: components["responses"]["QuestionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -2080,7 +2136,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RejectRequest"];
+                "application/json": components["schemas"]["QuestionRejectRequest"];
             };
         };
         responses: {
@@ -2153,6 +2209,7 @@ export interface operations {
                     "application/json": components["schemas"]["QuestionPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2181,6 +2238,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExamVersionSummaryPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -2528,6 +2586,7 @@ export interface operations {
             400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getExam: {
@@ -2582,6 +2641,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listExamVersions: {
@@ -2609,7 +2669,9 @@ export interface operations {
                     "application/json": components["schemas"]["ExamVersionSummaryPage"];
                 };
             };
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -2715,6 +2777,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["ExamVersionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -2750,13 +2813,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["ApproveRequest"];
             };
         };
         responses: {
             200: components["responses"]["ExamVersionOk"];
+            400: components["responses"]["ValidationError"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -2909,9 +2973,9 @@ export interface operations {
                 entityId?: string;
                 actorId?: string;
                 action?: string;
-                /** @description Từ thời điểm (UTC, gồm). */
+                /** @description Từ thời điểm (UTC, gồm `>=`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính từ `00:00:00Z`). */
                 from?: string;
-                /** @description Đến thời điểm (UTC, không gồm). */
+                /** @description Đến thời điểm (UTC, gồm `<=`, cho phép `from == to`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính đến `23:59:59.9999999Z`). */
                 to?: string;
             };
             header?: never;

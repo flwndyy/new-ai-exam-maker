@@ -2,7 +2,7 @@
 
 Tài liệu hướng dẫn dựng, kiểm tra và quy trình ứng phó cảnh báo chi phí cho ngân sách **$200 AWS credit** của dự án **AI Exam Maker** theo `docs/context.md` (mục 6).
 
-> **Quy tắc bảo mật:** Tuyệt đối **không** commit địa chỉ email cá nhân của thành viên hay AWS Account ID vào repository. Danh sách email luôn được truyền qua biến môi trường `BUDGET_EMAILS` lúc chạy script.
+> **Quy tắc bảo mật:** Tuyệt đối **không** commit địa chỉ email cá nhân của thành viên hay AWS Account ID vào repository. Danh sách email luôn được truyền lúc chạy script qua `BUDGET_EMAILS_STDIN=1` (khuyên dùng trên môi trường dùng chung để không lưu vào lịch sử lệnh shell) hoặc biến môi trường `BUDGET_EMAILS` (chỉ dùng trong phiên shell cá nhân).
 
 ---
 
@@ -24,19 +24,22 @@ Tài liệu hướng dẫn dựng, kiểm tra và quy trình ứng phó cảnh b
 **Yêu cầu công cụ:** `aws` (CLI v2), `jq` — cài sẵn trong **AWS CloudShell**.
 
 ```bash
+# Cách A (khuyên dùng để tránh lưu email trong lịch sử shell): nhập qua stdin
+BUDGET_EMAILS_STDIN=1 ./infra/budgets/setup-budgets.sh
+# (dán chuỗi devA@example.com,devB@example.com,ops1@example.com,ops2@example.com rồi nhấn Enter)
+
+# Cách B (chỉ dùng trong phiên shell cá nhân): truyền qua biến môi trường
 BUDGET_EMAILS="devA@example.com,devB@example.com,ops1@example.com,ops2@example.com" \
   ./infra/budgets/setup-budgets.sh
 ```
 
 **Hành vi an toàn của script:**
 - Tự động lấy 12 chữ số Account ID từ phiên đăng nhập hiện tại (`aws sts get-caller-identity`).
-- Kiểm tra định dạng và loại trùng email; **không in địa chỉ email hay Account ID** ra màn hình.
-- Mặc định **create-if-absent** (nếu budget đã tồn tại sẽ giữ nguyên `[KEPT]`). Muốn cập nhật hạn mức hoặc bổ sung thêm email thành viên, chạy kèm `UPDATE_BUDGET=1`:
+- Kiểm tra định dạng và loại trùng email; **không in địa chỉ email hay Account ID** ra màn hình và không truyền email qua đối số dòng lệnh (`argv`) của `jq` hay `aws`.
+- Mặc định **create-if-absent** (nếu budget đã tồn tại sẽ giữ nguyên `[KEPT]`). Muốn cập nhật hạn mức hoặc đồng bộ lại danh sách email thành viên, chạy kèm `UPDATE_BUDGET=1`:
 
 ```bash
-UPDATE_BUDGET=1 \
-BUDGET_EMAILS="devA@example.com,devB@example.com,ops1@example.com,ops2@example.com" \
-  ./infra/budgets/setup-budgets.sh
+UPDATE_BUDGET=1 BUDGET_EMAILS_STDIN=1 ./infra/budgets/setup-budgets.sh
 ```
 
 ---
@@ -92,11 +95,13 @@ Script kiểm tra đầy đủ **10 tiêu chí** (không in email hay Account ID
 3. Kiểm tra lịch tắt EC2 & RDS ban đêm (23:00–07:00) có đang được duy trì không.
 
 ### Mốc 80% ($160) hoặc 80% Forecasted — Siết chi phí ngay
-1. **Chuyển Bedrock về model rẻ (Haiku) và tắt kiểm chứng đáp án** trên Parameter Store:
+1. **Chuyển Bedrock về model rẻ (`DevModelId` — Haiku 4.5) và tắt kiểm chứng đáp án (`AiGeneration/VerifyAnswers`)** trên Parameter Store theo chuẩn O12 (`docs/runbooks/parameter-store.md` §4.2):
    ```bash
-   aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/ModelId --type String --value "apac.anthropic.claude-3-5-haiku-20241022-v1:0" --overwrite
-   aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/EnableAnswerVerification --type String --value "false" --overwrite
+   DEV_MODEL="$(aws ssm get-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/DevModelId --query Parameter.Value --output text)"
+   aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/Bedrock/ModelId --type String --value "$DEV_MODEL" --overwrite
+   aws ssm put-parameter --region ap-southeast-1 --name /exammaker/dev/AiGeneration/VerifyAnswers --type String --value "false" --overwrite
    ```
+   *(Lưu ý: các khóa `Bedrock/*` và `AiGeneration/VerifyAnswers` có hiệu lực ở runtime khi Worker B6 kết nối cấu hình và được restart trên EC2).*
 2. **Hạ quota AI tạm thời** trên Parameter Store (ví dụ `SystemTokensPerDay=150000`, `JobsPerUserPerDay=5`) và restart API/Worker trên EC2.
 3. Rà soát CloudWatch Logs (đảm bảo retention 7 ngày, không bị vòng lặp log lỗi).
 

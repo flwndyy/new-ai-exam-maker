@@ -43,12 +43,16 @@ là quyền quản trị máy; không dùng access key trên EC2.
 
 ### 2.1 Bedrock model và inference profile
 
-Parameter Store `ModelId` có thể chứa một foundation model ID cho gọi in-region hoặc một
-inference profile ID có tiền tố `apac.` cho cross-Region inference. Policy mẫu có placeholder
-riêng cho Haiku và Sonnet v2, inference profile ARN của từng model, cùng foundation-model ARN
-ở source và các destination Region. Khi dùng profile `apac.*`, điền đúng các destination
-Region mà Bedrock liệt kê cho profile; không dùng ARN của profile khác model. Không bật
-`InvokeModelWithResponseStream` vì worker hiện gọi bất đồng bộ và không stream.
+Parameter Store `ModelId` sử dụng inference profile ID (`global.*` / `apac.*`) cho cross-Region
+inference. Policy mẫu tách riêng hai statement:
+- `BedrockInferenceProfileInvocation`: chỉ cấp `bedrock:InvokeModel` trên đúng 2 ARN inference
+  profile đã duyệt (`${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}` và `${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}`).
+- `BedrockFoundationModelViaApprovedProfile`: cấp `bedrock:InvokeModel` cho foundation-model ARN
+  ở source và các destination Region (`arn:aws:bedrock:*::foundation-model/...` và
+  `arn:aws:bedrock:::foundation-model/...` với profile `global.*`) đi kèm điều kiện `ArnEquals`
+  trên `bedrock:InferenceProfileArn` để bắt buộc mọi lệnh gọi foundation model đều phải đi qua đúng
+  inference profile đã duyệt (không có placeholder foundation model không điều kiện). Không bật
+  `InvokeModelWithResponseStream` vì worker hiện gọi bất đồng bộ và không stream.
 
 ### 2.2 CloudWatch
 

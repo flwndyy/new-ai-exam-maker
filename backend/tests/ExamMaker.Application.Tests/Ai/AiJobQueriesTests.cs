@@ -41,6 +41,7 @@ public sealed class AiJobQueriesTests
             PromptVersion: null,
             InputTokens: 0,
             OutputTokens: 0,
+            DuplicatesDropped: 0,
             QuestionIds: [],
             CreatedAt: DateTimeOffset.UtcNow,
             StartedAt: null,

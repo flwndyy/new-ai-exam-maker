@@ -130,14 +130,19 @@ Hướng dẫn thao tác Console/SSM và checklist chi tiết: [aws-o4-domain-ht
 
 ### O5 — S3 và CloudFront
 
+Chi tiết thao tác và checklist nằm ở [`aws-o5-s3-cloudfront.md`](aws-o5-s3-cloudfront.md).
+Phần dưới đây là tóm tắt để giữ thứ tự triển khai trong runbook chung.
+
 1. Tạo S3 bucket private trong region đã chọn. Bật Block Public Access và dùng CloudFront
    Origin Access Control (OAC), không dùng S3 website endpoint.
 2. Upload static export của Next.js.
 3. Tạo CloudFront distribution:
-   - behavior mặc định `/*` → S3, cache bình thường;
+   - behavior `/_next/static/*` và `/assets/*` → S3, cache asset fingerprinted lâu;
+   - behavior mặc định `/*` → S3, HTML cache ngắn và gắn CloudFront Function;
    - behavior `/api/*` → `origin.<domain>` qua HTTPS only;
    - `/api/*` dùng `CachingDisabled`;
-   - `/api/*` dùng `AllViewerExceptHostHeader`;
+   - `/api/*` dùng custom origin request policy: forward `CloudFront-Viewer-Address` nhưng
+     không forward `Host`;
    - cho phép các HTTP method cần trong OpenAPI;
    - thêm custom origin header `X-Origin-Verify` cùng giá trị được lưu ở Parameter Store;
    - dùng ACM certificate ở `us-east-1`;
@@ -171,9 +176,17 @@ Theo O16: tạo snapshot cần thiết, dừng RDS/EC2 khi không dùng, xóa EB
 release Elastic IP không dùng, đồng thời kiểm tra không còn NAT Gateway, load balancer,
 public IP idle hoặc CloudFront distribution thử nghiệm.
 
-## 5. Tài liệu AWS tham khảo
+## 5. Tài liệu runbook dịch vụ liên quan
 
+- Runbook Amazon Cognito User Pool (O9): [`runbooks/cognito.md`](runbooks/cognito.md)
+- Runbook Amazon RDS PostgreSQL 16 & Restore Drill (O10): [`runbooks/rds.md`](runbooks/rds.md)
+- Runbook AWS Systems Manager Parameter Store (O12): [`runbooks/parameter-store.md`](runbooks/parameter-store.md)
 - Runbook AWS Budgets $200 (O14): [`runbooks/budgets.md`](runbooks/budgets.md)
+- Runbook cấu hình AWS CLI cục bộ cho thành viên: [`runbooks/aws-local-cli.md`](runbooks/aws-local-cli.md)
+
+## 6. Tài liệu AWS tham khảo
+
+- Runbook Amazon SQS + DLQ (O11): [`runbooks/sqs.md`](runbooks/sqs.md)
 - VPC public/private subnet và Internet Gateway: <https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html>
 - AWS-managed prefix lists: <https://docs.aws.amazon.com/vpc/latest/userguide/working-with-aws-managed-prefix-lists.html>
 - Security Group rules và quota: <https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html>

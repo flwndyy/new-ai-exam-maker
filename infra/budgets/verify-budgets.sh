@@ -25,13 +25,31 @@ MIN_SUBSCRIBERS="${MIN_SUBSCRIBERS:-1}"
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
 
+if ! [[ "$EXPECT_LIMIT_USD" =~ ^[1-9][0-9]*(\.[0-9]+)?$ ]]; then
+  echo "ERROR: EXPECT_LIMIT_USD must be a positive number (got '${EXPECT_LIMIT_USD}')." >&2
+  exit 1
+fi
+
+case "$EXPECT_TIME_UNIT" in
+  MONTHLY|QUARTERLY|ANNUALLY) ;;
+  *)
+    echo "ERROR: EXPECT_TIME_UNIT must be MONTHLY, QUARTERLY, or ANNUALLY (got '${EXPECT_TIME_UNIT}')." >&2
+    exit 1
+    ;;
+esac
+
+if ! [[ "$MIN_SUBSCRIBERS" =~ ^[0-9]+$ ]] || [ "$MIN_SUBSCRIBERS" -lt 1 ] || [ "$MIN_SUBSCRIBERS" -gt 10 ]; then
+  echo "ERROR: MIN_SUBSCRIBERS must be an integer between 1 and 10 (got '${MIN_SUBSCRIBERS}')." >&2
+  exit 1
+fi
+
 PASSED=0
 FAILURES=0
 
 pass() { echo "[PASS] $1"; PASSED=$((PASSED + 1)); }
 fail() { echo "[FAIL] $1" >&2; FAILURES=$((FAILURES + 1)); }
 
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text | tr -d '\r\n')"
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null | tr -d '\r\n' || true)"
 if [ -z "$ACCOUNT_ID" ] || ! [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
   echo "ERROR: Failed to resolve 12-digit AWS Account ID via sts get-caller-identity." >&2
   exit 1
@@ -41,14 +59,20 @@ echo "==> Verifying AWS Budget '${BUDGET_NAME}' (expect limit <= \$${EXPECT_LIMI
 
 # 1. Budget exists
 BUDGET_JSON=""
-if BUDGET_JSON="$(aws budgets describe-budget \
+BUDGET_RC=0
+BUDGET_JSON="$(aws budgets describe-budget \
   --region "$AWS_BILLING_REGION" \
   --account-id "$ACCOUNT_ID" \
   --budget-name "$BUDGET_NAME" \
-  --output json 2>/dev/null)"; then
+  --output json 2>&1)" || BUDGET_RC=$?
+if [ "$BUDGET_RC" -eq 0 ]; then
   pass "Budget '${BUDGET_NAME}' exists"
 else
-  fail "Budget '${BUDGET_NAME}' not found"
+  if grep -q "NotFoundException" <<<"$BUDGET_JSON"; then
+    fail "Budget '${BUDGET_NAME}' not found"
+  else
+    fail "Failed to query AWS Budget '${BUDGET_NAME}': ${BUDGET_JSON}"
+  fi
   echo "SUMMARY: ${PASSED} passed, ${FAILURES} failed." >&2
   exit 1
 fi
