@@ -11,7 +11,11 @@ khung cấu hình, chưa phải IaC hoàn chỉnh. Xem [`../docs/aws-runbook.md`
 - `systemd/`: mẫu service cho API, Worker và timer gia hạn Certbot.
 - `certbot/`: deploy hook kiểm tra và reload Nginx sau khi chứng chỉ gia hạn thành công.
 - `cloudfront-function/`: function viewer-request cho route static export.
-- `iam/`: policy mẫu cho instance profile EC2; thay placeholder trong AWS, không commit ARN thật.
+- `iam/`: policy mẫu cho instance profile EC2 và GitHub Actions OIDC frontend; thay
+  placeholder trong AWS, không commit ARN thật. Xem thêm
+  [`../docs/aws-o6-github-oidc.md`](../docs/aws-o6-github-oidc.md),
+  [`iam/github-actions-oidc-trust-policy.example.json`](iam/github-actions-oidc-trust-policy.example.json)
+  và [`iam/github-actions-frontend-deploy-policy.example.json`](iam/github-actions-frontend-deploy-policy.example.json).
 - `cognito/`: script dựng và xác minh Cognito User Pool, nhóm người dùng và App Client (Task O9 — xem [`../docs/runbooks/cognito.md`](../docs/runbooks/cognito.md)).
 - `rds/`: script dựng, xác minh 15 tiêu chí và kịch bản Restore Drill cho Amazon RDS PostgreSQL 16 (Task O10 — xem [`../docs/runbooks/rds.md`](../docs/runbooks/rds.md)).
 - `sqs/`: script dựng và xác minh Amazon SQS + DLQ cho pipeline AI (Task O11 — xem [`../docs/runbooks/sqs.md`](../docs/runbooks/sqs.md)).

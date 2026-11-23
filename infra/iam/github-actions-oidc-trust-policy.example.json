@@ -11,7 +11,8 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main",
+          "token.actions.githubusercontent.com:workflow_ref": "flwndyy/new-ai-exam-maker/.github/workflows/deploy-frontend.yml@refs/heads/main"
         }
       }
     }
