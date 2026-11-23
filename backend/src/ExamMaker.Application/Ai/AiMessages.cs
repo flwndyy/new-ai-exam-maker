@@ -19,6 +19,8 @@ internal static class AiMessages
 
     public const string SubjectNotFound = "Môn học không tồn tại.";
 
+    public const string SubjectNotInDepartment = "Môn học không thuộc tổ chuyên môn của bạn.";
+
     public const string TopicNotFound = "Chương không tồn tại.";
 
     public const string TopicNotInSubject = "Chương không thuộc môn học đã chọn.";
@@ -30,6 +32,10 @@ internal static class AiMessages
     public static string PageSizeInvalid(int max) => $"Số phần tử mỗi trang phải từ 1 đến {max}.";
 
     public const string JobStatusInvalid = "Trạng thái job không hợp lệ.";
+
+    public const string DateInvalid = "Ngày phải có dạng YYYY-MM-DD.";
+
+    public const string DateRangeInvalid = "Ngày kết thúc phải sau hoặc bằng ngày bắt đầu.";
 
     /// <summary>Job failure text stored in ai_generation_jobs.error_message; never contains model or provider output.</summary>
     public static string GenerationFailed(string code) => code switch

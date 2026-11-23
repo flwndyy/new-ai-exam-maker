@@ -6,8 +6,12 @@ namespace ExamMaker.Infrastructure.Ai;
 
 public sealed class EfAiCatalogReader(ExamMakerDbContext db) : IAiCatalogReader
 {
-    public Task<bool> SubjectExistsAsync(Guid subjectId, CancellationToken ct) =>
-        db.Subjects.AsNoTracking().AnyAsync(s => s.Id == subjectId, ct);
+    public Task<Guid?> FindSubjectDepartmentAsync(Guid subjectId, CancellationToken ct) =>
+        db.Subjects
+            .AsNoTracking()
+            .Where(s => s.Id == subjectId)
+            .Select(s => (Guid?)s.DepartmentId)
+            .SingleOrDefaultAsync(ct);
 
     public Task<AiTopicInfo?> FindTopicAsync(Guid topicId, CancellationToken ct) =>
         db.Topics

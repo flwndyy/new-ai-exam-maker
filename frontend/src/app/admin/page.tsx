@@ -1,6 +1,7 @@
 "use client";
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
 
 import { fetchAllDepartments, fetchAllSubjects } from "@/lib/api/catalog";
@@ -346,7 +347,12 @@ export default function AdminPage() {
 
   return (
     <section className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">{vi.admin.title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold text-slate-900">{vi.admin.title}</h1>
+        <Link href="/admin/ai-usage/" className="text-sm text-blue-700 hover:underline">
+          {vi.admin.aiUsageLink}
+        </Link>
+      </div>
 
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
         {tabs.map((item) => (

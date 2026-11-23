@@ -26,8 +26,11 @@ public sealed class EfAiJobStore(ExamMakerDbContext db) : IAiJobStore
 
         // Shared with concurrent submissions, exclusive against A5 mutations until the job is committed.
         await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(48683402)", ct);
+        // The subject must also still belong to the requester's current department; otherwise the worker
+        // would fail the job with RequesterUnavailable and the reserved slot would never be refunded.
         if (!await db.Topics.AsNoTracking().AnyAsync(t => t.Id == request.TopicId
-            && t.SubjectId == request.SubjectId && t.Grade == request.Grade, ct))
+            && t.SubjectId == request.SubjectId && t.Grade == request.Grade
+            && db.Users.Any(u => u.Id == userId && u.DepartmentId == t.Subject!.DepartmentId), ct))
             throw new AiCatalogChangedException();
 
         // Atomic reservation: a concurrent request waits on the row lock, then re-checks the WHERE

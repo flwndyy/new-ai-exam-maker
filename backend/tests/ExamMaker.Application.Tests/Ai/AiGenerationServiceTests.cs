@@ -6,6 +6,8 @@ namespace ExamMaker.Application.Tests.Ai;
 public sealed class AiGenerationServiceTests
 {
     private static readonly Guid UserId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid DepartmentId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+    private static readonly Guid OtherDepartmentId = Guid.Parse("77777777-7777-7777-7777-777777777777");
     private static readonly DateTimeOffset Now = new(2026, 11, 25, 10, 30, 0, TimeSpan.Zero);
 
     // A catalog where TopicId is a grade-10 chapter of SubjectId.
@@ -24,8 +26,8 @@ public sealed class AiGenerationServiceTests
     public AiGenerationServiceTests()
     {
         _jobs = new FakeJobStore(_queue);
-        _catalog.Subjects.Add(SubjectId);
-        _catalog.Subjects.Add(OtherSubjectId);
+        _catalog.SubjectDepartments[SubjectId] = DepartmentId;
+        _catalog.SubjectDepartments[OtherSubjectId] = DepartmentId;
         _catalog.Topics[TopicId] = new AiTopicInfo(SubjectId, Grade: 10);
         _catalog.Topics[OtherSubjectTopicId] = new AiTopicInfo(OtherSubjectId, Grade: 10);
     }
@@ -46,7 +48,7 @@ public sealed class AiGenerationServiceTests
     public async Task Catalog_changed_during_submission_returns_validation_without_enqueue()
     {
         _jobs.CatalogChanged = true;
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), default);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), default);
         Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Empty(_queue.Enqueued);
     }
@@ -73,7 +75,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest();
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var accepted = Assert.IsType<AiSubmitResult.Accepted>(result);
         Assert.Equal(_jobs.CreatedJobId, accepted.JobId);
@@ -89,7 +91,7 @@ public sealed class AiGenerationServiceTests
     [Fact]
     public async Task Submit_CountAboveMaxQuestionsPerJob_FailsValidationWithoutSideEffects()
     {
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(count: 11), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(count: 11), CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("count", failed.Errors.Keys);
@@ -102,7 +104,7 @@ public sealed class AiGenerationServiceTests
     [InlineData(-1)]
     public async Task Submit_CountBelowOne_FailsValidation(int count)
     {
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(count: count), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(count: count), CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("count", failed.Errors.Keys);
@@ -112,7 +114,7 @@ public sealed class AiGenerationServiceTests
     public async Task Submit_NoteLongerThanLimit_FailsValidation()
     {
         var result = await CreateService().SubmitAsync(
-            UserId, ValidRequest(note: new string('x', 1001)), CancellationToken.None);
+            UserId, DepartmentId, ValidRequest(note: new string('x', 1001)), CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("note", failed.Errors.Keys);
@@ -123,7 +125,7 @@ public sealed class AiGenerationServiceTests
     public async Task Submit_NoteAtLimit_IsAccepted()
     {
         var result = await CreateService().SubmitAsync(
-            UserId, ValidRequest(note: new string('x', 1000)), CancellationToken.None);
+            UserId, DepartmentId, ValidRequest(note: new string('x', 1000)), CancellationToken.None);
 
         Assert.IsType<AiSubmitResult.Accepted>(result);
     }
@@ -135,7 +137,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest() with { Grade = grade };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("grade", failed.Errors.Keys);
@@ -150,7 +152,7 @@ public sealed class AiGenerationServiceTests
             ? ValidRequest() with { Type = value }
             : ValidRequest() with { Difficulty = value };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains(field, failed.Errors.Keys);
@@ -161,7 +163,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest() with { SubjectId = Guid.Empty, TopicId = Guid.Empty };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("subjectId", failed.Errors.Keys);
@@ -173,7 +175,7 @@ public sealed class AiGenerationServiceTests
     {
         _usage.User = new AiUsage(JobsUsed: 1, TokensUsed: 100_000);
 
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None);
 
         var exceeded = Assert.IsType<AiSubmitResult.QuotaExceeded>(result);
         Assert.Equal(AiQuotaReason.UserTokens, exceeded.Reason);
@@ -186,7 +188,7 @@ public sealed class AiGenerationServiceTests
     {
         _usage.SystemTokensUsed = 500_000;
 
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None);
 
         var exceeded = Assert.IsType<AiSubmitResult.QuotaExceeded>(result);
         Assert.Equal(AiQuotaReason.SystemTokens, exceeded.Reason);
@@ -198,7 +200,7 @@ public sealed class AiGenerationServiceTests
     {
         _jobs.ReserveSucceeds = false;
 
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None);
 
         var exceeded = Assert.IsType<AiSubmitResult.QuotaExceeded>(result);
         Assert.Equal(AiQuotaReason.UserJobs, exceeded.Reason);
@@ -210,7 +212,7 @@ public sealed class AiGenerationServiceTests
     {
         _usage.User = new AiUsage(JobsUsed: 0, TokensUsed: 100_000);
 
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None);
 
         var exceeded = Assert.IsType<AiSubmitResult.QuotaExceeded>(result);
         Assert.Equal(TimeSpan.FromHours(13.5), exceeded.RetryAfter);
@@ -221,7 +223,7 @@ public sealed class AiGenerationServiceTests
     {
         _queue.Failure = new InvalidOperationException("sqs down");
 
-        var result = await CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None);
 
         var accepted = Assert.IsType<AiSubmitResult.Accepted>(result);
         Assert.Equal(_jobs.CreatedJobId, accepted.JobId);
@@ -234,7 +236,7 @@ public sealed class AiGenerationServiceTests
         _queue.Failure = new OperationCanceledException();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => CreateService().SubmitAsync(UserId, ValidRequest(), CancellationToken.None));
+            () => CreateService().SubmitAsync(UserId, DepartmentId, ValidRequest(), CancellationToken.None));
     }
 
     [Fact]
@@ -242,7 +244,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest() with { SubjectId = Guid.NewGuid() };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("subjectId", failed.Errors.Keys);
@@ -251,11 +253,34 @@ public sealed class AiGenerationServiceTests
     }
 
     [Fact]
+    // The worker would fail such a job with RequesterUnavailable and the job slot is never refunded.
+    public async Task Submit_SubjectOfAnotherDepartment_FailsValidationWithoutTouchingQuota()
+    {
+        var result = await CreateService().SubmitAsync(UserId, OtherDepartmentId, ValidRequest(), CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Equal(["Môn học không thuộc tổ chuyên môn của bạn."], failed.Errors["subjectId"]);
+        Assert.Null(_usage.LastDate);
+        Assert.Equal(0, _jobs.CreateCalls);
+        Assert.Empty(_queue.Enqueued);
+    }
+
+    [Fact]
+    public async Task Submit_RequesterWithoutDepartment_FailsValidation()
+    {
+        var result = await CreateService().SubmitAsync(UserId, null, ValidRequest(), CancellationToken.None);
+
+        var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
+        Assert.Equal(["Môn học không thuộc tổ chuyên môn của bạn."], failed.Errors["subjectId"]);
+        Assert.Equal(0, _jobs.CreateCalls);
+    }
+
+    [Fact]
     public async Task Submit_UnknownTopic_FailsValidation()
     {
         var request = ValidRequest() with { TopicId = Guid.NewGuid() };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("topicId", failed.Errors.Keys);
@@ -267,7 +292,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest() with { TopicId = OtherSubjectTopicId };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("topicId", failed.Errors.Keys);
@@ -279,7 +304,7 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest() with { Grade = 11 };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         var failed = Assert.IsType<AiSubmitResult.ValidationFailed>(result);
         Assert.Contains("grade", failed.Errors.Keys);
@@ -292,7 +317,7 @@ public sealed class AiGenerationServiceTests
         _usage.User = new AiUsage(JobsUsed: 0, TokensUsed: 100_000);
         var request = ValidRequest() with { TopicId = Guid.NewGuid() };
 
-        var result = await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        var result = await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         Assert.IsType<AiSubmitResult.ValidationFailed>(result);
     }
@@ -302,23 +327,23 @@ public sealed class AiGenerationServiceTests
     {
         var request = ValidRequest(count: 0);
 
-        await CreateService().SubmitAsync(UserId, request, CancellationToken.None);
+        await CreateService().SubmitAsync(UserId, DepartmentId, request, CancellationToken.None);
 
         Assert.Equal(0, _catalog.Lookups);
     }
 
     private sealed class FakeCatalog : IAiCatalogReader
     {
-        public HashSet<Guid> Subjects { get; } = [];
+        public Dictionary<Guid, Guid> SubjectDepartments { get; } = [];
 
         public Dictionary<Guid, AiTopicInfo> Topics { get; } = [];
 
         public int Lookups { get; private set; }
 
-        public Task<bool> SubjectExistsAsync(Guid subjectId, CancellationToken ct)
+        public Task<Guid?> FindSubjectDepartmentAsync(Guid subjectId, CancellationToken ct)
         {
             Lookups++;
-            return Task.FromResult(Subjects.Contains(subjectId));
+            return Task.FromResult(SubjectDepartments.TryGetValue(subjectId, out var departmentId) ? departmentId : (Guid?)null);
         }
 
         public Task<AiTopicInfo?> FindTopicAsync(Guid topicId, CancellationToken ct)

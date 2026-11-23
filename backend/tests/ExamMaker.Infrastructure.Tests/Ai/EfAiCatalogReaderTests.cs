@@ -8,20 +8,22 @@ namespace ExamMaker.Infrastructure.Tests.Ai;
 public sealed class EfAiCatalogReaderTests(PostgresFixture fixture) : IClassFixture<PostgresFixture>
 {
     [PostgresFact]
-    public async Task Seeded_subject_exists()
+    public async Task Seeded_subject_returns_its_department()
     {
         await using var context = fixture.CreateContext();
-        var subjectId = await context.Subjects.Select(s => s.Id).FirstAsync();
+        var subject = await context.Subjects.AsNoTracking().FirstAsync();
 
-        Assert.True(await new EfAiCatalogReader(context).SubjectExistsAsync(subjectId, CancellationToken.None));
+        Assert.Equal(
+            subject.DepartmentId,
+            await new EfAiCatalogReader(context).FindSubjectDepartmentAsync(subject.Id, CancellationToken.None));
     }
 
     [PostgresFact]
-    public async Task Unknown_subject_does_not_exist()
+    public async Task Unknown_subject_has_no_department()
     {
         await using var context = fixture.CreateContext();
 
-        Assert.False(await new EfAiCatalogReader(context).SubjectExistsAsync(Guid.NewGuid(), CancellationToken.None));
+        Assert.Null(await new EfAiCatalogReader(context).FindSubjectDepartmentAsync(Guid.NewGuid(), CancellationToken.None));
     }
 
     [PostgresFact]

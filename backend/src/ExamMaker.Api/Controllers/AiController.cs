@@ -26,7 +26,7 @@ public sealed class AiController(
     {
         if (currentUser.User is not { } user) return Challenge();
 
-        switch (await generation.SubmitAsync(user.Id, request, ct))
+        switch (await generation.SubmitAsync(user.Id, user.DepartmentId, request, ct))
         {
             case AiSubmitResult.ValidationFailed invalid:
                 return ValidationProblemFor(invalid.Errors);

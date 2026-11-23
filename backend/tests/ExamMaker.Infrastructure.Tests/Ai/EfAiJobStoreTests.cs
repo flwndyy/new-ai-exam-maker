@@ -1,3 +1,4 @@
+using ExamMaker.Application.Ai;
 using System.Text.Json;
 using ExamMaker.Infrastructure.Ai;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,21 @@ public sealed class EfAiJobStoreTests(PostgresFixture fixture) : IClassFixture<P
             .Where(u => u.UserId == userId && u.Date == date)
             .Select(u => u.Jobs)
             .SingleOrDefaultAsync();
+    }
+
+    [PostgresFact]
+    // Re-checked inside the job transaction so a department move between validation and commit cannot
+    // create a job the worker would fail with RequesterUnavailable (and never refund).
+    public async Task Rejects_subject_outside_requester_department_without_reserving_quota()
+    {
+        var userId = await AiTestData.CreateUserInOtherDepartmentAsync(fixture);
+        var date = AiTestData.UniqueDate();
+
+        await Assert.ThrowsAsync<AiCatalogChangedException>(() => CreateAsync(userId, date, limit: 10));
+
+        Assert.Equal(0, await JobsUsedAsync(userId, date));
+        await using var context = fixture.CreateContext();
+        Assert.False(await context.AiGenerationJobs.AnyAsync(j => j.RequestedBy == userId));
     }
 
     [PostgresFact]

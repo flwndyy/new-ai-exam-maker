@@ -122,6 +122,21 @@ public sealed class AiEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Generate_subject_of_another_department_returns_400_subjectId()
+    {
+        _ai.SubjectDepartmentId = Guid.NewGuid();
+        using var client = Client(Roles.Teacher);
+
+        using var response = await client.PostAsJsonAsync("/api/v1/ai/generate", Body());
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty("subjectId", out _));
+        Assert.Empty(_ai.Jobs);
+        Assert.Empty(_ai.Enqueued);
+    }
+
+    [Fact]
     public async Task Generate_as_admin_is_forbidden_and_creates_nothing()
     {
         using var client = Client(Roles.Admin);
@@ -321,8 +336,11 @@ public sealed class AiEndpointsTests : IDisposable
 
         public static readonly Guid TopicId = Guid.Parse("77777777-7777-7777-7777-777777777777");
 
-        public Task<bool> SubjectExistsAsync(Guid subjectId, CancellationToken ct) =>
-            Task.FromResult(subjectId == SubjectId);
+        // Defaults to the test teacher's department; a test sets another id to simulate a foreign subject.
+        public Guid SubjectDepartmentId { get; set; } = AuthTestFactory.DepartmentId;
+
+        public Task<Guid?> FindSubjectDepartmentAsync(Guid subjectId, CancellationToken ct) =>
+            Task.FromResult(subjectId == SubjectId ? SubjectDepartmentId : (Guid?)null);
 
         public Task<AiTopicInfo?> FindTopicAsync(Guid topicId, CancellationToken ct) =>
             Task.FromResult(topicId == TopicId ? new AiTopicInfo(SubjectId, 10) : null);
