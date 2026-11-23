@@ -30,7 +30,7 @@ public sealed class EfAiDuplicateKeySourceTests(PostgresFixture fixture) : IClas
     }
 
     private async Task InsertQuestionAsync(
-        Guid userId, Guid topicId, string status, string stem, string payload)
+        Guid userId, Guid topicId, string status, string stem, string payload, string type = "MultipleChoice")
     {
         await using var context = fixture.CreateContext();
         var topic = await context.Topics.Include(t => t.Subject).SingleAsync(t => t.Id == topicId);
@@ -41,7 +41,7 @@ public sealed class EfAiDuplicateKeySourceTests(PostgresFixture fixture) : IClas
             TopicId = topic.Id,
             DepartmentId = topic.Subject!.DepartmentId,
             Grade = topic.Grade,
-            Type = "MultipleChoice",
+            Type = type,
             Difficulty = "Recognition",
             Stem = stem,
             Payload = payload,
@@ -56,7 +56,24 @@ public sealed class EfAiDuplicateKeySourceTests(PostgresFixture fixture) : IClas
     private async Task<IReadOnlySet<string>> GetKeysAsync(Guid subjectId, Guid topicId)
     {
         await using var context = fixture.CreateContext();
-        return await new EfAiDuplicateKeySource(context).GetKeysAsync(subjectId, topicId, CancellationToken.None);
+        return await new EfAiDuplicateKeySource(context)
+            .GetKeysAsync(subjectId, topicId, "MultipleChoice", CancellationToken.None);
+    }
+
+    [PostgresFact]
+    public async Task Excludes_questions_of_other_types()
+    {
+        var (subjectId, topicId, _) = await PickTopicsAsync();
+        var userId = await AiTestData.CreateUserAsync(fixture);
+        var stem = "Short answer stem " + Guid.NewGuid().ToString("N");
+        const string payload = """{"answerType":"number","acceptedAnswers":["12"]}""";
+        await InsertQuestionAsync(userId, topicId, "Draft", stem, payload, type: "ShortAnswer");
+        using var doc = JsonDocument.Parse(payload);
+        var shortAnswerKey = AiDuplicateFilter.Key("ShortAnswer", stem, doc.RootElement);
+
+        var keys = await GetKeysAsync(subjectId, topicId);
+
+        Assert.DoesNotContain(shortAnswerKey, keys);
     }
 
     [PostgresFact]

@@ -13,6 +13,10 @@ internal readonly record struct ExactNumber(BigInteger Mantissa, int Exponent)
 {
     public static readonly ExactNumber Zero = new(BigInteger.Zero, 0);
 
+    // Validator (A6) allows exponents in [-1000, 1000]; anything far outside is rejected so 10^n stays cheap and the
+    // int exponent arithmetic below cannot overflow.
+    private const int MaxExponentMagnitude = 10_000;
+
     // Short-answer number text (A6 format, plus an optional leading '+' from the model); comma or dot as separator.
     private static readonly Regex Plain = new(@"^([+-]?)([0-9]+)(?:[.,]([0-9]+))?$",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
@@ -29,7 +33,10 @@ internal readonly record struct ExactNumber(BigInteger Mantissa, int Exponent)
         return match.Success;
     }
 
-    /// <summary>Parses the raw text of a JSON number, including exponent notation.</summary>
+    /// <summary>
+    /// Parses the raw text of a JSON number, including exponent notation. Returns false when the exponent magnitude
+    /// exceeds <see cref="MaxExponentMagnitude"/>.
+    /// </summary>
     public static bool TryParseJson(string raw, out ExactNumber value)
     {
         value = Zero;
@@ -37,8 +44,8 @@ internal readonly record struct ExactNumber(BigInteger Mantissa, int Exponent)
         if (!match.Success) return false;
 
         var shift = 0;
-        if (match.Groups[4].Success && !int.TryParse(match.Groups[4].Value, NumberStyles.AllowLeadingSign,
-                CultureInfo.InvariantCulture, out shift))
+        if (match.Groups[4].Success && (!int.TryParse(match.Groups[4].Value, NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture, out shift) || Math.Abs((long)shift) > MaxExponentMagnitude))
             return false;
 
         value = Build(match, shift);
@@ -53,13 +60,14 @@ internal readonly record struct ExactNumber(BigInteger Mantissa, int Exponent)
         return difference <= tolerance.ScaleTo(exponent);
     }
 
-    private BigInteger ScaleTo(int exponent) => Mantissa * BigInteger.Pow(10, Exponent - exponent);
+    private BigInteger ScaleTo(int exponent) =>
+        Mantissa.IsZero ? BigInteger.Zero : Mantissa * BigInteger.Pow(10, checked(Exponent - exponent));
 
     private static ExactNumber Build(Match match, int exponentShift)
     {
         var fraction = match.Groups[3].Success ? match.Groups[3].Value : "";
         var mantissa = BigInteger.Parse(match.Groups[2].Value + fraction, CultureInfo.InvariantCulture);
         if (match.Groups[1].Value == "-") mantissa = -mantissa;
-        return new ExactNumber(mantissa, exponentShift - fraction.Length);
+        return new ExactNumber(mantissa, checked(exponentShift - fraction.Length));
     }
 }

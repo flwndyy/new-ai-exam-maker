@@ -7,15 +7,15 @@ using Microsoft.EntityFrameworkCore;
 namespace ExamMaker.Infrastructure.Ai;
 
 /// <summary>
-/// Loads every question of the subject and topic into memory and computes its duplicate key (fine at MVP scale).
+/// Loads every question of the subject, topic and type into memory and computes its duplicate key (fine at MVP scale).
 /// </summary>
 public sealed class EfAiDuplicateKeySource(ExamMakerDbContext db) : IAiDuplicateKeySource
 {
-    public async Task<IReadOnlySet<string>> GetKeysAsync(Guid subjectId, Guid topicId, CancellationToken ct)
+    public async Task<IReadOnlySet<string>> GetKeysAsync(Guid subjectId, Guid topicId, string type, CancellationToken ct)
     {
         var rows = await db.Questions
             .AsNoTracking()
-            .Where(q => q.SubjectId == subjectId && q.TopicId == topicId)
+            .Where(q => q.SubjectId == subjectId && q.TopicId == topicId && q.Type == type)
             .Select(q => new { q.Type, q.Stem, q.Payload })
             .ToListAsync(ct);
 

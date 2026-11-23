@@ -54,7 +54,7 @@ public static class AiDuplicateFilter
         IReadOnlyList<AiGeneratedQuestion> questions,
         IReadOnlySet<string> existingKeys)
     {
-        var seen = new HashSet<string>(existingKeys);
+        var seen = new HashSet<string>(existingKeys, StringComparer.Ordinal);
         var kept = new List<AiGeneratedQuestion>(questions.Count);
         foreach (var question in questions)
         {

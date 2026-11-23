@@ -62,6 +62,11 @@ public sealed class AiAnswerComparerTests
     [InlineData("-3,5", """["-3.5"]""", null, "Agree")]
     [InlineData("12.50", """["12,5"]""", null, "Agree")]
     [InlineData("1e1", """["10"]""", null, "Disagree")]
+    // Exponents far outside the validator range (+-1000) are ignored (tolerance 0) instead of overflowing.
+    [InlineData("13", """["12"]""", "1e-2147483648", "Disagree")]
+    [InlineData("13", """["12"]""", "1e2147483647", "Disagree")]
+    [InlineData("13", """["12"]""", "1e10001", "Disagree")]
+    [InlineData("0", """["0"]""", "0", "Agree")]
     public void Number_answers(string model, string accepted, string? tolerance, string expected)
     {
         var outcome = Compare("ShortAnswer", Number(accepted, tolerance), JsonSerializer.Serialize(model));
