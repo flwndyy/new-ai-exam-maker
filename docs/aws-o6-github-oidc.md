@@ -36,11 +36,12 @@ Trong IAM → **Roles → Create role → Web identity**:
 Đối chiếu JSON sau khi wizard tạo role. Với policy khóa theo `ref:refs/heads/main`,
 workflow O7 phải dùng **Repository Variables/Secrets**, không được khai báo
 `environment:` trong job deploy, phải có tên workflow là **`Deploy frontend`** và
-phải dùng đúng file `.github/workflows/deploy-frontend.yml`. Trust policy khóa
-thêm claim `workflow` và `ref` để các workflow khác trên `main` không thể assume
-role production. Nếu sau này O7 chuyển sang reusable workflow, có thể thay claim
-`workflow` bằng `job_workflow_ref` theo đúng đường dẫn reusable workflow. Nếu dùng
-GitHub Environment, phải đổi trust policy
+phải dùng file `.github/workflows/deploy-frontend.yml` theo quy ước O7. Trust
+policy hiện tại chỉ khóa claim `workflow` theo **tên workflow** và claim `ref` theo
+`main`; nó không kiểm tra đường dẫn file. Vì vậy không workflow nào khác trong repo
+được đặt tên `Deploy frontend`. Nếu sau này O7 chuyển sang reusable workflow, có thể
+thay claim `workflow` bằng `job_workflow_ref` sau khi chạy thử và xác minh claim
+trong token thực tế. Nếu dùng GitHub Environment, phải đổi trust policy
 để cho phép claim `sub` dạng `repo:flwndyy/new-ai-exam-maker:environment:<name>`
 và giới hạn environment đó chỉ chạy từ `main`.
 
@@ -49,8 +50,9 @@ Trust policy bắt buộc giới hạn đồng thời:
 - Repository: `flwndyy/new-ai-exam-maker`.
 - Branch: `main`.
 - Audience: `sts.amazonaws.com`.
-- Workflow name: `Deploy frontend`.
-- Workflow file: `.github/workflows/deploy-frontend.yml` trên `main`.
+- Workflow name claim: `Deploy frontend`.
+- Workflow file convention: `.github/workflows/deploy-frontend.yml` trên `main`
+  (không phải điều kiện mà policy hiện tại kiểm tra).
 
 Vì vậy pull request và branch khác không thể assume role deploy production.
 
@@ -87,6 +89,7 @@ repo.
 - [ ] Provider URL và audience đúng.
 - [ ] `sub` chỉ cho phép `repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main`.
 - [ ] Claim `workflow` là `Deploy frontend` và claim `ref` là `refs/heads/main`.
+- [ ] Không workflow nào khác trong repository được đặt tên `Deploy frontend`.
 - [ ] Workflow O7 dùng Repository Variables/Secrets và không đặt `environment:`.
 - [ ] Role không có `AdministratorAccess`.
 - [ ] Không có access key, secret, Account ID, ARN thật hoặc bucket thật trong Git.
