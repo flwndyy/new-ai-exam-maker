@@ -7,6 +7,24 @@ interface ProblemPayload {
   errors?: Record<string, string[]>;
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  stem: vi.questions.stem,
+  topicId: vi.questions.topic,
+  subjectId: vi.questions.subject,
+  grade: vi.questions.grade,
+  type: vi.questions.type,
+  difficulty: vi.questions.difficulty,
+  payload: vi.questions.answerContent,
+  explanation: vi.questions.explanation,
+  note: vi.review.noteLabel,
+  email: vi.admin.email,
+  fullName: vi.admin.fullName,
+  role: vi.admin.role,
+  departmentId: vi.admin.department,
+  name: vi.admin.name,
+  sortOrder: vi.admin.sortOrder,
+};
+
 /** Extract the machine-readable ProblemDetails error code when present. */
 export function getApiErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
@@ -22,7 +40,8 @@ export function getApiErrorMessage(error: unknown, fallback = vi.common.requestF
       .map(([field, messages]) => {
         const joined = messages.filter(Boolean).join(", ");
         if (!joined) return "";
-        return field ? `${field}: ${joined}` : joined;
+        const label = FIELD_LABELS[field];
+        return label ? `${label}: ${joined}` : joined;
       })
       .filter(Boolean);
     if (entries.length > 0) return entries.join("; ");

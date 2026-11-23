@@ -11,6 +11,7 @@ import { api } from "@/lib/api/client";
 import { getApiErrorCode, getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
+import { formatDecimalForInput, parseExactDecimal } from "@/lib/format/decimal";
 import { vi } from "@/messages/vi";
 
 type Question = components["schemas"]["Question"];
@@ -25,37 +26,6 @@ const DIFFICULTIES: Difficulty[] = ["Recognition", "Understanding", "Application
 const GRADES: Grade[] = [10, 11, 12];
 const MC_LABELS = ["A", "B", "C", "D"] as const;
 const TF_LABELS = ["a", "b", "c", "d"] as const;
-
-/** Format a JS number as a plain decimal string (never scientific notation like "1e-7") for text inputs. */
-function formatDecimalForInput(value: number): string {
-  const str = String(value);
-  if (!/[eE]/.test(str)) return str;
-  const sign = value < 0 ? "-" : "";
-  const [mantissa, expPart] = str.replace(/^-/, "").toLowerCase().split("e");
-  const exp = Number(expPart);
-  const [intPart, fracPart = ""] = mantissa.split(".");
-  const digits = intPart + fracPart;
-  const decimalPos = intPart.length + exp;
-  if (decimalPos <= 0) {
-    return `${sign}0.${"0".repeat(-decimalPos)}${digits}`;
-  }
-  if (decimalPos >= digits.length) {
-    return `${sign}${digits}${"0".repeat(decimalPos - digits.length)}`;
-  }
-  return `${sign}${digits.slice(0, decimalPos)}.${digits.slice(decimalPos)}`;
-}
-
-/** Parse a finite decimal number (accepting comma or dot) with at most 15 significant digits so Number() never rounds silently. */
-function parseExactDecimal(raw: string): number | null {
-  const trimmed = raw.trim().replace(",", ".");
-  if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(trimmed)) return null;
-  const unsigned = trimmed.replace(/^[+-]/, "");
-  const significantDigits = unsigned.replace(".", "").replace(/^0+/, "").replace(/0+$/, "");
-  if (significantDigits.length > 15) return null;
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) return null;
-  return num;
-}
 
 function initMcOptions(q?: Question): Record<(typeof MC_LABELS)[number], string> {
   const map: Record<(typeof MC_LABELS)[number], string> = { A: "", B: "", C: "", D: "" };

@@ -11,6 +11,7 @@ import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
+import { formatDecimalForInput } from "@/lib/format/decimal";
 import { vi } from "@/messages/vi";
 
 type ExamVersion = components["schemas"]["ExamVersion"];
@@ -162,8 +163,12 @@ function ExamDecisionForm({
           <button
             type="button"
             disabled={actionMutation.isPending}
-            onClick={() => actionMutation.mutate("publish")}
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            onClick={() => {
+              if (window.confirm(vi.review.confirmPublishExam)) {
+                actionMutation.mutate("publish");
+              }
+            }}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {vi.review.publish}
           </button>
@@ -173,8 +178,12 @@ function ExamDecisionForm({
           <button
             type="button"
             disabled={actionMutation.isPending}
-            onClick={() => actionMutation.mutate("unpublish")}
-            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+            onClick={() => {
+              if (window.confirm(vi.review.confirmUnpublishExam)) {
+                actionMutation.mutate("unpublish");
+              }
+            }}
+            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
           >
             {vi.review.unpublish}
           </button>
@@ -189,7 +198,7 @@ function ExamDecisionForm({
                 actionMutation.mutate("archive");
               }
             }}
-            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
           >
             {vi.review.archive}
           </button>
@@ -250,7 +259,7 @@ function ReviewExamInner() {
               </span>
             </div>
             <p className="mt-2 text-sm text-slate-600">
-              {vi.common.gradePrefix} {v.grade} · {vi.review.examDuration}: {v.durationMinutes} · {vi.review.examQuestionCount}: {v.questionCount} · {vi.review.examTotalPoints}: {v.totalPoints}
+              {vi.common.gradePrefix} {v.grade} · {vi.review.examDuration}: {v.durationMinutes} · {vi.review.examQuestionCount}: {v.questionCount} · {vi.review.examTotalPoints}: {formatDecimalForInput(v.totalPoints)}
             </p>
             {(v.warnings ?? []).length > 0 && (
               <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
@@ -272,7 +281,7 @@ function ReviewExamInner() {
                     {vi.review.questionItemPrefix} {item.sortOrder}
                     {item.difficulty ? ` · ${vi.questions.difficulties[item.difficulty]}` : ""}
                   </span>
-                  <span className="font-medium text-slate-700">{item.points} {vi.review.points}</span>
+                  <span className="font-medium text-slate-700">{formatDecimalForInput(item.points)} {vi.review.points}</span>
                 </div>
                 {item.stem && (
                   <div className="text-sm text-slate-900">

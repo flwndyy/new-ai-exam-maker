@@ -2,6 +2,7 @@
 
 import { MathMarkdown } from "@/components/math-markdown";
 import type { components } from "@/lib/api/schema";
+import { formatDecimalForInput } from "@/lib/format/decimal";
 import { vi } from "@/messages/vi";
 
 type QuestionType = components["schemas"]["QuestionType"];
@@ -62,7 +63,7 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
         </p>
         {payload.tolerance != null && (
           <p className="mt-1 text-xs text-slate-600">
-            {vi.questions.shortTolerance}: ±{payload.tolerance}
+            {vi.questions.shortTolerance}: ±{formatDecimalForInput(payload.tolerance)}
           </p>
         )}
       </div>
@@ -84,7 +85,7 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
             {payload.rubric.map((item, idx) => (
               <li key={idx} className="flex justify-between gap-4 py-1">
                 <span>{item.criterion}</span>
-                <span className="shrink-0 font-medium">{item.points} {vi.review.points}</span>
+                <span className="shrink-0 font-medium">{formatDecimalForInput(item.points)} {vi.review.points}</span>
               </li>
             ))}
           </ul>

@@ -9,6 +9,7 @@ import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import { useAuth } from "@/lib/auth/auth-context";
+import { formatDecimalForInput } from "@/lib/format/decimal";
 import { vi } from "@/messages/vi";
 
 export default function ReviewQueuePage() {
@@ -198,7 +199,7 @@ export default function ReviewQueuePage() {
                   {item.examTitle} (v{item.versionNo})
                 </h2>
                 <p className="mt-1 text-xs text-slate-600">
-                  {vi.common.gradePrefix} {item.grade} · {item.questionCount} {vi.review.questionCountSuffix} · {item.totalPoints} {vi.review.points} · {item.createdBy.fullName}
+                  {vi.common.gradePrefix} {item.grade} · {item.questionCount} {vi.review.questionCountSuffix} · {formatDecimalForInput(item.totalPoints)} {vi.review.points} · {item.createdBy.fullName}
                 </p>
               </div>
               <Link

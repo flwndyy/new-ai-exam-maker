@@ -11,6 +11,7 @@ import ReviewQuestionPage from "@/app/review/question/page";
 import { RoleNav } from "@/components/role-nav";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
+import { formatDecimalForInput, parseExactDecimal } from "@/lib/format/decimal";
 import { vi as messages } from "@/messages/vi";
 
 const mocks = vi.hoisted(() => ({
@@ -88,7 +89,7 @@ describe("A10 admin, review, and role navigation screens", () => {
 
     mocks.auth.me.role = "admin";
     rerender(<RoleNav />);
-    expect(screen.queryByText(messages.nav.questions)).toBeNull();
+    expect(screen.getByText(messages.nav.questions)).toBeTruthy();
     expect(screen.getByText(messages.nav.review)).toBeTruthy();
     expect(screen.getByText(messages.nav.admin)).toBeTruthy();
   });
@@ -783,9 +784,18 @@ describe("A10 admin, review, and role navigation screens", () => {
         errors: {
           stem: ["Không được để trống"],
           topicId: ["Không hợp lệ"],
+          submittedAt: ["Thiếu thời điểm gửi duyệt"],
         },
       }),
-    ).toBe("stem: Không được để trống; topicId: Không hợp lệ");
+    ).toBe(`${messages.questions.stem}: Không được để trống; ${messages.questions.topic}: Không hợp lệ; Thiếu thời điểm gửi duyệt`);
+
+    // 5. parseExactDecimal accepts 16-17 significant-digit JS doubles loaded from server and rejects values that round silently.
+    expect(formatDecimalForInput(0.0000001)).toBe("0.0000001");
+    expect(parseExactDecimal("0.3333333333333333")).toBe(0.3333333333333333);
+    expect(parseExactDecimal("0.30000000000000004")).toBe(0.30000000000000004);
+    expect(parseExactDecimal("0.0000001")).toBe(0.0000001);
+    expect(parseExactDecimal("0,01")).toBe(0.01);
+    expect(parseExactDecimal("0.1234567890123456789")).toBeNull();
   });
 
   it("handles very small decimal rubric points without scientific notation and validates text tolerance including comma/invalid input", async () => {

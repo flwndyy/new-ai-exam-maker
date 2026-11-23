@@ -181,7 +181,7 @@ AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và
 1. **Validate cấu trúc** theo schema từng dạng (mục 8.2): đủ phương án, đúng 1 đáp án (trắc nghiệm), đúng 4 ý (đúng/sai), v.v.
 2. **Kiểm chứng độc lập (tùy chọn, cấu hình bật/tắt vì tốn token; chỉ áp dụng cho `MultipleChoice`, `TrueFalse`, `ShortAnswer` — `Essay` không so sánh tự động được)**: gọi model lần hai chỉ để _tự giải_ câu hỏi (không cho xem đáp án) rồi so với đáp án gốc → lưu `ai_verification` = `Agree` / `Disagree` / `NotChecked`. `Disagree` → gắn cờ "cần xem kỹ".
 3. **Loại trùng**: so sánh nội dung chuẩn hóa với câu đã có trong cùng môn/chương (MVP: so khớp chuỗi; sau đó mới dùng embedding).
-4. **Checklist của người duyệt** hiển thị ở màn hình duyệt: đáp án đúng? lời giải khớp? đúng chương/mức độ? công thức hiển thị đúng?
+4. **Checklist của người duyệt** hiển thị ở màn hình duyệt: đáp án đúng? lời giải khớp? đúng chương/mức độ? công thức hiển thị đúng? Người duyệt bắt buộc tick đủ checklist trên giao diện trước khi bấm Duyệt.
 5. Teacher phải bấm **"Đã rà soát"** trên câu do AI sinh trước khi được gửi duyệt.
 
 #### Chi tiết triển khai B3
