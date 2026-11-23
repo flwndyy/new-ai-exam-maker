@@ -14,6 +14,11 @@ public static class AiErrorCodes
     public const string SchemaViolation = "SchemaViolation";
     public const string OutputTruncated = "OutputTruncated";
     public const string Unknown = "Unknown";
+
+    // Worker-level outcomes (B6); never produced by the classifier.
+    public const string QuotaExceeded = "QuotaExceeded";
+    public const string RequesterUnavailable = "RequesterUnavailable";
+    public const string AttemptsExhausted = "AttemptsExhausted";
 }
 
 /// <summary>Provider-neutral failure categories; the Bedrock adapter maps SDK exceptions onto these.</summary>

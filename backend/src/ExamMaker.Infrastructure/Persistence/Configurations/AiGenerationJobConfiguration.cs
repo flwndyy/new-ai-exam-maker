@@ -95,6 +95,12 @@ namespace ExamMaker.Infrastructure.Persistence.Configurations
                 .HasColumnName("created_at")
                 .HasColumnType("timestamp with time zone");
 
+            // Inserts that omit the column (older app versions after a rollback, raw SQL) get the insert time.
+            builder.Property(x => x.LastEnqueuedAt)
+                .HasColumnName("last_enqueued_at")
+                .HasColumnType("timestamp with time zone")
+                .HasDefaultValueSql("now()");
+
             builder.Property(x => x.StartedAt)
                 .HasColumnName("started_at")
                 .HasColumnType("timestamp with time zone");

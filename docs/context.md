@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.19** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.20** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -170,7 +170,7 @@ SQS standard queue giao **at-least-once** nên có thể giao lại cùng messag
   - _Retryable_ (throttling, timeout, 5xx Bedrock, lỗi mạng) → không xóa message; SQS standard **không tự có backoff**, nên worker gọi `ChangeMessageVisibility` để tăng dần thời gian chờ (vd 30s → 120s → 300s) trước khi message được giao lại.
   - _Non-retryable_ (JSON hỏng sau N lần "sửa lại", vi phạm schema, nội dung bị từ chối) → đánh dấu `Failed` + lý do, xóa message, **không** tiêu thêm token.
 - **Phục hồi job treo**: tác vụ định kỳ (trong worker) tìm job `Running` có `lease_expires_at` đã qua → đưa về `Queued` (nếu còn lượt) hoặc `Failed`.
-- **Chống mất message khi enqueue**: API tạo job trong DB rồi mới gửi SQS; nếu gửi lỗi, job kẹt `Queued`. Tác vụ định kỳ tìm job `Queued` quá N phút → **gửi lại message** (an toàn vì worker idempotent theo `jobId`); quá M phút vẫn không chạy → cảnh báo.
+- **Chống mất message khi enqueue**: API tạo job trong DB rồi mới gửi SQS; nếu gửi lỗi, job kẹt `Queued`. Tác vụ định kỳ tìm job `Queued` có `last_enqueued_at` (lần gửi SQS gần nhất, đặt bằng `created_at` khi tạo job) quá N phút → **gửi lại message** và cập nhật `last_enqueued_at` (an toàn vì worker idempotent theo `jobId`); quá M phút vẫn không chạy → cảnh báo.
 - **Prompt**: template prompt nằm trong code, có số phiên bản; job lưu `prompt_version` + `model_id`. Ghi chú của người dùng chèn vào prompt được coi là **không tin cậy** (có thể chứa prompt injection) — chỉ đóng vai trò dữ liệu, luôn qua validate schema, kết quả vẫn là `Draft`.
 - Ghi token vào job **theo từng lần gọi** để tính đúng chi phí kể cả khi retry.
 
@@ -203,6 +203,21 @@ AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và
 - **Kiểm chứng đáp án** (`AiAnswerVerifier`): bật bằng `AiGeneration:VerifyAnswers` (mặc định `false`; tắt khi dev, bật khi demo). Một lần gọi model cho cả lô, chỉ với `MultipleChoice`/`TrueFalse`/`ShortAnswer`; prompt phiên bản `answer-verify-v1` không chứa đáp án hay lời giải, nội dung câu được mã hóa như dữ liệu không tin cậy. Lần gọi dùng temperature 0 và giới hạn đầu ra `AiGeneration:VerifyMaxOutputTokens` (mặc định 2048). Tắt cờ hoặc không có câu kiểm được thì không gọi model và câu là `NotChecked`; câu mà model bỏ qua trong kết quả có note "Mô hình không trả lời câu này.".
 - **Lỗi kiểm chứng không làm hỏng job**: mọi lỗi từ lần gọi model (kể cả lỗi lạ ngoài `AiModelException`), JSON/schema sai, bị cắt token/lọc nội dung → mọi câu `NotChecked` với note cố định, không có vòng sửa lại. Chỉ hủy do token của worker (`OperationCanceledException`, hoặc lỗi khác khi token đã bị hủy) và lỗi từ callback token (vd vượt trần token ngày) vẫn được ném lên, không bị nuốt. Token của lần gọi kiểm chứng đi qua cùng callback `onModelCall`.
 - **So sánh theo dạng**: MC so nhãn với `correctLabel`; TF so cả 4 ý, `Disagree` nếu lệch bất kỳ ý nào; ShortAnswer `number` khớp nếu giá trị số nằm trong `tolerance` (không có thì so bằng) của một đáp án chấp nhận, tính **chính xác** bằng số nguyên lớn (không qua `decimal`, nên không làm tròn số rất nhỏ và không giới hạn phạm vi; hỗ trợ đủ phạm vi validator cho phép: chuỗi số dài, `tolerance` số mũ ±1000; `tolerance` có số mũ vượt ±10000 bị bỏ qua, coi như 0, để tránh tràn số/tính `10^n` quá lớn); đáp án model không phải số thuần (có đơn vị, số mũ, khoảng trắng) → `Disagree`; ShortAnswer `text` so sau chuẩn hóa như khóa trùng; `Essay` luôn `NotChecked`. `ai_verification_note` là câu tiếng Việt cố định theo mẫu (giá trị model là dữ liệu không tin cậy: ký tự điều khiển đổi thành khoảng trắng, bỏ surrogate lẻ, rồi cắt tối đa 100 ký tự); `Agree` thì note null.
+
+#### Chi tiết triển khai B6
+
+- Lõi worker nằm ở `Application/Ai/Worker` (`AiJobProcessor`, `AiJobMessageHandler`, `AiJobRecovery`), chỉ gọi qua interface; SQL, SQS và Bedrock ở Infrastructure; `ExamMaker.Worker` chạy hai `BackgroundService` định nghĩa ở Infrastructure (`AiJobConsumerService` nhận SQS, `AiJobRecoveryService` quét định kỳ). Thiết kế chi tiết: `docs/superpowers/specs/2026-11-23-b6-ai-worker-design.md`.
+- **Claim + fencing**: claim bằng `UPDATE` có điều kiện ở 4.1.1 (`RETURNING attempt`), đặt `prompt_version`. `attempt` đã claim là mã fencing: mọi lệnh ghi sau đó (gia hạn lease, trả về hàng chờ, `Failed`, `Succeeded`) có thêm `status='Running' AND attempt=@attempt`; 0 dòng nghĩa là đã mất lease → dừng, không đụng message. Riêng ghi token không fencing.
+- **Claim không được**: job không tồn tại hoặc đã `Succeeded`/`Failed` → xóa message; đang `Running` với lease còn hạn → hẹn message quay lại sau `min(300s, lease còn lại + 5s)`; hết lượt (`attempt >= max_attempts`) → `Failed` (giữ mã lỗi gần nhất, không có thì `AttemptsExhausted`) rồi xóa message.
+- **Người yêu cầu**: trước khi gọi model và lại lần nữa trong transaction lưu (`FOR SHARE` hàng user), user phải active, là teacher/head và thuộc tổ của môn; không đạt → `Failed` `RequesterUnavailable`, không lưu câu.
+- **Quota token**: kiểm trần user (`AiQuota:TokensPerUserPerDay`) và hệ thống (`AiQuota:SystemTokensPerDay`) theo ngày UTC hiện tại **trước mỗi lần gọi** model (sinh, sửa lại, kiểm chứng). Vượt trước lần sinh/sửa lại → `Failed` `QuotaExceeded`; vượt trước lần kiểm chứng → bỏ kiểm chứng, câu `NotChecked`, job vẫn lưu. Sau mỗi lần gọi, token cộng vào job và `ai_usage_daily` (ngày gọi, không đổi `jobs`) trong transaction riêng commit ngay. Lượt sinh không hoàn lại khi job lỗi.
+- **Lưu kết quả**: một transaction (`lock_timeout` 2s) gồm kiểm lại người yêu cầu, chuyển job `Succeeded` (fenced, kèm `duplicates_dropped`), chèn câu `Draft`/`AI`/revision 1 với `ai_verification`/note từ B4, và audit; chỉ xóa message sau commit. Audit do worker ghi có actor NULL, tổ = tổ của môn: mỗi câu `CreateQuestion` note `AI worker; job=<id>; ordinal=<n>; revision=1`; job `AiJob` `Succeeded` note `AI worker; questions=<k>; duplicatesDropped=<n>`, `Failed` note `AI worker; error=<code>` (quét định kỳ: `AI worker recovery; error=<code>`).
+- **Heartbeat**: lease = visibility = 300s, mỗi 60s gia hạn lease DB **trước** rồi `ChangeMessageVisibility(300)` để visibility luôn hết sau lease. Lệnh gia hạn chạy trên DbContext riêng (heartbeat chạy song song với job; DbContext không thread-safe và không được lọt vào transaction lưu kết quả). Lưu kết quả lỗi thì xóa change tracker để lệnh `Failed` sau đó không lưu nhầm câu hỏi. Mỗi lần gọi Bedrock tối đa 120s, cả job tối đa 10 phút (quá hạn = lỗi `Timeout` retryable).
+- **Lỗi**: non-retryable, `QuotaExceeded`, `RequesterUnavailable`, `InvalidRequest` → `Failed`, xóa message. Retryable khi còn lượt → job về `Queued` (lưu mã/câu lỗi "hệ thống sẽ thử lại", `last_enqueued_at=now()`), visibility theo `AiRetryPolicy` 30/120/300s; retryable ở lượt cuối → worker tự `Failed` và xóa message, nên DLQ chủ yếu chỉ nhận message của worker chết giữa chừng. Job `Failed` vì hết lượt giữ mã lỗi gần nhất nhưng `error_message` là câu của `AttemptsExhausted` (không còn hứa "sẽ thử lại"). Lỗi DB khi đọc khóa trùng là retryable. Dừng host (deploy) → job về `Queued`, `attempt` giảm 1, worker gửi một message `{jobId}` mới rồi xóa message cũ (message mới có số lần nhận bằng 0 nên deploy không đẩy job về phía DLQ); gửi lỗi thì đặt visibility 0 cho message cũ.
+- **Quét định kỳ** (mỗi 60s): `Running` hết lease còn lượt → `Queued` (`last_enqueued_at=now()`), hết lượt → `Failed`; `Queued` có `last_enqueued_at` quá 10 phút → gửi lại SQS; `Queued` có `created_at` quá 15 phút → log `Warning`. Không tự `Failed` job chờ lâu (EC2 tắt ban đêm).
+- **Bedrock**: Converse API, `Bedrock:ModelId` (có thể là inference profile) từ Parameter Store, SDK không tự retry; lỗi SDK ánh xạ sang `AiModelException` theo loại, log không chứa message gốc/nội dung.
+- Cấu hình `Worker:*` (MaxConcurrency 2, LeaseSeconds 300, HeartbeatSeconds 60, JobTimeoutMinutes 10, RecoveryIntervalSeconds 60, RequeueAfterMinutes 10, StaleQueuedWarnMinutes 15), `Bedrock:ModelId`, `Bedrock:TimeoutSeconds` 120. Thiếu `Sqs:AiJobsQueueUrl` hoặc `Bedrock:ModelId`: Development chỉ cảnh báo và không chạy worker; môi trường khác khởi động thất bại.
+- Mã lỗi mới: `QuotaExceeded`, `RequesterUnavailable`, `AttemptsExhausted`.
 
 ### 4.2 Vòng đời câu hỏi
 
@@ -443,7 +458,7 @@ Cấu trúc repo (monorepo):
 - **exams**: id, title, subject_id, grade, department_id, created_by
 - **exam_versions**: id, exam_id, **version_no**, status, duration_minutes, total_points, content_hash, submitted_at, reviewed_by, reviewed_at, review_note, published_by, published_at · unique `(exam_id, version_no)`; partial unique index: tối đa 1 version `Published` / exam
 - **exam_version_questions**: exam_version_id, `sort_order`, points, **source_question_id**, **source_revision**, và (đóng băng khi Submit) **type, difficulty, stem_snapshot, payload_snapshot, explanation_snapshot** · sau `Submitted` chỉ đọc (chặn ở tầng app **và** trigger/ràng buộc nếu kịp)
-- **ai_generation_jobs**: id, requested_by, params (jsonb), status (`Queued/Running/Succeeded/Failed`), attempt, max_attempts, lease_expires_at, error_code, error_message, model_id, prompt_version, input_tokens, output_tokens (cộng dồn), duplicates_dropped (số câu AI trùng bị bỏ, mặc định 0), created_at, started_at, finished_at
+- **ai_generation_jobs**: id, requested_by, params (jsonb), status (`Queued/Running/Succeeded/Failed`), attempt, max_attempts, lease_expires_at, error_code, error_message, model_id, prompt_version, input_tokens, output_tokens (cộng dồn), duplicates_dropped (số câu AI trùng bị bỏ, mặc định 0), created_at, last_enqueued_at (lần gửi SQS gần nhất, dùng để gửi lại job kẹt `Queued`), started_at, finished_at
 - **ai_usage_daily** (quota): user_id, date, jobs, tokens
 - **audit_logs**: id, actor_id, entity_type (`Question/ExamVersion/User/AiJob/...`), entity_id, department_id, action, from_status, to_status, note, created_at
 
@@ -644,6 +659,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.20 — 23/11/2026**
+- Triển khai Worker B6: claim idempotent có fencing theo `attempt`, heartbeat lease + visibility, quota token trước mỗi lần gọi model và ghi token sau mỗi lần gọi, lưu câu + kết quả job trong một transaction, phân loại lỗi/backoff/shutdown, quét định kỳ job treo và gửi lại job kẹt `Queued`, adapter Bedrock Converse. Thêm cột `ai_generation_jobs.last_enqueued_at`, mã lỗi `QuotaExceeded`/`RequesterUnavailable`/`AttemptsExhausted`. Thêm mục "Chi tiết triển khai B6" ở 4.1.2, cập nhật 4.1.1 và 8.1.
 
 **0.19 — 22/11/2026**
 - Triển khai lõi AI B4: lọc câu trùng theo khóa chuẩn hóa (stem + text phương án/ý) với ngân hàng cùng môn/chương và trong lô, giữ ordinal gốc, thêm `ai_generation_jobs.duplicates_dropped`; kiểm chứng đáp án tùy chọn bằng một lần gọi model (`answer-verify-v1`, cờ `AiGeneration:VerifyAnswers`), lỗi chỉ đưa câu về `NotChecked`. Thêm mục "Chi tiết triển khai B4" ở 4.1.2 và cập nhật 8.1.

@@ -96,7 +96,7 @@ trạng thái sau, ghi chú và thời điểm.
 | `exams` | PK `id`; FK `subject_id`, `department_id`, `created_by → users.id` | `title`, `grade` |
 | `exam_versions` | PK `id`; FK `exam_id → exams.id`; `reviewed_by` và `published_by` trỏ đến `users.id` | `version_no`, `status`, `duration_minutes`, `total_points`, `content_hash`, `submitted_at`, `reviewed_at`, `review_note`, `published_at` |
 | `exam_version_questions` | PK ghép `(exam_version_id, sort_order)`; unique `(exam_version_id, source_question_id)`; FK `exam_version_id → exam_versions.id`, `source_question_id → questions.id` | `points`, `source_revision`, `type`, `difficulty`, `stem_snapshot`, `payload_snapshot`, `explanation_snapshot` |
-| `ai_generation_jobs` | PK `id`; FK `requested_by → users.id` | `params`, `status`, `attempt`, `max_attempts`, `lease_expires_at`, `error_code`, `error_message`, `model_id`, `prompt_version`, `input_tokens`, `output_tokens`, `duplicates_dropped`, `created_at`, `started_at`, `finished_at` |
+| `ai_generation_jobs` | PK `id`; FK `requested_by → users.id` | `params`, `status`, `attempt`, `max_attempts`, `lease_expires_at`, `error_code`, `error_message`, `model_id`, `prompt_version`, `input_tokens`, `output_tokens`, `duplicates_dropped`, `created_at`, `last_enqueued_at`, `started_at`, `finished_at` |
 | `ai_usage_daily` | PK ghép `(user_id, date)`; FK `user_id → users.id` | `jobs`, `tokens` |
 | `audit_logs` | PK `id`; FK `actor_id → users.id` | `entity_type`, `entity_id`, `department_id`, `is_secondary`, `action`, `from_status`, `to_status`, `note`, `created_at` |
 

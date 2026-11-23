@@ -1,5 +1,6 @@
 using ExamMaker.Application.Ai;
 using ExamMaker.Domain.Users;
+using ExamMaker.Infrastructure.Ai;
 using Microsoft.EntityFrameworkCore;
 
 namespace ExamMaker.Infrastructure.Tests.Ai;
@@ -26,6 +27,45 @@ internal static class AiTestData
         context.Users.Add(user);
         await context.SaveChangesAsync();
         return user.Id;
+    }
+
+    /// <summary>A user in the department of the subject used by <see cref="Request"/>, so the worker accepts the job.</summary>
+    public static async Task<Guid> CreateSubjectUserAsync(PostgresFixture fixture, string role = "teacher", bool isActive = true)
+    {
+        await using var context = fixture.CreateContext();
+        var departmentId = await context.Subjects
+            .Where(s => s.Id == Request().SubjectId)
+            .Select(s => s.DepartmentId)
+            .SingleAsync();
+        var suffix = Guid.NewGuid().ToString("N");
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            CognitoSub = "ai-worker-" + suffix,
+            Email = $"ai-worker-{suffix}@example.invalid",
+            FullName = "Synthetic worker teacher",
+            Role = role,
+            DepartmentId = role == "admin" ? null : departmentId,
+            IsActive = isActive,
+        };
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+        return user.Id;
+    }
+
+    /// <summary>Creates a Queued job through the API-side store (reserves one job on a unique far-future day).</summary>
+    public static async Task<Guid> CreateQueuedJobAsync(PostgresFixture fixture, Guid userId)
+    {
+        await using var context = fixture.CreateContext();
+        var jobId = await new EfAiJobStore(context).TryCreateQueuedJobAsync(
+            userId, Request(), UniqueDate(), jobsLimit: 10, maxAttempts: 3, CancellationToken.None);
+        return jobId!.Value;
+    }
+
+    public static async Task ExecuteAsync(PostgresFixture fixture, FormattableString sql)
+    {
+        await using var context = fixture.CreateContext();
+        await context.Database.ExecuteSqlInterpolatedAsync(sql);
     }
 
     public static DateOnly UniqueDate() =>
