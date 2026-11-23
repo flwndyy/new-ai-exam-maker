@@ -180,7 +180,11 @@ function ExamDecisionForm({
           <button
             type="button"
             disabled={actionMutation.isPending}
-            onClick={() => actionMutation.mutate("archive")}
+            onClick={() => {
+              if (window.confirm(vi.review.confirmArchiveExam)) {
+                actionMutation.mutate("archive");
+              }
+            }}
             className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
           >
             {vi.review.archive}

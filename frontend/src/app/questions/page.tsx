@@ -2,7 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
@@ -22,8 +23,9 @@ const TYPES: QuestionType[] = ["MultipleChoice", "TrueFalse", "ShortAnswer", "Es
 const DIFFICULTIES: Difficulty[] = ["Recognition", "Understanding", "Application", "HighApplication"];
 const GRADES: Grade[] = [10, 11, 12];
 
-export default function QuestionsPage() {
+function QuestionsPageInner() {
   const { me } = useAuth();
+  const deleted = useSearchParams().get("deleted") === "1";
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<string>("");
   const [subjectId, setSubjectId] = useState<string>("");
@@ -85,6 +87,12 @@ export default function QuestionsPage() {
           </Link>
         )}
       </div>
+
+      {deleted && (
+        <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">
+          {vi.questions.deletedSuccess}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3 lg:grid-cols-6">
         <select
@@ -202,37 +210,43 @@ export default function QuestionsPage() {
 
       {questionsQuery.data && questionsQuery.data.items.length > 0 && (
         <div className="space-y-3">
-          {questionsQuery.data.items.map((item) => (
-            <article key={item.id} className="rounded border border-slate-200 bg-white p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-800">
-                    {vi.questions.statuses[item.status]}
-                  </span>
-                  <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-800">
-                    {vi.questions.types[item.type]}
-                  </span>
-                  <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
-                    {vi.common.gradePrefix} {item.grade} · {vi.questions.difficulties[item.difficulty]}
-                  </span>
-                  {item.source === "AI" && (
-                    <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-800">
-                      {vi.questions.aiFlags[item.aiVerification]}
+          {questionsQuery.data.items.map((item) => {
+            const isItemEditable =
+              canCreate &&
+              item.createdBy.id === me?.id &&
+              (item.status === "Draft" || item.status === "Rejected" || item.status === "Approved");
+            return (
+              <article key={item.id} className="rounded border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-800">
+                      {vi.questions.statuses[item.status]}
                     </span>
-                  )}
+                    <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-800">
+                      {vi.questions.types[item.type]}
+                    </span>
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
+                      {vi.common.gradePrefix} {item.grade} · {vi.questions.difficulties[item.difficulty]}
+                    </span>
+                    {item.source === "AI" && (
+                      <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-800">
+                        {vi.questions.aiFlags[item.aiVerification]}
+                      </span>
+                    )}
+                  </div>
+                  <Link
+                    href={`/questions/detail/?id=${item.id}`}
+                    className="text-sm font-medium text-slate-900 underline hover:text-slate-700"
+                  >
+                    {isItemEditable ? vi.common.edit : vi.common.view}
+                  </Link>
                 </div>
-                <Link
-                  href={`/questions/detail/?id=${item.id}`}
-                  className="text-sm font-medium text-slate-900 underline hover:text-slate-700"
-                >
-                  {vi.common.edit}
-                </Link>
-              </div>
-              <div className="mt-2 line-clamp-3 text-sm text-slate-800">
-                <MathMarkdown>{item.stem}</MathMarkdown>
-              </div>
-            </article>
-          ))}
+                <div className="mt-2 line-clamp-3 text-sm text-slate-800">
+                  <MathMarkdown>{item.stem}</MathMarkdown>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 
@@ -260,5 +274,13 @@ export default function QuestionsPage() {
         </div>
       )}
     </section>
+  );
+}
+
+export default function QuestionsPage() {
+  return (
+    <Suspense fallback={<p>{vi.common.loading}</p>}>
+      <QuestionsPageInner />
+    </Suspense>
   );
 }

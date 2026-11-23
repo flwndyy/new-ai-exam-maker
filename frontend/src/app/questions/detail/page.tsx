@@ -94,9 +94,12 @@ function QuestionEditorForm({
 
   const [isDirty, setIsDirty] = useState(false);
 
+  const subjectDepartmentId = (q ? q.departmentId : me?.departmentId) ?? undefined;
+
   const subjectsQuery = useQuery({
-    queryKey: ["catalog", "subjects"],
-    queryFn: () => fetchAllSubjects(),
+    queryKey: ["catalog", "subjects", subjectDepartmentId ?? "all"],
+    enabled: Boolean(subjectDepartmentId) || (!q && me != null),
+    queryFn: () => fetchAllSubjects(subjectDepartmentId),
   });
 
   const topicsQuery = useQuery({
@@ -230,7 +233,7 @@ function QuestionEditorForm({
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
       if (result === "deleted") {
-        router.replace("/questions/");
+        router.replace("/questions/?deleted=1");
         return;
       }
       onFeedback(vi.questions.transitionSuccess);
@@ -274,7 +277,10 @@ function QuestionEditorForm({
         }}
         className="space-y-4 rounded border border-slate-200 bg-white p-5"
       >
-        <fieldset disabled={!isEditable} className="space-y-4">
+        <fieldset
+          disabled={!isEditable || saveMutation.isPending || actionMutation.isPending}
+          className="space-y-4"
+        >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <label className="block text-sm">
             <span className="font-medium text-slate-700">{vi.questions.subject}</span>
@@ -614,9 +620,9 @@ function QuestionEditorForm({
           {q && isOwner && q.status === "Submitted" && (
             <button
               type="button"
-              disabled={actionMutation.isPending}
+              disabled={actionMutation.isPending || saveMutation.isPending}
               onClick={() => actionMutation.mutate("withdraw")}
-              className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+              className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
             >
               {vi.questions.withdraw}
             </button>
@@ -625,9 +631,9 @@ function QuestionEditorForm({
           {q && isOwner && q.source === "AI" && !q.aiReviewedByAuthor && (
             <button
               type="button"
-              disabled={actionMutation.isPending}
+              disabled={actionMutation.isPending || saveMutation.isPending}
               onClick={() => actionMutation.mutate("mark-reviewed")}
-              className="rounded border border-amber-400 bg-amber-50 px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
+              className="rounded border border-amber-400 bg-amber-50 px-4 py-2 text-sm text-amber-900 hover:bg-amber-100 disabled:opacity-50"
             >
               {vi.questions.markReviewed}
             </button>
@@ -641,7 +647,7 @@ function QuestionEditorForm({
                 if (isDirty && !window.confirm(vi.questions.confirmDiscardBeforeArchive)) return;
                 actionMutation.mutate("archive");
               }}
-              className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+              className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
             >
               {vi.questions.archive}
             </button>
@@ -650,11 +656,11 @@ function QuestionEditorForm({
           {q && isOwner && (q.status === "Draft" || q.status === "Rejected") && (
             <button
               type="button"
-              disabled={actionMutation.isPending}
+              disabled={actionMutation.isPending || saveMutation.isPending}
               onClick={() => {
                 if (window.confirm(vi.common.confirmDelete)) actionMutation.mutate("delete");
               }}
-              className="rounded border border-rose-300 px-4 py-2 text-sm text-rose-700 hover:bg-rose-50"
+              className="rounded border border-rose-300 px-4 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
             >
               {vi.common.delete}
             </button>

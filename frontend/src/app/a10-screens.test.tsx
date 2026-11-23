@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AdminPage from "@/app/admin/page";
 import QuestionDetailPage from "@/app/questions/detail/page";
+import QuestionsPage from "@/app/questions/page";
 import ReviewQueuePage from "@/app/review/page";
 import ReviewQuestionPage from "@/app/review/question/page";
 import { RoleNav } from "@/components/role-nav";
@@ -24,13 +25,17 @@ const mocks = vi.hoisted(() => ({
     },
   },
   searchId: "00000000-0000-0000-0000-000000000099",
+  searchExtra: "",
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPut: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(mocks.searchId ? `id=${mocks.searchId}` : ""),
+  useSearchParams: () =>
+    new URLSearchParams(
+      [mocks.searchId ? `id=${mocks.searchId}` : "", mocks.searchExtra].filter(Boolean).join("&"),
+    ),
   useRouter: () => ({ replace: vi.fn() }),
 }));
 
@@ -59,6 +64,7 @@ describe("A10 admin, review, and role navigation screens", () => {
     mocks.apiPost.mockReset();
     mocks.apiPut.mockReset();
     mocks.searchId = "00000000-0000-0000-0000-000000000099";
+    mocks.searchExtra = "";
     mocks.auth.me.role = "teacher";
   });
 
@@ -210,6 +216,8 @@ describe("A10 admin, review, and role navigation screens", () => {
     );
 
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
+    // Manual questions must not display the AI verification badge ("Chưa kiểm chứng").
+    expect(screen.queryByText(messages.questions.aiFlags.NotChecked)).toBeNull();
     for (const checkbox of screen.getAllByRole("checkbox")) {
       fireEvent.click(checkbox);
       expect((checkbox as HTMLInputElement).checked).toBe(true);
@@ -656,5 +664,113 @@ describe("A10 admin, review, and role navigation screens", () => {
       expect(screen.getByText("Page 1 question")).toBeTruthy();
       expect((screen.getByText(messages.common.previousPage) as HTMLButtonElement).disabled).toBe(true);
     });
+  });
+
+  it("filters question editor subjects by department, shows Edit vs View and deleted notice on QuestionsPage, and rejects non-integer topic sortOrder", async () => {
+    // 1. Creating a question fetches /subjects filtered by me.departmentId.
+    mocks.auth.me.role = "teacher";
+    mocks.searchId = "";
+    mocks.apiGet.mockResolvedValue({ data: { items: [] }, error: undefined });
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() =>
+      expect(mocks.apiGet).toHaveBeenCalledWith("/subjects", {
+        params: {
+          query: {
+            page: 1,
+            pageSize: 100,
+            departmentId: mocks.auth.me.departmentId,
+          },
+        },
+      }),
+    );
+    cleanup();
+
+    // 2. QuestionsPage renders deleted notice when ?deleted=1 and shows "Sửa" for own editable question vs "Xem" for peer/archived questions.
+    mocks.searchExtra = "deleted=1";
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions") {
+        return {
+          data: {
+            page: 1,
+            pageSize: 20,
+            totalItems: 2,
+            totalPages: 1,
+            items: [
+              {
+                id: "q-own",
+                subjectId: "s1",
+                topicId: "t1",
+                departmentId: "d1",
+                grade: 10,
+                type: "MultipleChoice",
+                difficulty: "Recognition",
+                stem: "Own draft question",
+                status: "Draft",
+                revision: 1,
+                source: "Manual",
+                aiVerification: "NotChecked",
+                aiVerificationNote: null,
+                aiReviewedByAuthor: false,
+                createdBy: { id: mocks.auth.me.id, fullName: "Me" },
+                submittedAt: null,
+                createdAt: "2026-11-22T00:00:00.000Z",
+                updatedAt: "2026-11-22T00:00:00.000Z",
+              },
+              {
+                id: "q-peer",
+                subjectId: "s1",
+                topicId: "t1",
+                departmentId: "d1",
+                grade: 10,
+                type: "MultipleChoice",
+                difficulty: "Recognition",
+                stem: "Peer approved question",
+                status: "Approved",
+                revision: 1,
+                source: "Manual",
+                aiVerification: "NotChecked",
+                aiVerificationNote: null,
+                aiReviewedByAuthor: false,
+                createdBy: { id: "peer-id", fullName: "Peer" },
+                submittedAt: null,
+                createdAt: "2026-11-22T00:00:00.000Z",
+                updatedAt: "2026-11-22T00:00:00.000Z",
+              },
+            ],
+          },
+          error: undefined,
+        };
+      }
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<QuestionsPage />);
+    expect(screen.getByText(messages.questions.deletedSuccess)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Own draft question")).toBeTruthy());
+    expect(screen.getByText(messages.common.edit)).toBeTruthy();
+    expect(screen.getByText(messages.common.view)).toBeTruthy();
+    cleanup();
+
+    // 3. AdminPage rejects non-integer topic sortOrder (e.g. "1.5").
+    mocks.auth.me.role = "admin";
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/subjects") {
+        return { data: { items: [{ id: "s1", name: "Toán", departmentId: "d1" }] }, error: undefined };
+      }
+      return { data: { items: [] }, error: undefined };
+    });
+    renderWithQuery(<AdminPage />);
+    fireEvent.click(screen.getByText(messages.admin.topicsTab));
+    await waitFor(() => expect(screen.getByPlaceholderText(messages.admin.name)).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Toán").length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByPlaceholderText(messages.admin.name), { target: { value: "Chương mới" } });
+    fireEvent.change(screen.getByLabelText(messages.questions.subject), { target: { value: "s1" } });
+    const orderInput = screen.getByPlaceholderText(messages.admin.sortOrder);
+    fireEvent.change(orderInput, { target: { value: "1.5" } });
+    fireEvent.submit(orderInput.closest("form")!);
+
+    await waitFor(() => expect(screen.getByText(messages.admin.invalidSortOrder)).toBeTruthy());
+    expect(mocks.apiPost).not.toHaveBeenCalled();
   });
 });

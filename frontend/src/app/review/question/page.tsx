@@ -189,10 +189,11 @@ function ReviewQuestionInner() {
                   {vi.questions.topic}: {topicName}
                 </span>
               )}
-              <span className="rounded bg-amber-50 px-2.5 py-1 text-amber-800">
-                {vi.questions.aiFlags[q.aiVerification]}
-                {q.source === "AI" ? ` · ${q.aiReviewedByAuthor ? vi.questions.aiReviewed : vi.questions.aiNotReviewed}` : ""}
-              </span>
+              {q.source === "AI" && (
+                <span className="rounded bg-amber-50 px-2.5 py-1 text-amber-800">
+                  {vi.questions.aiFlags[q.aiVerification]} · {q.aiReviewedByAuthor ? vi.questions.aiReviewed : vi.questions.aiNotReviewed}
+                </span>
+              )}
             </div>
 
             {q.aiVerificationNote && (

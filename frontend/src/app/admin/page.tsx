@@ -143,12 +143,15 @@ export default function AdminPage() {
 
   const createUserMutation = useMutation({
     mutationFn: async () => {
+      if (userRole !== "admin" && !userDeptId) {
+        throw new Error(vi.admin.departmentRequired);
+      }
       const { error } = await api.POST("/admin/users", {
         body: {
           email: userEmail.trim(),
           fullName: userFullName.trim(),
           role: userRole,
-          departmentId: userRole === "admin" ? null : userDeptId || null,
+          departmentId: userRole === "admin" ? null : userDeptId,
         },
       });
       if (error) throw new Error(getApiErrorMessage(error));
@@ -280,11 +283,16 @@ export default function AdminPage() {
 
   const saveTopicMutation = useMutation({
     mutationFn: async () => {
+      const orderTrimmed = topicOrder.trim();
+      const parsedOrder = Number(orderTrimmed);
+      if (orderTrimmed === "" || !Number.isInteger(parsedOrder) || parsedOrder < 0) {
+        throw new Error(vi.admin.invalidSortOrder);
+      }
       const body = {
         name: topicName.trim(),
         subjectId: topicSubjectId,
         grade: topicGrade,
-        sortOrder: Number(topicOrder) || 0,
+        sortOrder: parsedOrder,
       };
       if (editingTopicId) {
         const { error } = await api.PUT("/admin/topics/{id}", { params: { path: { id: editingTopicId } }, body });
@@ -394,6 +402,7 @@ export default function AdminPage() {
             </select>
             <select
               aria-label={vi.admin.department}
+              required={userRole !== "admin"}
               disabled={userRole === "admin"}
               value={userRole === "admin" ? "" : userDeptId}
               onChange={(e) => setUserDeptId(e.target.value)}
@@ -477,7 +486,10 @@ export default function AdminPage() {
                       {item.id !== me?.id && (
                         <button
                           type="button"
-                          onClick={() => toggleUserActiveMutation.mutate(item)}
+                          onClick={() => {
+                            if (item.isActive && !window.confirm(vi.admin.confirmDisableUser)) return;
+                            toggleUserActiveMutation.mutate(item);
+                          }}
                           className="text-xs font-medium text-slate-800 underline hover:text-slate-600"
                         >
                           {item.isActive ? vi.admin.disableUser : vi.admin.enableUser}
@@ -746,8 +758,10 @@ export default function AdminPage() {
             </select>
             <div className="flex gap-2">
               <input
+                required
                 type="number"
                 min="0"
+                step="1"
                 placeholder={vi.admin.sortOrder}
                 value={topicOrder}
                 onChange={(e) => setTopicOrder(e.target.value)}
