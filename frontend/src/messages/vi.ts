@@ -80,6 +80,7 @@ export const vi = {
     shortAnswerTypeText: "Chuỗi văn bản",
     shortUnitPlaceholder: "Đơn vị (tùy chọn)",
     shortTolerance: "Sai số cho phép (tolerance)",
+    invalidTolerance: "Sai số cho phép phải là số hợp lệ, không âm và không vượt quá độ chính xác cho phép.",
     modelAnswer: "Đáp án mẫu",
     essayRubric: "Hướng dẫn chấm tự luận",
     criterionPlaceholder: "Tiêu chí chấm",
@@ -137,8 +138,8 @@ export const vi = {
     missingId: "Thiếu mã đối tượng cần duyệt.",
     checklistTitle: "Checklist kiểm tra trước khi duyệt",
     checklistItems: [
-      "Kiến thức chuyên môn và dữ kiện câu hỏi chính xác",
-      "Đáp án / thang điểm rõ ràng, không gây hiểu nhầm",
+      "Kiến thức chuyên môn, dữ kiện câu hỏi chính xác và đúng chương / mức độ",
+      "Đáp án đúng, lời giải / thang điểm khớp với đáp án và không gây hiểu nhầm",
       "Công thức toán học, trình bày Markdown/KaTeX hiển thị đúng",
     ],
     noteLabel: "Nhận xét / Lý do từ chối",

@@ -9,7 +9,7 @@ import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
 import { fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -51,12 +51,14 @@ function QuestionDecisionForm({
     onSuccess: (action) => {
       onSuccess(action === "approve" ? vi.review.approvedSuccess : vi.review.rejectedSuccess);
       void queryClient.invalidateQueries({ queryKey: ["review", "questions"] });
+      void queryClient.invalidateQueries({ queryKey: ["questions"] });
       void queryClient.invalidateQueries({ queryKey: ["question", question.id] });
     },
-    onError: (err: Error) => {
-      onError(err.message);
+    onError: (err: unknown) => {
+      onError(getUiErrorMessage(err));
       // Context A6: re-read the current submission round and queue after a stale-round Conflict or state error.
       void queryClient.invalidateQueries({ queryKey: ["question", question.id] });
+      void queryClient.invalidateQueries({ queryKey: ["questions"] });
       void queryClient.invalidateQueries({ queryKey: ["review", "questions"] });
     },
   });
@@ -170,7 +172,7 @@ function ReviewQuestionInner() {
       </div>
 
       {questionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {questionQuery.isError && <p className="text-sm text-rose-600">{questionQuery.error.message}</p>}
+      {questionQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(questionQuery.error)}</p>}
       {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
       {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
 

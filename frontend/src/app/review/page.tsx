@@ -7,7 +7,7 @@ import { useState } from "react";
 import { MathMarkdown } from "@/components/math-markdown";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
 
@@ -152,7 +152,7 @@ export default function ReviewQueuePage() {
       </div>
 
       {isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {error && <p className="text-sm text-rose-600">{error.message}</p>}
+      {error && <p className="text-sm text-rose-600">{getUiErrorMessage(error)}</p>}
 
       {activeData && activeData.items.length === 0 && (
         <p className="rounded border border-slate-200 p-6 text-center text-sm text-slate-500">{vi.common.empty}</p>

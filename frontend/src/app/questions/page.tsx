@@ -2,13 +2,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -25,8 +25,17 @@ const GRADES: Grade[] = [10, 11, 12];
 
 function QuestionsPageInner() {
   const { me } = useAuth();
-  const deleted = useSearchParams().get("deleted") === "1";
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const deletedParam = searchParams.get("deleted") === "1";
+  const [showDeletedNotice, setShowDeletedNotice] = useState(deletedParam);
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    if (deletedParam) {
+      router.replace("/questions/");
+    }
+  }, [deletedParam, router]);
   const [status, setStatus] = useState<string>("");
   const [subjectId, setSubjectId] = useState<string>("");
   const [topicId, setTopicId] = useState<string>("");
@@ -88,10 +97,18 @@ function QuestionsPageInner() {
         )}
       </div>
 
-      {deleted && (
-        <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">
-          {vi.questions.deletedSuccess}
-        </p>
+      {showDeletedNotice && (
+        <div className="flex items-center justify-between gap-3 rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">
+          <span>{vi.questions.deletedSuccess}</span>
+          <button
+            type="button"
+            aria-label={vi.common.cancel}
+            onClick={() => setShowDeletedNotice(false)}
+            className="text-xs font-medium underline hover:text-emerald-950"
+          >
+            ×
+          </button>
+        </div>
       )}
 
       <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -202,7 +219,7 @@ function QuestionsPageInner() {
       </div>
 
       {questionsQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {questionsQuery.isError && <p className="text-sm text-rose-600">{questionsQuery.error.message}</p>}
+      {questionsQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(questionsQuery.error)}</p>}
 
       {questionsQuery.data && questionsQuery.data.items.length === 0 && (
         <p className="rounded border border-slate-200 p-6 text-center text-sm text-slate-500">{vi.common.empty}</p>

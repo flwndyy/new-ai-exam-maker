@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { fetchAllDepartments, fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -136,9 +136,9 @@ export default function AdminPage() {
     void queryClient.invalidateQueries({ queryKey: [...key] });
   };
 
-  const notifyError = (err: Error) => {
+  const notifyError = (err: unknown) => {
     setFeedback(null);
-    setErrorMsg(err.message);
+    setErrorMsg(getUiErrorMessage(err));
   };
 
   const createUserMutation = useMutation({
@@ -426,8 +426,9 @@ export default function AdminPage() {
             <div className="flex items-center justify-between">
               <button
                 type="button"
+                disabled={reconcileMutation.isPending}
                 onClick={() => reconcileMutation.mutate()}
-                className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
               >
                 {vi.admin.reconcile}
               </button>
@@ -486,11 +487,12 @@ export default function AdminPage() {
                       {item.id !== me?.id && (
                         <button
                           type="button"
+                          disabled={toggleUserActiveMutation.isPending}
                           onClick={() => {
                             if (item.isActive && !window.confirm(vi.admin.confirmDisableUser)) return;
                             toggleUserActiveMutation.mutate(item);
                           }}
-                          className="text-xs font-medium text-slate-800 underline hover:text-slate-600"
+                          className="text-xs font-medium text-slate-800 underline hover:text-slate-600 disabled:opacity-50"
                         >
                           {item.isActive ? vi.admin.disableUser : vi.admin.enableUser}
                         </button>
@@ -544,7 +546,11 @@ export default function AdminPage() {
               onChange={(e) => setDeptName(e.target.value)}
               className="flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm"
             />
-            <button type="submit" className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white">
+            <button
+              type="submit"
+              disabled={saveDeptMutation.isPending}
+              className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
               {editingDeptId ? vi.common.save : vi.common.create}
             </button>
             {editingDeptId && (
@@ -578,10 +584,11 @@ export default function AdminPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={deleteDeptMutation.isPending}
                     onClick={() => {
                       if (window.confirm(vi.common.confirmDelete)) deleteDeptMutation.mutate(d.id);
                     }}
-                    className="text-rose-700 underline"
+                    className="text-rose-700 underline disabled:opacity-50"
                   >
                     {vi.common.delete}
                   </button>
@@ -644,7 +651,11 @@ export default function AdminPage() {
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
-            <button type="submit" className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white">
+            <button
+              type="submit"
+              disabled={saveSubjectMutation.isPending}
+              className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
               {editingSubjectId ? vi.common.save : vi.common.create}
             </button>
             {editingSubjectId && (
@@ -680,10 +691,11 @@ export default function AdminPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={deleteSubjectMutation.isPending}
                     onClick={() => {
                       if (window.confirm(vi.common.confirmDelete)) deleteSubjectMutation.mutate(s.id);
                     }}
-                    className="text-rose-700 underline"
+                    className="text-rose-700 underline disabled:opacity-50"
                   >
                     {vi.common.delete}
                   </button>
@@ -767,7 +779,11 @@ export default function AdminPage() {
                 onChange={(e) => setTopicOrder(e.target.value)}
                 className="w-20 rounded border border-slate-300 px-2 py-1.5 text-sm"
               />
-              <button type="submit" className="flex-1 rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white">
+              <button
+                type="submit"
+                disabled={saveTopicMutation.isPending}
+                className="flex-1 rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              >
                 {editingTopicId ? vi.common.save : vi.common.create}
               </button>
               {editingTopicId && (
@@ -827,10 +843,11 @@ export default function AdminPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={deleteTopicMutation.isPending}
                     onClick={() => {
                       if (window.confirm(vi.common.confirmDelete)) deleteTopicMutation.mutate(t.id);
                     }}
-                    className="text-rose-700 underline"
+                    className="text-rose-700 underline disabled:opacity-50"
                   >
                     {vi.common.delete}
                   </button>

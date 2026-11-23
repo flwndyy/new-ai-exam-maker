@@ -10,6 +10,7 @@ import ReviewQueuePage from "@/app/review/page";
 import ReviewQuestionPage from "@/app/review/question/page";
 import { RoleNav } from "@/components/role-nav";
 import { fetchAllSubjects } from "@/lib/api/catalog";
+import { getUiErrorMessage } from "@/lib/api/error";
 import { vi as messages } from "@/messages/vi";
 
 const mocks = vi.hoisted(() => ({
@@ -772,5 +773,10 @@ describe("A10 admin, review, and role navigation screens", () => {
 
     await waitFor(() => expect(screen.getByText(messages.admin.invalidSortOrder)).toBeTruthy());
     expect(mocks.apiPost).not.toHaveBeenCalled();
+
+    // 4. Raw network errors (e.g. TypeError: Failed to fetch) map to localized requestFailed.
+    expect(getUiErrorMessage(new TypeError("Failed to fetch"))).toBe(messages.common.requestFailed);
+    expect(getUiErrorMessage(new Error("Failed to fetch"))).toBe(messages.common.requestFailed);
+    expect(getUiErrorMessage(new Error("Lỗi nghiệp vụ từ API"))).toBe("Lỗi nghiệp vụ từ API");
   });
 });

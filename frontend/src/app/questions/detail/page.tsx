@@ -8,7 +8,7 @@ import { Suspense, useState } from "react";
 import { MathMarkdown } from "@/components/math-markdown";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
-import { getApiErrorCode, getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorCode, getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -25,6 +25,23 @@ const DIFFICULTIES: Difficulty[] = ["Recognition", "Understanding", "Application
 const GRADES: Grade[] = [10, 11, 12];
 const MC_LABELS = ["A", "B", "C", "D"] as const;
 const TF_LABELS = ["a", "b", "c", "d"] as const;
+
+/** Parse a finite decimal number while rejecting values that would silently lose precision in IEEE-754 Number. */
+function parseExactDecimal(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(trimmed)) return null;
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) return null;
+  const normalized = trimmed
+    .replace(/^\+/, "")
+    .replace(/^(-?)0+(?=\d)/, "$1")
+    .replace(/^(-?)\./, "$10.")
+    .replace(/(\.\d*?[1-9])0+$/, "$1")
+    .replace(/\.0+$/, "");
+  const expected = normalized === "-0" ? "0" : normalized;
+  if (String(num) !== expected) return null;
+  return num;
+}
 
 function initMcOptions(q?: Question): Record<(typeof MC_LABELS)[number], string> {
   const map: Record<(typeof MC_LABELS)[number], string> = { A: "", B: "", C: "", D: "" };
@@ -120,11 +137,19 @@ function QuestionEditorForm({
     }
     if (type === "ShortAnswer") {
       const toleranceTrimmed = shortTolerance.trim();
+      let tolerance: number | null = null;
+      if (shortAnswerType === "number" && toleranceTrimmed !== "") {
+        const parsedTol = parseExactDecimal(toleranceTrimmed);
+        if (parsedTol === null || parsedTol < 0) {
+          throw new Error(vi.questions.invalidTolerance);
+        }
+        tolerance = parsedTol;
+      }
       return {
         answerType: shortAnswerType,
         acceptedAnswers: shortAnswersText.split("\n").map((s) => s.trim()).filter(Boolean),
         unit: shortUnit.trim() || null,
-        tolerance: shortAnswerType === "number" && toleranceTrimmed !== "" ? Number(toleranceTrimmed) : null,
+        tolerance,
       };
     }
     return {
@@ -134,8 +159,8 @@ function QuestionEditorForm({
         if (!criterion) {
           throw new Error(vi.questions.criterionRequired);
         }
-        const pts = Number(r.points);
-        if (!Number.isFinite(pts) || pts <= 0) {
+        const pts = parseExactDecimal(r.points);
+        if (pts === null || pts <= 0) {
           throw new Error(vi.questions.criterionPointsPositive);
         }
         return {
@@ -180,7 +205,7 @@ function QuestionEditorForm({
       void queryClient.invalidateQueries({ queryKey: ["question", saved.id] });
       if (!id) router.replace(`/questions/detail/?id=${saved.id}`);
     },
-    onError: (err: Error) => onError(err.message),
+    onError: (err: unknown) => onError(getUiErrorMessage(err)),
   });
 
   const actionMutation = useMutation({
@@ -239,7 +264,7 @@ function QuestionEditorForm({
       onFeedback(vi.questions.transitionSuccess);
       void queryClient.invalidateQueries({ queryKey: ["question", id] });
     },
-    onError: (err: Error) => onError(err.message),
+    onError: (err: unknown) => onError(getUiErrorMessage(err)),
   });
 
   const isContentAuthor = me?.role === "teacher" || me?.role === "head";
@@ -711,7 +736,7 @@ function QuestionDetailInner() {
 
       {id && questionQuery.isError && (
         <div className="space-y-3 rounded border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800">
-          <p>{questionQuery.error.message}</p>
+          <p>{getUiErrorMessage(questionQuery.error)}</p>
           <button
             type="button"
             onClick={() => void questionQuery.refetch()}

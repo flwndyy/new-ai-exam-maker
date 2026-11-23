@@ -8,7 +8,7 @@ import { Suspense, useState } from "react";
 import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
 import { api } from "@/lib/api/client";
-import { getApiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
@@ -70,12 +70,16 @@ function ExamDecisionForm({
       } as const;
       onSuccess(messageMap[action]);
       void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
       void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
     },
-    onError: (err: Error) => {
-      onError(err.message);
+    onError: (err: unknown) => {
+      onError(getUiErrorMessage(err));
       // Re-read the exam version and review queue after a stale-round Conflict or concurrent state transition.
       void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
+      void queryClient.invalidateQueries({ queryKey: ["exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
       void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
     },
   });
@@ -230,7 +234,7 @@ function ReviewExamInner() {
       </div>
 
       {versionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {versionQuery.isError && <p className="text-sm text-rose-600">{versionQuery.error.message}</p>}
+      {versionQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(versionQuery.error)}</p>}
       {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
       {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
 
