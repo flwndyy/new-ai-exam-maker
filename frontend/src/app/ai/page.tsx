@@ -6,6 +6,7 @@ import { Suspense, useMemo } from "react";
 
 import { GenerateForm } from "@/components/ai/generate-form";
 import { JobList } from "@/components/ai/job-list";
+import { quotaRefreshDelay } from "@/lib/ai/quota-refresh";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage } from "@/lib/api/error";
@@ -26,6 +27,10 @@ function AiPageInner() {
       if (error || !data) throw new Error(getApiErrorMessage(error));
       return data;
     },
+    // The quota resets at the UTC day boundary: reload just after resetsAt so a page left open overnight
+    // unlocks again, and on refocus because a hidden tab skips interval refetches.
+    refetchInterval: (query) => quotaRefreshDelay(query.state.data?.resetsAt, Date.now()),
+    refetchOnWindowFocus: true,
   });
 
   // "Sinh lại với cùng yêu cầu": reuse the parameters of an earlier job; a missing job just leaves the form empty.

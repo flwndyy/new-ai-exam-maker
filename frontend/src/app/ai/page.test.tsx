@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -227,6 +227,34 @@ describe("AI generation page", () => {
     renderPage();
     expect(await screen.findByText(messages.ai.quotaJobsExhausted)).toBeTruthy();
     expect((screen.getByRole("button", { name: messages.ai.submit }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("reloads the quota at resetsAt and unlocks submit when the page stays open past the reset", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const exhausted = { ...quota, jobsUsed: 10, resetsAt: new Date(Date.now() + 5000).toISOString() };
+      const fresh = { ...quota, jobsUsed: 0, tokensUsed: 0, resetsAt: new Date(Date.now() + 86_400_000).toISOString() };
+      let calls = 0;
+      setupApi();
+      const base = mocks.apiGet.getMockImplementation()!;
+      mocks.apiGet.mockImplementation((path: string, init?: unknown) =>
+        path === "/ai/quota" ? ok(calls++ === 0 ? exhausted : fresh) : base(path, init),
+      );
+      // Same defaults as src/app/providers.tsx (no refetch on focus, 30s staleTime).
+      const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <AiPage />
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByText(messages.ai.quotaJobsExhausted)).toBeTruthy();
+
+      await act(() => vi.advanceTimersByTimeAsync(7000));
+      await waitFor(() => expect(screen.queryByText(messages.ai.quotaJobsExhausted)).toBeNull());
+      expect((screen.getByRole("button", { name: messages.ai.submit }) as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prefills the form from ?from=<jobId>", async () => {

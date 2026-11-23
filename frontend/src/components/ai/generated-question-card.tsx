@@ -21,7 +21,11 @@ export function canMarkReviewed(question: Question, meId: string): boolean {
   );
 }
 
-export const aiQuestionKey = (id: string) => ["ai", "question", id] as const;
+/** Shared with the question detail/review pages so edits there and reviews here see the same entry. */
+export const questionKey = (id: string) => ["question", id] as const;
+
+/** The question was deleted or is no longer visible (404/403); not retried. */
+export class QuestionUnavailableError extends Error {}
 
 const FLAG_CLASS: Record<Question["aiVerification"], string> = {
   Agree: "bg-emerald-100 text-emerald-800",
@@ -46,7 +50,10 @@ export function GeneratedQuestionCard({
       if (error || !data) throw new Error(vi.ai.reviewFailed);
       return data;
     },
-    onSuccess: (updated) => queryClient.setQueryData(aiQuestionKey(updated.id), updated),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(questionKey(updated.id), updated);
+      void queryClient.invalidateQueries({ queryKey: ["questions"] });
+    },
   });
 
   const label = vi.ai.questionLabel(index);

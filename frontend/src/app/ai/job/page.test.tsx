@@ -240,6 +240,52 @@ describe("AI job page", () => {
     expect(screen.getByText(messages.ai.reviewed)).toBeTruthy();
   });
 
+  it("shows the edited question when returning from the edit page within the app's 30s staleTime", async () => {
+    let current: Record<string, unknown> = question(Q1, { aiReviewedByAuthor: true });
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))]);
+    const base = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string, init?: unknown) =>
+      path === "/questions/{id}" ? ok(current) : base(path, init),
+    );
+    // Same defaults as src/app/providers.tsx.
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: false } } });
+    const view = () => (
+      <QueryClientProvider client={client}>
+        <JobPage />
+      </QueryClientProvider>
+    );
+    const first = render(view());
+    expect(await screen.findByText(/Stem b1/)).toBeTruthy();
+    expect(screen.getByText(messages.ai.reviewed)).toBeTruthy();
+    first.unmount();
+
+    // The author edits the question elsewhere; the server resets the review flag.
+    current = question(Q1, { stem: "Đề đã sửa", aiReviewedByAuthor: false });
+    render(view());
+    expect(await screen.findByText("Đề đã sửa")).toBeTruthy();
+    expect(screen.queryByText(messages.ai.reviewed)).toBeNull();
+    expect(screen.getByRole("button", { name: messages.questions.markReviewed })).toBeTruthy();
+  });
+
+  it("writes mark-reviewed results to the shared question cache used by the detail page", async () => {
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))], { [Q1]: question(Q1) });
+    mocks.apiPost.mockResolvedValue({
+      data: question(Q1, { aiReviewedByAuthor: true }),
+      error: undefined,
+      response: new Response(null, { status: 200 }),
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <JobPage />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: messages.questions.markReviewed }));
+    await waitFor(() =>
+      expect((client.getQueryData(["question", Q1]) as { aiReviewedByAuthor: boolean } | undefined)?.aiReviewedByAuthor).toBe(true),
+    );
+  });
+
   it("links each card to the question detail page for editing", async () => {
     setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))], { [Q1]: question(Q1) });
     renderPage();
@@ -258,14 +304,14 @@ describe("AI job page", () => {
   it("shows a retryable error, not 'unavailable', when a question fails to load transiently", async () => {
     setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))]);
     const base = mocks.apiGet.getMockImplementation()!;
-    let failures = 1;
+    let failures = 2; // the first load and its single automatic retry both fail
     mocks.apiGet.mockImplementation((path: string, init?: unknown) => {
       if (path === "/questions/{id}" && failures-- > 0) return Promise.reject(new TypeError("Failed to fetch"));
       if (path === "/questions/{id}") return ok(question(Q1));
       return base(path, init);
     });
     renderPage();
-    expect(await screen.findByText(messages.ai.questionLoadFailed)).toBeTruthy();
+    expect(await screen.findByText(messages.ai.questionLoadFailed, undefined, { timeout: 4000 })).toBeTruthy();
     expect(screen.queryByText(messages.ai.questionUnavailable)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: messages.ai.retry }));

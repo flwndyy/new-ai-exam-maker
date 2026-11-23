@@ -4,7 +4,11 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 
-import { aiQuestionKey, GeneratedQuestionCard } from "@/components/ai/generated-question-card";
+import {
+  GeneratedQuestionCard,
+  questionKey,
+  QuestionUnavailableError,
+} from "@/components/ai/generated-question-card";
 import { STATUS_BADGE } from "@/components/ai/job-list";
 import { JobStatusPanel } from "@/components/ai/job-status-panel";
 import { nextPollDelay } from "@/lib/ai/polling";
@@ -52,14 +56,17 @@ function JobPageInner() {
   const questionIds = useMemo(() => (job?.status === "Succeeded" ? (job.questionIds ?? []) : []), [job]);
   const questionQueries = useQueries({
     queries: questionIds.map((qid) => ({
-      queryKey: aiQuestionKey(qid),
+      queryKey: questionKey(qid),
       queryFn: async () => {
         const { data, error, response } = await api.GET("/questions/{id}", { params: { path: { id: qid } } });
         // Deleted or no longer visible: shown as unavailable instead of failing the whole batch.
-        if (response.status === 404 || response.status === 403) return null;
+        if (response.status === 404 || response.status === 403) throw new QuestionUnavailableError();
         if (error || !data) throw new Error(getApiErrorMessage(error));
         return data;
       },
+      // The author may have edited, reviewed or deleted the question on another page: always reload on return.
+      refetchOnMount: "always" as const,
+      retry: (count: number, error: Error) => !(error instanceof QuestionUnavailableError) && count < 1,
     })),
   });
 
@@ -76,7 +83,11 @@ function JobPageInner() {
 
   const subjectName = subjectsQuery.data?.find((s) => s.id === job.params.subjectId)?.name ?? "—";
   const topicName = topicsQuery.data?.find((t) => t.id === job.params.topicId)?.name ?? "—";
-  const available = questionQueries.map((q) => q.data).filter((q) => q != null);
+  // A question deleted after it was cached keeps stale `data`; count only ones still readable.
+  const available = questionQueries
+    .filter((q) => !(q.error instanceof QuestionUnavailableError))
+    .map((q) => q.data)
+    .filter((q) => q != null);
   const reviewed = available.filter((q) => q.aiReviewedByAuthor).length;
 
   return (
@@ -118,7 +129,9 @@ function JobPageInner() {
                 <p key={questionIds[i]} className="text-sm text-slate-500">
                   {vi.common.loading}
                 </p>
-              ) : q.isError ? (
+              ) : q.error instanceof QuestionUnavailableError ? (
+                <GeneratedQuestionCard key={questionIds[i]} question={null} index={i + 1} meId={me?.id ?? ""} />
+              ) : q.isError && !q.data ? (
                 // Transient failure (network/5xx): offer a retry instead of claiming the question is gone.
                 <div key={questionIds[i]} className="flex items-center gap-3 rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                   <span className="font-semibold">{vi.ai.questionLabel(i + 1)}</span>
