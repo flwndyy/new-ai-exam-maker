@@ -22,6 +22,7 @@ export MSYS2_ARG_CONV_EXCL="*"
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
+SSM_OPS_PREFIX="${SSM_OPS_PREFIX:-/exammaker-ops/${ENV_NAME}}"
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
@@ -33,25 +34,45 @@ pass() { echo "[PASS] $1"; PASSED=$((PASSED + 1)); }
 fail() { echo "[FAIL] $1" >&2; FAILURES=$((FAILURES + 1)); }
 warn() { echo "[WARN] $1" >&2; }
 
-echo "==> Auditing SSM Parameter Store under '${SSM_PREFIX}/' (${AWS_REGION}, env=${ENV_NAME})..."
+echo "==> Auditing SSM Parameter Store under app prefix '${SSM_PREFIX}/' and ops prefix '${SSM_OPS_PREFIX}/' (${AWS_REGION}, env=${ENV_NAME})..."
 
-# Fetch all parameter metadata (Tier, Type, KeyId) via describe-parameters
-DESCRIBE_JSON="$(aws ssm describe-parameters \
+# Fetch all parameter metadata (Tier, Type, KeyId) across both app prefix and ops prefix via describe-parameters
+DESCRIBE_APP_JSON="$(aws ssm describe-parameters \
   --region "$AWS_REGION" \
   --parameter-filters "Key=Name,Option=BeginsWith,Values=${SSM_PREFIX}/" \
   --output json)"
+DESCRIBE_OPS_JSON="$(aws ssm describe-parameters \
+  --region "$AWS_REGION" \
+  --parameter-filters "Key=Name,Option=BeginsWith,Values=${SSM_OPS_PREFIX}/" \
+  --output json)"
+DESCRIBE_JSON="$(jq -s '{Parameters: ((.[0].Parameters // []) + (.[1].Parameters // []))}' <<<"${DESCRIBE_APP_JSON}${DESCRIBE_OPS_JSON}")"
 
 # Fetch all parameter values (including decrypted SecureString for length/presence validation only; never printed)
-VALUES_JSON="$(aws ssm get-parameters-by-path \
+VALUES_APP_JSON="$(aws ssm get-parameters-by-path \
   --region "$AWS_REGION" \
   --path "${SSM_PREFIX}" \
   --recursive \
   --with-decryption \
   --output json)"
+VALUES_OPS_JSON="$(aws ssm get-parameters-by-path \
+  --region "$AWS_REGION" \
+  --path "${SSM_OPS_PREFIX}" \
+  --recursive \
+  --with-decryption \
+  --output json)"
+VALUES_JSON="$(jq -s '{Parameters: ((.[0].Parameters // []) + (.[1].Parameters // []))}' <<<"${VALUES_APP_JSON}${VALUES_OPS_JSON}")"
 
 param_exists() {
   local suffix="$1"
   local full="${SSM_PREFIX}/${suffix}"
+  local found=""
+  found="$(jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Name' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
+  [ -n "$found" ]
+}
+
+ops_param_exists() {
+  local suffix="$1"
+  local full="${SSM_OPS_PREFIX}/${suffix}"
   local found=""
   found="$(jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Name' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
   [ -n "$found" ]
@@ -63,9 +84,21 @@ param_type() {
   jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Type // empty' <<<"$DESCRIBE_JSON" | tr -d '\r\n'
 }
 
+ops_param_type() {
+  local suffix="$1"
+  local full="${SSM_OPS_PREFIX}/${suffix}"
+  jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Type // empty' <<<"$DESCRIBE_JSON" | tr -d '\r\n'
+}
+
 param_val() {
   local suffix="$1"
   local full="${SSM_PREFIX}/${suffix}"
+  jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Value // empty' <<<"$VALUES_JSON" | tr -d '\r\n'
+}
+
+ops_param_val() {
+  local suffix="$1"
+  local full="${SSM_OPS_PREFIX}/${suffix}"
   jq -r --arg name "$full" '.Parameters[]? | select(.Name == $name) | .Value // empty' <<<"$VALUES_JSON" | tr -d '\r\n'
 }
 
@@ -87,8 +120,16 @@ check_group_present() {
   fi
 }
 
-is_pos_int() {
-  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+is_pos_int32() {
+  local val="$1"
+  [[ "$val" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "${#val}" -lt 10 ] || { [ "${#val}" -eq 10 ] && [[ ! "$val" > "2147483647" ]]; }
+}
+
+is_pos_int64() {
+  local val="$1"
+  [[ "$val" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "${#val}" -lt 19 ] || { [ "${#val}" -eq 19 ] && [[ ! "$val" > "9223372036854775807" ]]; }
 }
 
 # 1. O9 Cognito parameters
@@ -129,13 +170,13 @@ else
   fail "O12 AWS Core: expected AWS/Region='${AWS_REGION}', got '${AWS_REGION_VAL}'"
 fi
 
-# 6. O12 Bedrock parameters
-check_group_present "O12 Bedrock" \
+# 6. O12 Bedrock & AiGeneration parameters
+check_group_present "O12 Bedrock & AiGeneration" \
   "Bedrock/Region" \
   "Bedrock/ModelId" \
   "Bedrock/DevModelId" \
   "Bedrock/DemoModelId" \
-  "Bedrock/EnableAnswerVerification"
+  "AiGeneration/VerifyAnswers"
 
 BEDROCK_REGION_VAL="$(param_val "Bedrock/Region")"
 BEDROCK_ACTIVE_MODEL="$(param_val "Bedrock/ModelId")"
@@ -264,11 +305,11 @@ else
   fail "O12 Bedrock: ModelId ('${BEDROCK_ACTIVE_MODEL}') does not match DevModelId ('${BEDROCK_DEV_MODEL}') or DemoModelId ('${BEDROCK_DEMO_MODEL}')"
 fi
 
-BEDROCK_VERIFY="$(param_val "Bedrock/EnableAnswerVerification")"
-if [ "$BEDROCK_VERIFY" = "true" ] || [ "$BEDROCK_VERIFY" = "false" ]; then
-  pass "O12 Bedrock: EnableAnswerVerification is valid boolean ('${BEDROCK_VERIFY}')"
+AI_VERIFY="$(param_val "AiGeneration/VerifyAnswers")"
+if { [ "$AI_VERIFY" = "true" ] || [ "$AI_VERIFY" = "false" ]; } && ! param_exists "Bedrock/EnableAnswerVerification"; then
+  pass "O12 AiGeneration/VerifyAnswers is valid boolean ('${AI_VERIFY}', bound to AiGenerationOptions.VerifyAnswers)"
 else
-  fail "O12 Bedrock: EnableAnswerVerification must be 'true' or 'false', got '${BEDROCK_VERIFY}'"
+  fail "O12 AiGeneration/VerifyAnswers must be 'true' or 'false' (got '${AI_VERIFY}') and legacy Bedrock/EnableAnswerVerification must be absent"
 fi
 
 # 7. O12 AI Quota parameters (AiQuotaOptions)
@@ -287,8 +328,15 @@ Q_STOK="$(param_val "AiQuota/SystemTokensPerDay")"
 Q_NOTE="$(param_val "AiQuota/MaxNoteLength")"
 Q_ATT="$(param_val "AiQuota/MaxAttempts")"
 
-if is_pos_int "$Q_JOBS" && is_pos_int "$Q_MAXQ" && is_pos_int "$Q_UTOK" && is_pos_int "$Q_STOK" && is_pos_int "$Q_NOTE" && [ "$Q_ATT" = "3" ] && [ "$Q_STOK" -ge "$Q_UTOK" ]; then
-  pass "O12 AI Quota values valid (jobs=${Q_JOBS}/d, maxQ=${Q_MAXQ}, userTok=${Q_UTOK}, sysTok=${Q_STOK}, maxAttempts=${Q_ATT})"
+STOK_GE_UTOK=0
+if is_pos_int64 "$Q_UTOK" && is_pos_int64 "$Q_STOK"; then
+  if [ "${#Q_STOK}" -gt "${#Q_UTOK}" ] || { [ "${#Q_STOK}" -eq "${#Q_UTOK}" ] && [[ ! "$Q_STOK" < "$Q_UTOK" ]]; }; then
+    STOK_GE_UTOK=1
+  fi
+fi
+
+if is_pos_int32 "$Q_JOBS" && is_pos_int32 "$Q_MAXQ" && is_pos_int64 "$Q_UTOK" && is_pos_int64 "$Q_STOK" && is_pos_int32 "$Q_NOTE" && [ "$Q_ATT" = "3" ] && [ "$STOK_GE_UTOK" -eq 1 ]; then
+  pass "O12 AI Quota values valid within int32/int64 bounds (jobs=${Q_JOBS}/d, maxQ=${Q_MAXQ}, userTok=${Q_UTOK}, sysTok=${Q_STOK}, maxAttempts=${Q_ATT})"
 else
   fail "O12 AI Quota guardrail violation (jobs='${Q_JOBS}', maxQ='${Q_MAXQ}', userTok='${Q_UTOK}', sysTok='${Q_STOK}', note='${Q_NOTE}', maxAttempts='${Q_ATT}' expected 3)"
 fi
@@ -298,19 +346,19 @@ fi
 RL_PERMIT="$(param_val "AiRateLimit/PermitLimit")"
 RL_WINDOW="$(param_val "AiRateLimit/Window")"
 RL_NONZERO="${RL_WINDOW//[0.:]/}"
-if is_pos_int "$RL_PERMIT" && [[ "$RL_WINDOW" =~ ^([0-9]+\.)?(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,7})?$ ]] && [ -n "$RL_NONZERO" ]; then
+if is_pos_int32 "$RL_PERMIT" && [[ "$RL_WINDOW" =~ ^([0-9]+\.)?(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,7})?$ ]] && [ -n "$RL_NONZERO" ]; then
   pass "O12 AI Rate Limit valid (PermitLimit=${RL_PERMIT}, Window=${RL_WINDOW})"
 else
-  fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}' — must be positive .NET TimeSpan > 0)"
+  fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}' — PermitLimit must be int32 > 0 and Window positive .NET TimeSpan > 0)"
 fi
 
-# 9. O12 Origin VerifySecret (SecureString, >= 32 chars, never printed)
-ORIGIN_TYPE="$(param_type "Origin/VerifySecret")"
-ORIGIN_VAL="$(param_val "Origin/VerifySecret")"
-if [ "$ORIGIN_TYPE" = "SecureString" ] && [ "${#ORIGIN_VAL}" -ge 32 ]; then
-  pass "O12 Origin/VerifySecret exists as SecureString with length ${#ORIGIN_VAL} (>= 32 chars)"
+# 9. O12 Origin VerifySecret under ops prefix & secret isolation from app prefix
+ORIGIN_TYPE="$(ops_param_type "Origin/VerifySecret")"
+ORIGIN_VAL="$(ops_param_val "Origin/VerifySecret")"
+if [ "$ORIGIN_TYPE" = "SecureString" ] && [ "${#ORIGIN_VAL}" -ge 32 ] && ! param_exists "Origin/VerifySecret" && ! param_exists "Rds/MasterPassword"; then
+  pass "O12 '${SSM_OPS_PREFIX}/Origin/VerifySecret' exists as SecureString (length ${#ORIGIN_VAL} >= 32) and ops secrets (Origin/VerifySecret, Rds/MasterPassword) are isolated from app prefix '${SSM_PREFIX}/'"
 else
-  fail "O12 Origin/VerifySecret invalid (type='${ORIGIN_TYPE}', length=${#ORIGIN_VAL}, expected SecureString >= 32 chars)"
+  fail "O12 Origin/VerifySecret or secret isolation invalid (ops type='${ORIGIN_TYPE}', length=${#ORIGIN_VAL}; app Origin/VerifySecret exists=$(param_exists "Origin/VerifySecret" && echo yes || echo no); app Rds/MasterPassword exists=$(param_exists "Rds/MasterPassword" && echo yes || echo no))"
 fi
 
 # 10. O12 CloudWatch metadata
@@ -318,11 +366,13 @@ check_group_present "O12 CloudWatch metadata" \
   "CloudWatch/LogGroupName" \
   "CloudWatch/MetricNamespace"
 
-# 11. Cost guardrail: ALL parameters under prefix must be Standard tier ($0)
+# 11. Cost guardrail: ALL parameters under app & ops prefixes must be Standard tier ($0)
 NON_STANDARD="$(jq -r '[.Parameters[]? | select(.Tier != "Standard") | "\(.Name)(\(.Tier))"] | join(", ")' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
 if [ -z "$NON_STANDARD" ]; then
+  APP_COUNT="$(jq -r '.Parameters | length' <<<"$DESCRIBE_APP_JSON" | tr -d '\r\n')"
+  OPS_COUNT="$(jq -r '.Parameters | length' <<<"$DESCRIBE_OPS_JSON" | tr -d '\r\n')"
   TOTAL_COUNT="$(jq -r '.Parameters | length' <<<"$DESCRIBE_JSON" | tr -d '\r\n')"
-  pass "Cost control: all ${TOTAL_COUNT} parameters under '${SSM_PREFIX}/' use Standard tier (\$0)"
+  pass "Cost control: all ${TOTAL_COUNT} parameters (${APP_COUNT} under '${SSM_PREFIX}/' + ${OPS_COUNT} under '${SSM_OPS_PREFIX}/') use Standard tier (\$0)"
 else
   fail "Cost control: non-Standard tier parameters detected: ${NON_STANDARD}"
 fi
@@ -341,11 +391,6 @@ if [ -z "$PLAINTEXT_SECRETS" ]; then
   pass "Security: no Secret/Password/ConnectionString parameter is stored as plaintext String"
 else
   fail "Security: sensitive parameter(s) stored as non-SecureString: ${PLAINTEXT_SECRETS}"
-fi
-
-# Advisory check for pre-existing O10 Rds/MasterPassword under app prefix
-if param_exists "Rds/MasterPassword"; then
-  warn "Security/Least-privilege advisory: '${SSM_PREFIX}/Rds/MasterPassword' exists under app prefix '${SSM_PREFIX}/' (loaded into IConfiguration via AddSystemsManager); migrate to '/exammaker-ops/${ENV_NAME}/Rds/MasterPassword' or delete after storing in OPS password manager"
 fi
 
 echo ""

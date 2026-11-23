@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Create-if-absent setup script for AWS Systems Manager Parameter Store (AI Exam Maker - Task O12).
-# Publishes shared application, Bedrock, AI quota, rate-limit, CloudWatch, and origin secret
-# parameters under ${SSM_PREFIX}/* using Standard tier ($0) and AWS-managed KMS key alias/aws/ssm ($0).
+# Publishes shared application, Bedrock, AI generation, AI quota, rate-limit, and CloudWatch
+# parameters under ${SSM_PREFIX}/* (bound by .NET AddSystemsManager) and ops-only secrets
+# (Origin/VerifySecret) under ${SSM_OPS_PREFIX}/* (isolated from EC2 app IConfiguration)
+# using Standard tier ($0) and AWS-managed KMS key alias/aws/ssm ($0).
 #
-# Prerequisite parameters created by earlier tasks (not modified here):
+# Prerequisite parameters created by earlier tasks (not modified here, except migrating Rds/MasterPassword to ${SSM_OPS_PREFIX}):
 #   - O9  (Cognito): ${SSM_PREFIX}/Cognito/{Region,UserPoolId,ClientId,HostedUiDomain,Authority}
-#   - O10 (RDS):     ${SSM_PREFIX}/ConnectionStrings/ExamMaker, ${SSM_PREFIX}/Rds/*
+#   - O10 (RDS):     ${SSM_PREFIX}/ConnectionStrings/ExamMaker, ${SSM_PREFIX}/Rds/{InstanceId,Endpoint,Port,Database,Username}
 #   - O11 (SQS):     ${SSM_PREFIX}/Sqs/{AiJobsQueueUrl,AiJobsQueueArn,AiJobsDlqUrl,AiJobsDlqArn}
 #
 # Safety behavior:
@@ -13,13 +15,14 @@
 #     (e.g. switching ModelId from Haiku 4.5 to Sonnet 4.6) are preserved on re-run.
 #   - Set OVERWRITE_KEYS="Key1,Key2" (e.g. OVERWRITE_KEYS="AiQuota/JobsPerUserPerDay")
 #     to update specific parameter(s) without resetting anything else.
-#   - Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults; live demo
-#     runtime toggles (Bedrock/ModelId and Bedrock/EnableAnswerVerification) are STILL protected
-#     from bulk reset unless OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS explicitly includes them.
-#   - Origin/VerifySecret is NEVER overwritten when it already exists unless ROTATE_ORIGIN_SECRET=1
-#     is explicitly set (even if ORIGIN_VERIFY_SECRET or ORIGIN_VERIFY_SECRET_STDIN=1 is present in
-#     the environment, preventing accidental silent rotation on re-runs). Only pass ORIGIN_VERIFY_SECRET
-#     in a non-shared shell to avoid shell history exposure.
+#   - Set OVERWRITE_CONFIG=1 to reset non-secret parameters to script defaults; the Bedrock model
+#     triplet (Bedrock/ModelId, Bedrock/DevModelId, Bedrock/DemoModelId) and AiGeneration/VerifyAnswers
+#     are STILL protected together from bulk reset unless OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS
+#     explicitly includes them (preserving the ModelId in {DevModelId, DemoModelId} invariant).
+#   - ${SSM_OPS_PREFIX}/Origin/VerifySecret is NEVER overwritten when it already exists unless
+#     ROTATE_ORIGIN_SECRET=1 is explicitly set (even if ORIGIN_VERIFY_SECRET or ORIGIN_VERIFY_SECRET_STDIN=1
+#     is present in the environment, preventing accidental silent rotation on re-runs). Only pass
+#     ORIGIN_VERIFY_SECRET in a non-shared shell to avoid shell history exposure.
 #
 # Dependencies: aws (CLI v2), jq, openssl (or python3 for random hex fallback).
 #
@@ -38,6 +41,7 @@ export MSYS2_ARG_CONV_EXCL="*"
 AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
+SSM_OPS_PREFIX="${SSM_OPS_PREFIX:-/exammaker-ops/${ENV_NAME}}"
 
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 OVERWRITE_BEDROCK_RUNTIME="${OVERWRITE_BEDROCK_RUNTIME:-0}"
@@ -46,15 +50,16 @@ ROTATE_ORIGIN_SECRET="${ROTATE_ORIGIN_SECRET:-0}"
 ORIGIN_VERIFY_SECRET="${ORIGIN_VERIFY_SECRET:-}"
 ORIGIN_VERIFY_SECRET_STDIN="${ORIGIN_VERIFY_SECRET_STDIN:-0}"
 
-# Bedrock defaults (docs/context.md §6, §14 & docs/aws-o3-ec2-ssm.md §2.1)
+# Bedrock & AI Generation defaults (docs/context.md §4.1.2, §6, §14 & docs/aws-o3-ec2-ssm.md §2.1)
 # Verified against `aws bedrock list-inference-profiles` & `get-foundation-model` in ap-southeast-1:
 # Claude 3 Haiku and Claude 3.5 Sonnet v2 foundation models have reached EOL;
 # Claude Haiku 4.5 and Claude Sonnet 4.6 global inference profiles are ACTIVE.
+# Answer verification toggle maps directly to ExamMaker.Application.Ai.Generation.AiGenerationOptions.VerifyAnswers (B4).
 BEDROCK_REGION="${BEDROCK_REGION:-ap-southeast-1}"
 BEDROCK_DEV_MODEL_ID="${BEDROCK_DEV_MODEL_ID:-global.anthropic.claude-haiku-4-5-20251001-v1:0}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-$BEDROCK_DEV_MODEL_ID}"
 BEDROCK_DEMO_MODEL_ID="${BEDROCK_DEMO_MODEL_ID:-global.anthropic.claude-sonnet-4-6}"
-BEDROCK_ENABLE_VERIFICATION="${BEDROCK_ENABLE_VERIFICATION:-false}"
+AI_GENERATION_VERIFY_ANSWERS="${AI_GENERATION_VERIFY_ANSWERS:-${BEDROCK_ENABLE_VERIFICATION:-false}}"
 
 # AI Quota defaults (exact match with ExamMaker.Application.Ai.AiQuotaOptions)
 AI_JOBS_PER_USER_PER_DAY="${AI_JOBS_PER_USER_PER_DAY:-10}"
@@ -75,8 +80,20 @@ CW_METRIC_NAMESPACE="${CW_METRIC_NAMESPACE:-ExamMaker/$(echo "${ENV_NAME:0:1}" |
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
 
-if [ "$BEDROCK_ENABLE_VERIFICATION" != "true" ] && [ "$BEDROCK_ENABLE_VERIFICATION" != "false" ]; then
-  echo "ERROR: BEDROCK_ENABLE_VERIFICATION must be 'true' or 'false' (got '${BEDROCK_ENABLE_VERIFICATION}')." >&2
+is_pos_int32() {
+  local val="$1"
+  [[ "$val" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "${#val}" -lt 10 ] || { [ "${#val}" -eq 10 ] && [[ ! "$val" > "2147483647" ]]; }
+}
+
+is_pos_int64() {
+  local val="$1"
+  [[ "$val" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "${#val}" -lt 19 ] || { [ "${#val}" -eq 19 ] && [[ ! "$val" > "9223372036854775807" ]]; }
+}
+
+if [ "$AI_GENERATION_VERIFY_ANSWERS" != "true" ] && [ "$AI_GENERATION_VERIFY_ANSWERS" != "false" ]; then
+  echo "ERROR: AI_GENERATION_VERIFY_ANSWERS must be 'true' or 'false' (got '${AI_GENERATION_VERIFY_ANSWERS}')." >&2
   exit 1
 fi
 
@@ -85,16 +102,25 @@ if [ "$BEDROCK_MODEL_ID" != "$BEDROCK_DEV_MODEL_ID" ] && [ "$BEDROCK_MODEL_ID" !
   exit 1
 fi
 
-# Validate AI Quota defaults / overrides (must match ExamMaker.Application.Ai.AiQuotaOptions & SQS maxReceiveCount=3)
-for quota_var in "AI_JOBS_PER_USER_PER_DAY:${AI_JOBS_PER_USER_PER_DAY}" \
+# Validate AI Quota defaults / overrides (int32 and int64 bounds matching ExamMaker.Application.Ai.AiQuotaOptions & SQS maxReceiveCount=3)
+for int32_var in "AI_JOBS_PER_USER_PER_DAY:${AI_JOBS_PER_USER_PER_DAY}" \
                  "AI_MAX_QUESTIONS_PER_JOB:${AI_MAX_QUESTIONS_PER_JOB}" \
-                 "AI_TOKENS_PER_USER_PER_DAY:${AI_TOKENS_PER_USER_PER_DAY}" \
-                 "AI_SYSTEM_TOKENS_PER_DAY:${AI_SYSTEM_TOKENS_PER_DAY}" \
-                 "AI_MAX_NOTE_LENGTH:${AI_MAX_NOTE_LENGTH}"; do
-  var_name="${quota_var%%:*}"
-  var_val="${quota_var#*:}"
-  if [[ ! "$var_val" =~ ^[1-9][0-9]*$ ]]; then
-    echo "ERROR: ${var_name} must be a positive integer (got '${var_val}')." >&2
+                 "AI_MAX_NOTE_LENGTH:${AI_MAX_NOTE_LENGTH}" \
+                 "AI_RATE_PERMIT_LIMIT:${AI_RATE_PERMIT_LIMIT}"; do
+  var_name="${int32_var%%:*}"
+  var_val="${int32_var#*:}"
+  if ! is_pos_int32 "$var_val"; then
+    echo "ERROR: ${var_name} must be a positive 32-bit integer in 1..2147483647 (got '${var_val}')." >&2
+    exit 1
+  fi
+done
+
+for int64_var in "AI_TOKENS_PER_USER_PER_DAY:${AI_TOKENS_PER_USER_PER_DAY}" \
+                 "AI_SYSTEM_TOKENS_PER_DAY:${AI_SYSTEM_TOKENS_PER_DAY}"; do
+  var_name="${int64_var%%:*}"
+  var_val="${int64_var#*:}"
+  if ! is_pos_int64 "$var_val"; then
+    echo "ERROR: ${var_name} must be a positive 64-bit integer in 1..9223372036854775807 (got '${var_val}')." >&2
     exit 1
   fi
 done
@@ -104,14 +130,8 @@ if [ "$AI_MAX_ATTEMPTS" != "3" ]; then
   exit 1
 fi
 
-if [ "$AI_SYSTEM_TOKENS_PER_DAY" -lt "$AI_TOKENS_PER_USER_PER_DAY" ]; then
+if [ "${#AI_SYSTEM_TOKENS_PER_DAY}" -lt "${#AI_TOKENS_PER_USER_PER_DAY}" ] || { [ "${#AI_SYSTEM_TOKENS_PER_DAY}" -eq "${#AI_TOKENS_PER_USER_PER_DAY}" ] && [[ "$AI_SYSTEM_TOKENS_PER_DAY" < "$AI_TOKENS_PER_USER_PER_DAY" ]]; }; then
   echo "ERROR: AI_SYSTEM_TOKENS_PER_DAY (${AI_SYSTEM_TOKENS_PER_DAY}) must be >= AI_TOKENS_PER_USER_PER_DAY (${AI_TOKENS_PER_USER_PER_DAY})." >&2
-  exit 1
-fi
-
-# Validate AI Rate Limit defaults / overrides (must match ExamMaker.Api.Ai.AiRateLimitOptions & .NET TimeSpan)
-if [[ ! "$AI_RATE_PERMIT_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
-  echo "ERROR: AI_RATE_PERMIT_LIMIT must be a positive integer (got '${AI_RATE_PERMIT_LIMIT}')." >&2
   exit 1
 fi
 
@@ -132,7 +152,9 @@ cleanup_tmp_secret() {
     rm -rf "$TMP_SECRET_DIR"
   fi
 }
-trap cleanup_tmp_secret EXIT INT TERM
+trap cleanup_tmp_secret EXIT
+trap 'cleanup_tmp_secret; exit 130' INT
+trap 'cleanup_tmp_secret; exit 143' TERM
 
 generate_origin_secret() {
   if command -v openssl >/dev/null 2>&1; then
@@ -166,6 +188,17 @@ check_ssm_param_status() {
   return 1
 }
 
+is_protected_runtime_suffix() {
+  case "$1" in
+    Bedrock/ModelId|Bedrock/DevModelId|Bedrock/DemoModelId|AiGeneration/VerifyAnswers)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 should_overwrite_param() {
   local name="$1"
   local suffix="${name#"${SSM_PREFIX}/"}"
@@ -182,10 +215,11 @@ should_overwrite_param() {
     done
   fi
 
-  # 2. Bulk overwrite via OVERWRITE_CONFIG=1 protects live demo runtime toggles
-  #    (Bedrock/ModelId and Bedrock/EnableAnswerVerification) unless OVERWRITE_BEDROCK_RUNTIME=1.
+  # 2. Bulk overwrite via OVERWRITE_CONFIG=1 protects live demo runtime toggles AND
+  #    the Bedrock model triplet together (Bedrock/{ModelId,DevModelId,DemoModelId} +
+  #    AiGeneration/VerifyAnswers) unless OVERWRITE_BEDROCK_RUNTIME=1.
   if [ "$OVERWRITE_CONFIG" = "1" ]; then
-    if [ "$suffix" = "Bedrock/ModelId" ] || [ "$suffix" = "Bedrock/EnableAnswerVerification" ]; then
+    if is_protected_runtime_suffix "$suffix"; then
       [ "$OVERWRITE_BEDROCK_RUNTIME" = "1" ] && return 0 || return 1
     fi
     return 0
@@ -213,8 +247,8 @@ put_string_param() {
         --description "$desc" \
         --overwrite >/dev/null
       echo "    [UPDATED]  ${name} = ${value}"
-    elif [ "$OVERWRITE_CONFIG" = "1" ] && { [ "$suffix" = "Bedrock/ModelId" ] || [ "$suffix" = "Bedrock/EnableAnswerVerification" ]; }; then
-      echo "    [PROTECTED] ${name} (preserved demo/runtime toggle; set OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS='${suffix}' to overwrite)"
+    elif [ "$OVERWRITE_CONFIG" = "1" ] && is_protected_runtime_suffix "$suffix"; then
+      echo "    [PROTECTED] ${name} (preserved Bedrock/AI runtime toggle; set OVERWRITE_BEDROCK_RUNTIME=1 or OVERWRITE_KEYS='${suffix}' to overwrite)"
     else
       echo "    [KEPT]     ${name} (already exists; set OVERWRITE_CONFIG=1 or OVERWRITE_KEYS='${suffix}' to overwrite)"
     fi
@@ -303,10 +337,48 @@ put_secret_json_payload() {
 }
 
 put_origin_secret_param() {
-  local name="${SSM_PREFIX}/Origin/VerifySecret"
-  local desc="Shared secret for CloudFront X-Origin-Verify header and Nginx origin-secret.conf (O4/O5/O12)"
+  local name="${SSM_OPS_PREFIX}/Origin/VerifySecret"
+  local legacy_name="${SSM_PREFIX}/Origin/VerifySecret"
+  local desc="Shared secret for CloudFront X-Origin-Verify header and Nginx origin-secret.conf (O4/O5/O12; isolated under ops prefix)"
   local status=""
+  local legacy_status=""
   status="$(check_ssm_param_status "$name")"
+  legacy_status="$(check_ssm_param_status "$legacy_name")"
+
+  # Automatically migrate legacy /exammaker/<env>/Origin/VerifySecret to /exammaker-ops/<env>/Origin/VerifySecret
+  if [ "$legacy_status" = "exists" ]; then
+    if [ "$status" = "missing" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
+      local legacy_val=""
+      legacy_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_name" --with-decryption --query "Parameter.Value" --output text)"
+      local mig_payload=""
+      mig_payload="$(jq -nc \
+        --arg name "$name" \
+        --arg val "$legacy_val" \
+        --arg desc "$desc" \
+        --arg env "$ENV_NAME" \
+        '{
+          Name: $name,
+          Type: "SecureString",
+          Tier: "Standard",
+          KeyId: "alias/aws/ssm",
+          Value: $val,
+          Description: $desc,
+          Tags: [
+            {Key: "Project", Value: "ai-exam-maker"},
+            {Key: "Environment", Value: $env},
+            {Key: "Task", Value: "O12"}
+          ]
+        }')"
+      if ! put_secret_json_payload "$mig_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
+        echo "ERROR: Failed to migrate ${legacy_name} to ${name}." >&2
+        return 1
+      fi
+      status="exists"
+      echo "    [MIGRATED] ${legacy_name} -> ${name} (version ${LAST_PUT_SECRET_VERSION}, isolated from app prefix)"
+    fi
+    aws ssm delete-parameter --region "$AWS_REGION" --name "$legacy_name" >/dev/null
+    echo "    [REMOVED]  ${legacy_name} (removed from app prefix '${SSM_PREFIX}/')"
+  fi
 
   if [ "$status" = "exists" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
     if [ -n "$ORIGIN_VERIFY_SECRET" ] || [ "$ORIGIN_VERIFY_SECRET_STDIN" = "1" ]; then
@@ -387,7 +459,44 @@ put_origin_secret_param() {
   fi
 }
 
-echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | SSM Prefix: ${SSM_PREFIX}"
+migrate_ops_rds_master_password() {
+  local legacy_rds_pw="${SSM_PREFIX}/Rds/MasterPassword"
+  local ops_rds_pw="${SSM_OPS_PREFIX}/Rds/MasterPassword"
+  if [ "$(check_ssm_param_status "$legacy_rds_pw")" = "exists" ]; then
+    if [ "$(check_ssm_param_status "$ops_rds_pw")" = "missing" ]; then
+      local pw_val=""
+      pw_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_rds_pw" --with-decryption --query "Parameter.Value" --output text)"
+      local pw_payload=""
+      pw_payload="$(jq -nc \
+        --arg name "$ops_rds_pw" \
+        --arg val "$pw_val" \
+        --arg desc "RDS master password migrated out of app prefix (O10/O12 least privilege)" \
+        --arg env "$ENV_NAME" \
+        '{
+          Name: $name,
+          Type: "SecureString",
+          Tier: "Standard",
+          KeyId: "alias/aws/ssm",
+          Value: $val,
+          Description: $desc,
+          Tags: [
+            {Key: "Project", Value: "ai-exam-maker"},
+            {Key: "Environment", Value: $env},
+            {Key: "Task", Value: "O10"}
+          ]
+        }')"
+      if ! put_secret_json_payload "$pw_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
+        echo "ERROR: Failed to migrate ${legacy_rds_pw} to ${ops_rds_pw}." >&2
+        return 1
+      fi
+      echo "    [MIGRATED] ${legacy_rds_pw} -> ${ops_rds_pw} (isolated from app prefix)"
+    fi
+    aws ssm delete-parameter --region "$AWS_REGION" --name "$legacy_rds_pw" >/dev/null
+    echo "    [REMOVED]  ${legacy_rds_pw} (removed from app prefix '${SSM_PREFIX}/')"
+  fi
+}
+
+echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | App Prefix: ${SSM_PREFIX} | Ops Prefix: ${SSM_OPS_PREFIX}"
 echo "==> Mode: OVERWRITE_CONFIG=${OVERWRITE_CONFIG}, OVERWRITE_BEDROCK_RUNTIME=${OVERWRITE_BEDROCK_RUNTIME}, OVERWRITE_KEYS='${OVERWRITE_KEYS}', ROTATE_ORIGIN_SECRET=${ROTATE_ORIGIN_SECRET}"
 
 echo ""
@@ -395,12 +504,36 @@ echo "==> 1. AWS Core parameters..."
 put_string_param "${SSM_PREFIX}/AWS/Region" "$AWS_REGION" "Default AWS region for SDK clients (AWS:Region)"
 
 echo ""
-echo "==> 2. Amazon Bedrock parameters..."
+echo "==> 2. Amazon Bedrock & AI Generation parameters..."
 put_string_param "${SSM_PREFIX}/Bedrock/Region" "$BEDROCK_REGION" "AWS region for Amazon Bedrock invocation (Bedrock:Region)"
 put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bedrock model/inference profile ID (Claude Haiku 4.5 for dev, Claude Sonnet 4.6 for demo)"
 put_string_param "${SSM_PREFIX}/Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID" "Target Bedrock model/inference profile ID for dev/cost-saving rollback (Claude Haiku 4.5)"
 put_string_param "${SSM_PREFIX}/Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID" "Target Bedrock model/inference profile ID for demo (Claude Sonnet 4.6)"
-put_string_param "${SSM_PREFIX}/Bedrock/EnableAnswerVerification" "$BEDROCK_ENABLE_VERIFICATION" "Toggle optional AI answer verification pass (false for dev, true for demo)"
+
+# Migrate legacy Bedrock/EnableAnswerVerification -> AiGeneration/VerifyAnswers (bound to AiGenerationOptions.VerifyAnswers in B4)
+LEGACY_VERIFY_KEY="${SSM_PREFIX}/Bedrock/EnableAnswerVerification"
+if [ "$(check_ssm_param_status "$LEGACY_VERIFY_KEY")" = "exists" ]; then
+  if [ "$(check_ssm_param_status "${SSM_PREFIX}/AiGeneration/VerifyAnswers")" = "missing" ]; then
+    LEGACY_VERIFY_VAL="$(aws ssm get-parameter --region "$AWS_REGION" --name "$LEGACY_VERIFY_KEY" --query "Parameter.Value" --output text)"
+    if [ "$LEGACY_VERIFY_VAL" = "true" ] || [ "$LEGACY_VERIFY_VAL" = "false" ]; then
+      AI_GENERATION_VERIFY_ANSWERS="$LEGACY_VERIFY_VAL"
+    fi
+  fi
+  put_string_param "${SSM_PREFIX}/AiGeneration/VerifyAnswers" "$AI_GENERATION_VERIFY_ANSWERS" "Toggle optional AI answer verification pass (AiGeneration:VerifyAnswers; false for dev, true for demo)"
+  aws ssm delete-parameter --region "$AWS_REGION" --name "$LEGACY_VERIFY_KEY" >/dev/null
+  echo "    [REMOVED]  ${LEGACY_VERIFY_KEY} (migrated to ${SSM_PREFIX}/AiGeneration/VerifyAnswers)"
+else
+  put_string_param "${SSM_PREFIX}/AiGeneration/VerifyAnswers" "$AI_GENERATION_VERIFY_ANSWERS" "Toggle optional AI answer verification pass (AiGeneration:VerifyAnswers; false for dev, true for demo)"
+fi
+
+# Verify live SSM invariant: Bedrock/ModelId must match effective Bedrock/DevModelId or Bedrock/DemoModelId
+LIVE_ACTIVE_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/ModelId" --query "Parameter.Value" --output text)"
+LIVE_DEV_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/DevModelId" --query "Parameter.Value" --output text)"
+LIVE_DEMO_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/DemoModelId" --query "Parameter.Value" --output text)"
+if [ "$LIVE_ACTIVE_MODEL" != "$LIVE_DEV_MODEL" ] && [ "$LIVE_ACTIVE_MODEL" != "$LIVE_DEMO_MODEL" ]; then
+  echo "ERROR: Live '${SSM_PREFIX}/Bedrock/ModelId' ('${LIVE_ACTIVE_MODEL}') does not match DevModelId ('${LIVE_DEV_MODEL}') or DemoModelId ('${LIVE_DEMO_MODEL}'). Use OVERWRITE_BEDROCK_RUNTIME=1 or update ModelId." >&2
+  exit 1
+fi
 
 echo ""
 echo "==> 3. AI Quota parameters (bound to AiQuotaOptions)..."
@@ -417,8 +550,9 @@ put_string_param "${SSM_PREFIX}/AiRateLimit/PermitLimit" "$AI_RATE_PERMIT_LIMIT"
 put_string_param "${SSM_PREFIX}/AiRateLimit/Window" "$AI_RATE_WINDOW" "Fixed-window TimeSpan for per-user AI rate limiter (hh:mm:ss)"
 
 echo ""
-echo "==> 5. Origin Verify Secret (CloudFront <-> Nginx)..."
+echo "==> 5. Ops-only Secrets under '${SSM_OPS_PREFIX}/' (Origin Verify Secret & RDS MasterPassword isolation)..."
 put_origin_secret_param
+migrate_ops_rds_master_password
 
 echo ""
 echo "==> 6. CloudWatch Observability metadata..."
@@ -426,5 +560,5 @@ put_string_param "${SSM_PREFIX}/CloudWatch/LogGroupName" "$CW_LOG_GROUP_NAME" "C
 put_string_param "${SSM_PREFIX}/CloudWatch/MetricNamespace" "$CW_METRIC_NAMESPACE" "CloudWatch custom metrics namespace for ExamMaker"
 
 echo ""
-echo "DONE: Parameter Store setup (O12) completed under '${SSM_PREFIX}/'."
+echo "DONE: Parameter Store setup (O12) completed under '${SSM_PREFIX}/' and '${SSM_OPS_PREFIX}/'."
 echo "Next step: run './infra/ssm/verify-ssm.sh' to verify all parameters across O9-O12, encryption, and \$0 cost tier."

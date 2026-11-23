@@ -14,20 +14,18 @@
       "Resource": "${SQS_QUEUE_ARN}"
     },
     {
-      "Sid": "BedrockModelInvocation",
+      "Sid": "BedrockInferenceProfileInvocation",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel"
       ],
       "Resource": [
-        "${BEDROCK_HAIKU_MODEL_ARN}",
-        "${BEDROCK_SONNET_MODEL_ARN}",
         "${BEDROCK_HAIKU_INFERENCE_PROFILE_ARN}",
         "${BEDROCK_SONNET_INFERENCE_PROFILE_ARN}"
       ]
     },
     {
-      "Sid": "BedrockCrossRegionFoundationModelViaApprovedProfile",
+      "Sid": "BedrockFoundationModelViaApprovedProfile",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel"
@@ -77,6 +75,19 @@
       "Resource": [
         "${PARAMETER_ARN_PREFIX}",
         "${PARAMETER_ARN_PREFIX}/*"
+      ]
+    },
+    {
+      "Sid": "DenyNonAppSecretsInParameterStore",
+      "Effect": "Deny",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": [
+        "${PARAMETER_ARN_PREFIX}/Rds/MasterPassword",
+        "${PARAMETER_ARN_PREFIX}/Origin/*"
       ]
     },
     {
