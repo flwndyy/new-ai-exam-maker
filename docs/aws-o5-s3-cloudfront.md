@@ -99,26 +99,27 @@ Upload bản build static từ thư mục `frontend/out/` sau khi chạy build:
 cd frontend
 npm ci
 npm run build
-# HTML và file chưa fingerprint: cache ngắn để deploy có hiệu lực nhanh.
-aws s3 sync out/ s3://<bucket-name>/ --delete \
-  --exclude "_next/static/*" \
-  --exclude "assets/*" \
-  --cache-control "public,max-age=60,must-revalidate"
 # Asset fingerprinted: cache lâu, immutable.
 aws s3 cp out/ s3://<bucket-name>/ --recursive \
   --exclude "*" \
   --include "_next/static/*" \
   --include "assets/*" \
   --cache-control "public,max-age=31536000,immutable"
+# HTML và file chưa fingerprint: cache ngắn để deploy có hiệu lực nhanh.
+aws s3 sync out/ s3://<bucket-name>/ --delete \
+  --exclude "_next/static/*" \
+  --exclude "assets/*" \
+  --cache-control "public,max-age=60,must-revalidate"
 aws cloudfront create-invalidation \
   --distribution-id <distribution-id> \
   --paths "/*"
 ```
 
-Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường. Lượt `sync` đầu
-không đụng vào asset fingerprinted; lượt `cp --recursive` luôn ghi lại metadata của nhóm
-asset để bảo đảm `Cache-Control: immutable`, kể cả khi nội dung asset không đổi. Invalidation
-vẫn được chạy sau deploy để xóa object cũ còn nằm trong edge cache.
+Chỉ chạy `--delete` khi đã kiểm tra đúng bucket frontend của môi trường. Luôn upload asset
+fingerprinted trước, rồi mới đưa HTML mới lên để HTML không tham chiếu chunk chưa có trên
+S3. Lượt `sync` không đụng vào asset fingerprinted; lượt `cp --recursive` luôn ghi lại
+metadata của nhóm asset để bảo đảm `Cache-Control: immutable`, kể cả khi nội dung asset
+không đổi. Invalidation vẫn được chạy sau deploy để xóa object cũ còn nằm trong edge cache.
 
 ## 5. Behavior `/api/*` tới origin EC2
 
