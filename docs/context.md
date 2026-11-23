@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.19** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.19** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -319,7 +319,7 @@ flowchart LR
 | RDS PostgreSQL (`db.t4g.micro`, Single-AZ)                | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập                                         |
 | SQS (+ DLQ)                                               | Hàng đợi job AI                                                                                    |
 | S3                                                        | Bucket frontend (qua OAC); bucket tài liệu/file xuất (sau MVP), private + presigned URL            |
-| IAM                                                       | Instance profile EC2, least privilege (SQS, Bedrock, SSM, Cognito Admin\*, S3 nếu dùng)            |
+| IAM                                                       | Instance profile EC2 least privilege; GitHub OIDC provider dùng chung và role deploy riêng cho từng pipeline, khóa theo repository, workflow và nhánh `main` |
 | KMS                                                       | Mã hóa; **ưu tiên key do AWS quản lý** (aws/ssm, aws/rds, aws/s3) để không phát sinh phí key riêng |
 | Parameter Store                                           | Connection string, ModelId, cấu hình quota, ID Cognito, origin secret                              |
 | CloudWatch (retention 7 ngày)                             | Log, alarm, metric (mục 10)                                                                        |
@@ -354,7 +354,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 1. **Next.js static export** (`output: 'export'`): không SSR, Server Actions, middleware, ISR; toàn bộ dữ liệu qua REST API phía client. Chi tiết routing ở mục 9.
 2. **API + Worker chung máy**, tách project trong code (`ExamMaker.Worker`) để sau tách deploy dễ. Giới hạn bộ nhớ từng process (`t4g.small` chỉ 2 GB RAM).
 3. **EC2 ở public subnet, RDS ở private subnet, không NAT Gateway** (NAT tốn phí đáng kể so với $200). Đã chọn `t4g` (ARM) nên build `linux-arm64`.
-4. **Secrets/config chỉ qua Parameter Store**, EC2 dùng instance profile, không dùng access key.
+4. **Secrets/config chỉ qua Parameter Store**, EC2 dùng instance profile; GitHub Actions dùng OIDC với role riêng cho từng pipeline, không dùng access key dài hạn.
 5. **Auth**: Authorization Code + PKCE với Cognito; API validate JWT (issuer, audience/client id, hết hạn) rồi tải user từ DB (mục 3.3).
 6. **Hạ tầng dựng qua Console + script trong `/infra`** (Nginx, systemd, CloudFront Function, bootstrap) kèm runbook trong `docs/`; không chứa ID/ARN thật. IaC hoàn chỉnh để sau MVP.
 
@@ -553,7 +553,7 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 
 ## 11. CI/CD, migration, rollback
 
-- **Frontend**: GitHub Actions → build → `aws s3 sync` → CloudFront invalidation. Rollback: deploy lại commit trước (giữ artifact build gần nhất).
+- **Frontend**: GitHub Actions dùng OIDC assume role frontend; chỉ workflow có claim name `Deploy frontend` và `ref` `main` được deploy → build → `aws s3 sync` → CloudFront invalidation. `.github/workflows/deploy-frontend.yml` là quy ước đặt file của O7, không phải điều kiện mà trust policy hiện tại kiểm tra. Rollback: deploy lại commit trước (giữ artifact build gần nhất).
 - **Backend**: build/publish (`linux-arm64`) → đẩy artifact lên S3/SSM → trên EC2 giải nén vào thư mục theo phiên bản (`/opt/exammaker/releases/<id>`), đổi symlink `current`, restart service systemd (API + Worker). **Giữ N bản gần nhất** để rollback bằng cách đổi lại symlink. Kiểm tra health endpoint sau deploy.
 - **Migration**: dùng EF Core migration bundle chạy **trước** khi chuyển phiên bản mới; thay đổi schema theo kiểu **tương thích ngược** (thêm cột/bảng trước, xóa sau), để rollback code không vỡ DB. **Chụp snapshot RDS thủ công** trước migration lớn.
 - Môi trường: tối thiểu `local` + `demo/prod` (không dựng môi trường staging đầy đủ vì ngân sách); nêu rõ nếu dùng chung.
@@ -645,8 +645,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 ## Lịch sử thay đổi
 
-**0.19 — 22/11/2026**
+**0.19 — 22–23/11/2026**
 - Triển khai lõi AI B4: lọc câu trùng theo khóa chuẩn hóa (stem + text phương án/ý) với ngân hàng cùng môn/chương và trong lô, giữ ordinal gốc, thêm `ai_generation_jobs.duplicates_dropped`; kiểm chứng đáp án tùy chọn bằng một lần gọi model (`answer-verify-v1`, cờ `AiGeneration:VerifyAnswers`), lỗi chỉ đưa câu về `NotChecked`. Thêm mục "Chi tiết triển khai B4" ở 4.1.2 và cập nhật 8.1.
+- Chốt xác thực CI/CD bằng GitHub OIDC thay cho access key dài hạn: OIDC provider dùng chung ở cấp AWS account, mỗi pipeline có role least-privilege riêng; role frontend O7 khóa theo repository, workflow name claim `Deploy frontend` và nhánh `main` (file `deploy-frontend.yml` là quy ước, chưa phải điều kiện trust), còn O15 dùng role backend riêng. Bổ sung mẫu trust/permission policy và runbook O6.
 
 **0.18 — 22/11/2026**
 - Triển khai `GET /api/v1/audit-logs` (A8), cột `audit_logs.department_id` và `audit_logs.is_secondary`, index `(created_at, id)`: lọc phạm vi Head theo snapshot tổ tại thời điểm sự kiện (giữ hiển thị `actor.fullName` kể cả khi actor đã chuyển tổ), dòng `department_id` NULL chỉ Admin xem, khóa constructor/setter của `AuditLog` để bắt buộc tạo dòng qua `AuditLog.Create`, dùng `is_secondary` chống trùng dòng trên danh sách Admin khi chuyển tổ giữa hai tổ khác NULL (kèm ghi audit chuyển tổ cho các `Topic` con khi chuyển `Subject`, và che GUID tổ/môn của tổ khác trong `note` khi Head xem thông qua hằng định dạng dùng chung), lấy tổ cố định của câu bị xóa cho `RemoveQuestionFromSet`, đổi cận `to` của `GET /audit-logs` sang inclusive (`<=`, chưa có consumer phụ thuộc cận exclusive cũ) với kiểm tra chặt định dạng ISO-8601 / `YYYY-MM-DD`, và chốt backfill phương án (b) chỉ cho thực thể hiện có mang tổ bất biến (`Question`, `Exam`, `ExamVersion`, `Department`). Cập nhật mục 3.2, A3, 8.1/A2, 14, `docs/erd.md` và `docs/api/openapi.yaml`.
