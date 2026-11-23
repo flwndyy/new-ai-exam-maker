@@ -30,7 +30,7 @@ Trong IAM → **Roles → Create role → Web identity**:
 - Audience: `sts.amazonaws.com`.
 - Sau khi tạo role, thay trust policy bằng mẫu tại
   `infra/iam/github-actions-oidc-trust-policy.example.json`.
-- Thay `<ACCOUNT_ID>` bằng Account ID ngay trong IAM Console, không sửa file trong
+- Thay `${AWS_ACCOUNT_ID}` bằng Account ID ngay trong IAM Console, không sửa file trong
   repository.
 
 Đối chiếu JSON sau khi wizard tạo role. Với policy khóa theo `ref:refs/heads/main`,
@@ -62,8 +62,15 @@ Các quyền O7 dự kiến cần cấp:
 
 Policy mẫu tại `infra/iam/github-actions-frontend-deploy-policy.example.json` dùng
 placeholder `${FRONTEND_BUCKET_ARN}`, `${FRONTEND_BUCKET_OBJECT_ARN}` và
-`${CLOUDFRONT_DISTRIBUTION_ARN}`. Thay placeholder bằng ARN thật trực tiếp trong
-IAM Console; không ghi ARN thật vào repo.
+`${CLOUDFRONT_DISTRIBUTION_ARN}`:
+
+- `${FRONTEND_BUCKET_ARN}` = `arn:aws:s3:::<bucket-name>` — không có `/*`, dùng cho
+  `s3:ListBucket`.
+- `${FRONTEND_BUCKET_OBJECT_ARN}` = `arn:aws:s3:::<bucket-name>/*` — có `/*`, dùng
+  cho `PutObject`, `GetObject` và `DeleteObject`.
+
+Thay placeholder bằng ARN thật trực tiếp trong IAM Console; không ghi ARN thật vào
+repo.
 
 ## 4. Kiểm tra an toàn
 
