@@ -37,7 +37,7 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 | | `/exammaker/dev/Rds/{InstanceId,Endpoint,Port,Database,Username}` | `String` | Do O10 tạo | OPS / CD migration (O15) |
 | **SQS (O11)** | `/exammaker/dev/Sqs/AiJobsQueueUrl` | `String` | Do O11 tạo | `Sqs:AiJobsQueueUrl` (`AiServiceCollectionExtensions.cs`) |
 | | `/exammaker/dev/Sqs/{AiJobsQueueArn,AiJobsDlqUrl,AiJobsDlqArn}` | `String` | Do O11 tạo | EC2 IAM (O3), CloudWatch (O13) |
-| **Bedrock (O12)** | `/exammaker/dev/Bedrock/Region` | `String` | `ap-southeast-1` | Worker B6 (chưa có code đọc ở hiện tại) |
+| **Bedrock (O12)** | `/exammaker/dev/Bedrock/Region` | `String` | `ap-southeast-1` | Worker B6 (`BedrockOptions.Region`; trống thì dùng `AWS:Region`) |
 | | `/exammaker/dev/Bedrock/ModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Worker B6 (chưa có code đọc ở hiện tại; Haiku 4.5 cho dev, đổi sang Sonnet 4.6 khi demo) |
 | | `/exammaker/dev/Bedrock/DevModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Tham chiếu model dev/tiết kiệm chi phí (Claude Haiku 4.5) để rollback sau demo (B6) |
 | | `/exammaker/dev/Bedrock/DemoModelId` | `String` | `global.anthropic.claude-sonnet-4-6` | Tham chiếu model demo (Claude Sonnet 4.6) (B6) |
@@ -103,7 +103,7 @@ Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-e
 
 ### 4.2 Chuyển đổi cấu hình Dev (Haiku 4.5) ↔ Demo (Sonnet 4.6)
 
-> **Trạng thái hiệu lực (chỉ có tác dụng sau khi hoàn thành Task B6):** Class `AiGenerationOptions` (trong `backend/src/ExamMaker.Application/Ai/Generation/AiQuestionGenerator.cs`, đã có thuộc tính `VerifyAnswers` từ B4) và các khóa `Bedrock/*` (`Bedrock:Region`, `Bedrock:ModelId`, `Bedrock:DevModelId`, `Bedrock:DemoModelId`) **hiện chưa được bind từ `IConfiguration` trong DI** — việc bind `AiGeneration` và `Bedrock` thuộc **Task B6 (Worker)**. Trước khi B6 hoàn tất và deploy lên EC2, các lệnh dưới đây chỉ cập nhật giá trị chờ sẵn trên Parameter Store.
+> **Trạng thái hiệu lực (từ Task B6):** Worker bind `AiGeneration` (gồm `VerifyAnswers`) và `Bedrock:Region`, `Bedrock:ModelId`, `Bedrock:TimeoutSeconds` từ `IConfiguration`. `Bedrock:DevModelId`/`Bedrock:DemoModelId` chỉ là giá trị tham chiếu cho thao tác chuyển cấu hình dưới đây, Worker không đọc. Worker đọc Parameter Store **một lần lúc khởi động**: sau khi đổi giá trị phải `sudo systemctl restart exammaker-worker` thì mới có hiệu lực.
 
 **Trước buổi demo (chuyển sang Sonnet 4.6 + bật kiểm chứng đáp án):**
 

@@ -51,6 +51,25 @@ public sealed class AiWorkerRegistrationTests
     }
 
     [Fact]
+    public void Bedrock_region_comes_from_Bedrock_Region_before_AWS_Region()
+    {
+        // O12 stores /exammaker/<env>/Bedrock/Region; AWS:Region stays the fallback for the other AWS clients.
+        var settings = Settings();
+        settings["Bedrock:Region"] = "us-east-1";
+        using var provider = Build(settings);
+
+        Assert.Equal(Amazon.RegionEndpoint.USEast1, provider.GetRequiredService<IAmazonBedrockRuntime>().Config.RegionEndpoint);
+    }
+
+    [Fact]
+    public void Bedrock_region_falls_back_to_AWS_Region()
+    {
+        using var provider = Build(Settings());
+
+        Assert.Equal(Amazon.RegionEndpoint.APSoutheast1, provider.GetRequiredService<IAmazonBedrockRuntime>().Config.RegionEndpoint);
+    }
+
+    [Fact]
     public void Bedrock_http_timeout_does_not_cut_calls_before_the_configured_timeout()
     {
         // Without an explicit Timeout the SDK's HttpClient default (100 s) would end calls before Bedrock:TimeoutSeconds.

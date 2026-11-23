@@ -1,10 +1,6 @@
 # AI Exam Maker — Project Context
 
-<<<<<<< HEAD
-> **Phiên bản 0.20** — làm rõ state machine, phân quyền, API và dữ liệu (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
-=======
-> **Phiên bản 0.20** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
->>>>>>> origin/dev
+> **Phiên bản 0.21** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -220,8 +216,8 @@ AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và
 - **Heartbeat**: lease = visibility = 300s, mỗi 60s gia hạn lease DB **trước** rồi `ChangeMessageVisibility(300)` để visibility luôn hết sau lease. Lệnh gia hạn chạy trên DbContext riêng (heartbeat chạy song song với job; DbContext không thread-safe và không được lọt vào transaction lưu kết quả). Lưu kết quả lỗi thì xóa change tracker để lệnh `Failed` sau đó không lưu nhầm câu hỏi. Mỗi lần gọi Bedrock tối đa 120s, cả job tối đa 10 phút (quá hạn = lỗi `Timeout` retryable).
 - **Lỗi**: non-retryable, `QuotaExceeded`, `RequesterUnavailable`, `InvalidRequest` → `Failed`, xóa message. Retryable khi còn lượt → job về `Queued` (lưu mã/câu lỗi "hệ thống sẽ thử lại", `last_enqueued_at=now()`), visibility theo `AiRetryPolicy` 30/120/300s; retryable ở lượt cuối → worker tự `Failed` và xóa message, nên DLQ chủ yếu chỉ nhận message của worker chết giữa chừng. Job `Failed` vì hết lượt giữ mã lỗi gần nhất nhưng `error_message` là câu của `AttemptsExhausted` (không còn hứa "sẽ thử lại"). Lỗi DB khi đọc khóa trùng là retryable. Dừng host (deploy) → job về `Queued`, `attempt` giảm 1, worker gửi một message `{jobId}` mới rồi xóa message cũ (message mới có số lần nhận bằng 0 nên deploy không đẩy job về phía DLQ); gửi lỗi thì đặt visibility 0 cho message cũ.
 - **Quét định kỳ** (mỗi 60s): `Running` hết lease còn lượt → `Queued` (`last_enqueued_at=now()`), hết lượt → `Failed`; `Queued` có `last_enqueued_at` quá 10 phút → gửi lại SQS; `Queued` có `created_at` quá 15 phút → log `Warning`. Không tự `Failed` job chờ lâu (EC2 tắt ban đêm).
-- **Bedrock**: Converse API, `Bedrock:ModelId` (có thể là inference profile) từ Parameter Store, SDK không tự retry; lỗi SDK ánh xạ sang `AiModelException` theo loại, log không chứa message gốc/nội dung.
-- Cấu hình `Worker:*` (MaxConcurrency 2, LeaseSeconds 300, HeartbeatSeconds 60, JobTimeoutMinutes 10, RecoveryIntervalSeconds 60, RequeueAfterMinutes 10, StaleQueuedWarnMinutes 15), `Bedrock:ModelId`, `Bedrock:TimeoutSeconds` 120. Thiếu `Sqs:AiJobsQueueUrl` hoặc `Bedrock:ModelId`: Development chỉ cảnh báo và không chạy worker; môi trường khác khởi động thất bại.
+- **Bedrock**: Converse API, `Bedrock:ModelId` (inference profile) và `Bedrock:Region` (trống thì dùng `AWS:Region`) từ Parameter Store, SDK không tự retry; lỗi SDK ánh xạ sang `AiModelException` theo loại, log không chứa message gốc/nội dung.
+- Cấu hình `Worker:*` (MaxConcurrency 2, LeaseSeconds 300, HeartbeatSeconds 60, JobTimeoutMinutes 10, RecoveryIntervalSeconds 60, RequeueAfterMinutes 10, StaleQueuedWarnMinutes 15), `Bedrock:ModelId`, `Bedrock:Region`, `Bedrock:TimeoutSeconds` 120. Thiếu `Sqs:AiJobsQueueUrl` hoặc `Bedrock:ModelId`: Development chỉ cảnh báo và không chạy worker; môi trường khác khởi động thất bại.
 - Mã lỗi mới: `QuotaExceeded`, `RequesterUnavailable`, `AttemptsExhausted`.
 
 ### 4.2 Vòng đời câu hỏi
@@ -666,18 +662,15 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 ## Lịch sử thay đổi
 
-**0.20 — 23/11/2026**
-<<<<<<< HEAD
-- Triển khai Worker B6: claim idempotent có fencing theo `attempt`, heartbeat lease + visibility, quota token trước mỗi lần gọi model và ghi token sau mỗi lần gọi, lưu câu + kết quả job trong một transaction, phân loại lỗi/backoff/shutdown, quét định kỳ job treo và gửi lại job kẹt `Queued`, adapter Bedrock Converse. Thêm cột `ai_generation_jobs.last_enqueued_at`, mã lỗi `QuotaExceeded`/`RequesterUnavailable`/`AttemptsExhausted`. Thêm mục "Chi tiết triển khai B6" ở 4.1.2, cập nhật 4.1.1 và 8.1.
+**0.21 — 23/11/2026**
+- Triển khai Worker B6: claim idempotent có fencing theo `attempt`, heartbeat lease + visibility, quota token trước mỗi lần gọi model và ghi token sau mỗi lần gọi, lưu câu + kết quả job trong một transaction, phân loại lỗi/backoff/shutdown, quét định kỳ job treo và gửi lại job kẹt `Queued`, adapter Bedrock Converse (bind `Bedrock:Region`, fallback `AWS:Region`). Thêm cột `ai_generation_jobs.last_enqueued_at`, mã lỗi `QuotaExceeded`/`RequesterUnavailable`/`AttemptsExhausted`. Thêm mục "Chi tiết triển khai B6" ở 4.1.2, cập nhật 4.1.1 và 8.1.
 
-**0.19 — 22/11/2026**
-=======
+**0.20 — 23/11/2026**
 
 - Chuẩn hóa AWS Systems Manager Parameter Store (O12): kiểm tra `modelLifecycle` cho thấy các model Claude 3/3.5 cũ đã EOL tại `ap-southeast-1`; chuyển sang inference profile `ACTIVE` gồm `global.anthropic.claude-haiku-4-5-20251001-v1:0` (dev/test) và `global.anthropic.claude-sonnet-4-6` (demo), ghi rõ hệ quả định tuyến cross-region + IAM ARN cho `global.*`, đồng thời tính lại mục 6 ($158.10 ≤ $200, kịch bản 24/7 $178.70–$183.68) và mục 14.
 - Cập nhật phản hồi review PR #75 (lần 4–9): bổ sung ghi chú lưu trú dữ liệu & chốt đánh đổi định tuyến cross-region Bedrock tại mục 1, 5.2, 10, 14 (quy tắc sử dụng và dòng cảnh báo UI dự kiến triển khai ở task B8 cho ô ghi chú tự do của giáo viên); đổi khóa công tắc kiểm chứng đáp án thành `/exammaker/dev/AiGeneration/VerifyAnswers` khớp `AiGenerationOptions.VerifyAnswers` trong `AiQuestionGenerator.cs` (chờ Worker B6 bind); tách secret `/exammaker-ops/dev/Origin/VerifySecret` và `/exammaker-ops/dev/Rds/MasterPassword` ra ngoài prefix `/exammaker/dev/*` (đồng bộ cả `infra/rds/setup-rds.sh` và `docs/runbooks/rds.md`, bỏ `Deny` trên sub-path vì `GetParametersByPath` phân quyền theo path gốc, và ghi rõ `ConnectionStrings/ExamMaker` vẫn dùng chung user master trong MVP); bắt buộc mọi model ID là inference profile và kiểm tra bất biến `ModelId ∈ {DevModelId, DemoModelId}` trên giá trị hiệu lực trước khi ghi; truyền secret vào `jq` qua `env.SECRET_PAYLOAD_VAL` thay vì `--arg`; tách trap `EXIT` / `INT` (`exit 130`) / `TERM` (`exit 143`) và khóa region mặc định `ap-southeast-1`.
 
 **0.19 — 22–23/11/2026**
->>>>>>> origin/dev
 - Triển khai lõi AI B4: lọc câu trùng theo khóa chuẩn hóa (stem + text phương án/ý) với ngân hàng cùng môn/chương và trong lô, giữ ordinal gốc, thêm `ai_generation_jobs.duplicates_dropped`; kiểm chứng đáp án tùy chọn bằng một lần gọi model (`answer-verify-v1`, cờ `AiGeneration:VerifyAnswers`), lỗi chỉ đưa câu về `NotChecked`. Thêm mục "Chi tiết triển khai B4" ở 4.1.2 và cập nhật 8.1.
 - Chốt xác thực CI/CD bằng GitHub OIDC thay cho access key dài hạn: OIDC provider dùng chung ở cấp AWS account, mỗi pipeline có role least-privilege riêng; role frontend O7 khóa theo repository, workflow name claim `Deploy frontend` và nhánh `main` (file `deploy-frontend.yml` là quy ước, chưa phải điều kiện trust), còn O15 dùng role backend riêng. Bổ sung mẫu trust/permission policy và runbook O6.
 

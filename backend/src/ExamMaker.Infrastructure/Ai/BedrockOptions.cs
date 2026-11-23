@@ -9,4 +9,7 @@ public sealed class BedrockOptions
     public string? ModelId { get; set; }
 
     public int TimeoutSeconds { get; set; } = 120;
+
+    /// <summary>Region for Bedrock calls (Parameter Store <c>Bedrock/Region</c>, O12); falls back to <c>AWS:Region</c>.</summary>
+    public string? Region { get; set; }
 }

@@ -35,7 +35,7 @@ public static class AiWorkerServiceCollectionExtensions
                 MaxErrorRetry = 0,
                 Timeout = TimeSpan.FromSeconds(bedrock.TimeoutSeconds + 30),
             };
-            var region = configuration["AWS:Region"];
+            var region = string.IsNullOrWhiteSpace(bedrock.Region) ? configuration["AWS:Region"] : bedrock.Region;
             if (!string.IsNullOrWhiteSpace(region)) config.RegionEndpoint = RegionEndpoint.GetBySystemName(region);
             return new AmazonBedrockRuntimeClient(config);
         });
