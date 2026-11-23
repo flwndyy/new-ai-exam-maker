@@ -631,8 +631,10 @@ migrate_ops_rds_master_password() {
           return 0
         fi
       fi
+      echo "    [WARN]     ${ops_rds_pw} is missing and could not be backfilled from '${SSM_PREFIX}/ConnectionStrings/ExamMaker' (run O10 './infra/rds/setup-rds.sh' first)." >&2
+    else
+      echo "    [KEPT]     ${ops_rds_pw} (SecureString already exists under ops prefix; no legacy Rds/MasterPassword under '${SSM_PREFIX}/')"
     fi
-    echo "    [KEPT]     ${ops_rds_pw} (SecureString already exists under ops prefix; no legacy Rds/MasterPassword under '${SSM_PREFIX}/')"
   fi
 }
 
