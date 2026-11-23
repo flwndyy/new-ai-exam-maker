@@ -48,17 +48,24 @@ public sealed class WorkerDuplicateDeliveryTests(PostgresFixture fixture) : ICla
 
         // Worker 1 claims and then blocks inside the model call; only then does worker 2 get the duplicate.
         var first = worker.HandleAsync(messages[0], new ScriptedModel(ScriptedModel.Gated(gate, 5)));
-        await gate.Entered;
         var idle = new ScriptedModel();
-        await worker.HandleAsync(messages[1], idle);
+        try
+        {
+            await gate.Entered.WaitAsync(TimeSpan.FromSeconds(30));
+            await worker.HandleAsync(messages[1], idle);
 
-        Assert.Equal(0, idle.Calls);
-        Assert.False(messages[1].Deleted);
-        var delay = Assert.Single(messages[1].VisibilityChanges);
-        Assert.InRange(delay, TimeSpan.FromTicks(1), FakeSqsQueue.VisibilityTimeout);
+            Assert.Equal(0, idle.Calls);
+            Assert.False(messages[1].Deleted);
+            var delay = Assert.Single(messages[1].VisibilityChanges);
+            Assert.InRange(delay, TimeSpan.FromTicks(1), FakeSqsQueue.VisibilityTimeout);
+        }
+        finally
+        {
+            // Never leave worker 1 blocked in the model (with an open connection) when an assertion above fails.
+            gate.Release();
+        }
 
-        gate.Release();
-        await first;
+        await first.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(messages[0].Deleted);
 
         await worker.DrainAsync(idle);
