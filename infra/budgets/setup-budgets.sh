@@ -2,10 +2,10 @@
 # Create-if-absent setup script for AWS Budgets $200 Cost Guardrail (AI Exam Maker - Task O14).
 # Creates a notification-only AWS Cost Budget ($0/month) tracking gross credit consumption
 # (IncludeCredit=false, IncludeRefund=false) with 4 alert thresholds:
-#   - ACTUAL     >= 50%  ($100)
-#   - ACTUAL     >= 80%  ($160)
-#   - ACTUAL     >= 100% ($200)
-#   - FORECASTED >= 80%  ($160)
+#   - ACTUAL     > 50%  ($100)
+#   - ACTUAL     > 80%  ($160)
+#   - ACTUAL     > 100% ($200)
+#   - FORECASTED > 80%  ($160)
 #
 # Security & Privacy:
 #   - Never hardcode email addresses or AWS Account ID in Git.
@@ -79,7 +79,7 @@ for raw in "${RAW_EMAILS[@]}"; do
     echo "ERROR: Invalid email format detected in BUDGET_EMAILS." >&2
     exit 1
   fi
-  if [ "$(EMAIL_VAL="$email" jq -r '[.[] | select(.Address == env.EMAIL_VAL)] | length' <<<"$SUBSCRIBERS_JSON")" -eq 0 ]; then
+  if [ "$(EMAIL_VAL="$email" jq -r '[.[] | select((.Address | ascii_downcase) == (env.EMAIL_VAL | ascii_downcase))] | length' <<<"$SUBSCRIBERS_JSON")" -eq 0 ]; then
     SUBSCRIBERS_JSON="$(EMAIL_VAL="$email" jq -c '. + [{SubscriptionType: "EMAIL", Address: env.EMAIL_VAL}]' <<<"$SUBSCRIBERS_JSON")"
     SUBSCRIBER_COUNT=$((SUBSCRIBER_COUNT + 1))
   fi
@@ -282,7 +282,7 @@ if [ "$STATUS" = "exists" ]; then
         for sidx in $(seq 0 $((SUBSCRIBER_COUNT - 1))); do
           sub_obj="$(jq -c ".[$sidx]" <<<"$SUBSCRIBERS_JSON")"
           sub_addr="$(jq -r '.Address' <<<"$sub_obj")"
-          has_sub="$(EMAIL_VAL="$sub_addr" jq -r '[.Subscribers[]? | select(.SubscriptionType == "EMAIL" and .Address == env.EMAIL_VAL)] | length' <<<"$existing_subs")"
+          has_sub="$(EMAIL_VAL="$sub_addr" jq -r '[.Subscribers[]? | select(.SubscriptionType == "EMAIL" and (.Address | ascii_downcase) == (env.EMAIL_VAL | ascii_downcase))] | length' <<<"$existing_subs")"
           if [ "$has_sub" -eq 0 ]; then
             CREATE_SUB_PAYLOAD="$(ACCT_ENV="$ACCOUNT_ID" BNAME_ENV="$BUDGET_NAME" NOTIF_ENV="$notif_obj" SUB_ENV="$sub_obj" jq -nc \
               '{AccountId: env.ACCT_ENV, BudgetName: env.BNAME_ENV, Notification: (env.NOTIF_ENV | fromjson), Subscriber: (env.SUB_ENV | fromjson)}')"
@@ -292,7 +292,7 @@ if [ "$STATUS" = "exists" ]; then
 
         # 2. Remove stale EMAIL subscribers not in BUDGET_EMAILS
         stale_list="$(DESIRED_ENV="$SUBSCRIBERS_JSON" jq -c \
-          '(env.DESIRED_ENV | fromjson) as $desired | [.Subscribers[]? | select(.SubscriptionType == "EMAIL") | .Address as $a | select(($desired | map(.Address) | index($a)) == null) | {SubscriptionType: "EMAIL", Address: $a}]' \
+          '(env.DESIRED_ENV | fromjson) as $desired | [.Subscribers[]? | select(.SubscriptionType == "EMAIL") | .Address as $a | select(($desired | map(.Address | ascii_downcase) | index($a | ascii_downcase)) == null) | {SubscriptionType: "EMAIL", Address: $a}]' \
           <<<"$existing_subs")"
         stale_count="$(jq -r 'length' <<<"$stale_list")"
         if [ "$stale_count" -gt 0 ]; then

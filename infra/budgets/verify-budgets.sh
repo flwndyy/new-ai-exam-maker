@@ -129,8 +129,6 @@ NOTIFS_JSON="$(aws budgets describe-notifications-for-budget \
   --budget-name "$BUDGET_NAME" \
   --output json)"
 
-ALL_SUB_COUNT_MIN=999
-
 check_threshold() {
   local ntype="$1"
   local thresh="$2"
@@ -159,12 +157,8 @@ check_threshold() {
 
   if [ "$email_count" -ge "$MIN_SUBSCRIBERS" ]; then
     pass "${label}: ${ntype} > ${thresh}% configured with ${email_count} EMAIL subscriber(s)"
-    if [ "$email_count" -lt "$ALL_SUB_COUNT_MIN" ]; then
-      ALL_SUB_COUNT_MIN="$email_count"
-    fi
   else
     fail "${label}: ${ntype} > ${thresh}% has only ${email_count} EMAIL subscriber(s) (expected >= ${MIN_SUBSCRIBERS})"
-    ALL_SUB_COUNT_MIN=0
   fi
 }
 
