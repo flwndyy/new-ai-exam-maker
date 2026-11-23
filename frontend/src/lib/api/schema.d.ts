@@ -421,6 +421,7 @@ export interface paths {
          *     Trả `202` ngay; frontend polling `GET /ai/jobs/{id}`. Chỉ Teacher/Head (Admin → 403).
          *     Vượt quota/rate limit → 429 với `code` = `QuotaExceeded` hoặc `RateLimited`.
          *     `note` được coi là dữ liệu không tin cậy (context 4.1.1), giới hạn độ dài.
+         *     Môn không thuộc tổ chuyên môn của người gửi → 400 với `errors.subjectId`, không tiêu quota.
          */
         post: operations["generateQuestions"];
         delete?: never;
@@ -1022,6 +1023,9 @@ export interface paths {
         /**
          * Thống kê sử dụng AI
          * @description Từ `ai_usage_daily`, một dòng cho mỗi (user, ngày). Sắp xếp `date` giảm dần.
+         *     `from`/`to` là cận gồm, định dạng `YYYY-MM-DD` (UTC). `estimatedCostUsd` = tổng chi phí các job của user
+         *     theo `model_id` (bảng giá cấu hình `AiPricing:Models`, USD/1M token input/output), gom vào ngày UTC của
+         *     `COALESCE(finished_at, started_at, created_at)`; model không có giá tính 0.
          *     `estimatedCostUsd` là ước tính theo bảng giá cấu hình, **không phải hóa đơn AWS**.
          */
         get: operations["adminGetAiUsage"];

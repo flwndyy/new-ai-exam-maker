@@ -12,7 +12,12 @@ internal static class AiTestData
     public static async Task<Guid> CreateUserAsync(PostgresFixture fixture)
     {
         await using var context = fixture.CreateContext();
-        var departmentId = await context.Departments.Select(d => d.Id).FirstAsync();
+        // The API rejects generation for subjects outside the requester's department (B8), so synthetic
+        // requesters belong to the department of the subject used by Request().
+        var departmentId = await context.Subjects
+            .Where(s => s.Id == Request().SubjectId)
+            .Select(s => s.DepartmentId)
+            .SingleAsync();
         // users.email is unique (case-insensitive) since A4, so every synthetic user needs its own address.
         var suffix = Guid.NewGuid().ToString("N");
         var user = new User
@@ -47,6 +52,27 @@ internal static class AiTestData
             Role = role,
             DepartmentId = role == "admin" ? null : departmentId,
             IsActive = isActive,
+        };
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+        return user.Id;
+    }
+
+    /// <summary>A teacher in a freshly created department that owns none of the seeded subjects.</summary>
+    public static async Task<Guid> CreateUserInOtherDepartmentAsync(PostgresFixture fixture)
+    {
+        await using var context = fixture.CreateContext();
+        var suffix = Guid.NewGuid().ToString("N");
+        var department = new ExamMaker.Domain.Catalog.Department { Id = Guid.NewGuid(), Name = "AI test dept " + suffix };
+        context.Departments.Add(department);
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            CognitoSub = "ai-other-" + suffix,
+            Email = $"ai-other-{suffix}@example.invalid",
+            FullName = "Synthetic other-department teacher",
+            Role = "teacher",
+            DepartmentId = department.Id,
         };
         context.Users.Add(user);
         await context.SaveChangesAsync();

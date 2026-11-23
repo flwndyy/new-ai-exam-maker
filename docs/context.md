@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.21** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.22** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -156,6 +156,8 @@ Teacher gửi yêu cầu → API kiểm tra quota → tạo AIGenerationJob(Queu
  → lưu Question(Draft, source=AI) + cập nhật job trong 1 transaction → xóa message SQS
  → Frontend polling GET /ai/jobs/{id} → Teacher rà soát từng câu
 ```
+
+- `POST /ai/generate` từ chối (400 `errors[subjectId]`) môn không thuộc tổ hiện tại của người gửi, **trước khi** giữ quota; kiểm lại trong transaction tạo job (cùng khóa shared catalog 48683402), sai thì trả 400 "danh mục đã thay đổi" và không tiêu quota. Lý do: worker sẽ `Failed` `RequesterUnavailable` và lượt sinh không được hoàn (B8).
 
 #### 4.1.1 Worker: chống xử lý trùng & phục hồi
 
@@ -542,6 +544,15 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 - **Header đề xuất cho O5** (CloudFront Response Headers Policy trên behavior `/*`): `Content-Security-Policy: frame-ancestors 'none'` (meta CSP không hỗ trợ `frame-ancestors`), `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
 - Cấu hình build-time `NEXT_PUBLIC_COGNITO_DOMAIN`, `NEXT_PUBLIC_COGNITO_CLIENT_ID` (tuỳ chọn `NEXT_PUBLIC_API_BASE_URL`) lấy từ Parameter Store/OPS, không commit. Chi tiết và checklist smoke test: `docs/b2-auth-frontend.md`.
 
+#### Chi tiết triển khai B8
+
+- **Trang**: `/ai/` (teacher/head: form sinh câu + danh sách "Job của tôi"), `/ai/job/?id=` (trạng thái job + rà soát), `/admin/ai-usage/` (admin). Menu: "Sinh câu AI" cho teacher/head, "Thống kê AI" cho admin. Người không có tổ (kể cả admin) không thấy form sinh câu.
+- **Form**: môn chỉ lấy trong tổ của người dùng; môn → khối → chương lọc dây chuyền; `count` 1..`maxQuestionsPerJob`; ghi chú tối đa 1000 ký tự. **Cảnh báo cố định dưới ô ghi chú** (tiêu chí nghiệm thu): không nhập thông tin cá nhân học sinh/giáo viên, không dán nguyên văn tài liệu có bản quyền, vì nội dung được gửi tới Bedrock và có thể xử lý ngoài Việt Nam/Singapore — luôn hiển thị, không phụ thuộc focus. Hết lượt/hết token → khóa nút gửi; quota tự tải lại ngay sau `resetsAt` (tối đa mỗi giờ một lần, và khi quay lại tab) nên trang để mở qua giờ reset sẽ mở khóa. `/ai/?from=<jobId>` điền sẵn tham số của job cũ (sinh lại).
+- **Polling** `GET /ai/jobs/{id}`: 2s → 4s → 8s → giữ 15s, dừng khi `Succeeded`/`Failed`, không poll khi tab ẩn; lỗi mạng giữ dữ liệu cũ và báo "đang thử lại". `Queued` quá 15 phút hiện gợi ý hệ thống có thể đang tạm dừng (EC2 tắt ban đêm). Danh sách job refetch 15s khi còn job chưa kết thúc. Mọi dữ liệu đọc từ server nên rời trang rồi quay lại vẫn xem được.
+- **Rà soát**: khi `Succeeded`, trang job hiển thị thẻ từng câu theo thứ tự `questionIds` (đề, đáp án, lời giải, cờ `ai_verification` + note). Nút "Đã rà soát" chỉ khi người xem là tác giả, `source=AI`, chưa rà soát, trạng thái `Draft`/`Rejected`; "Sửa" mở `/questions/detail/?id=`. Thẻ dùng chung cache `["question", id]` với trang chi tiết/duyệt và luôn tải lại khi mở trang job, nên sửa/xóa/rà soát ở trang khác hiện đúng khi quay lại. Câu không còn đọc được (404/403) hiện "không còn khả dụng"; lỗi mạng hiện "không tải được" kèm nút thử lại; nếu đã có bản cache mà tải lại lỗi thì vẫn hiện bản cũ kèm cảnh báo và nút thử lại, ẩn "Đã rà soát" tới khi đọc được bản mới.
+- **Hiển thị nội dung AI** chỉ qua `MathMarkdown` (sanitize trước KaTeX); ghi chú giáo viên hiển thị text thường.
+- **`GET /admin/ai-usage`** (admin): dòng (user, ngày UTC) lấy từ `ai_usage_daily`, sắp ngày giảm dần; `from`/`to` là cận gồm, đúng định dạng `YYYY-MM-DD`; `totals` tính trên toàn bộ kết quả lọc. `estimatedCostUsd` là **ước tính, không phải hóa đơn AWS**: tổng trên `ai_generation_jobs` của người đó theo `model_id`, gom vào ngày UTC của `COALESCE(finished_at, started_at, created_at)` (ngày job chạy khớp ngày token được cộng hơn ngày tạo, vì EC2 tắt 16:00–24:00 UTC), nhân bảng giá `AiPricing:Models:{i}:ModelId|InputPer1MUsd|OutputPer1MUsd` (USD/1M token). Bảng giá là **danh sách** vì model id chứa `:` (ký tự phân cấp key cấu hình .NET); không cấu hình thì dùng mặc định theo mục 6 (Haiku 4.5: 1/5, Sonnet 4.6: 3/15); giá âm hoặc trùng model id làm khởi động thất bại. Model không có giá → chi phí 0 và log `Warning`. Làm tròn 4 chữ số.
+
 ---
 
 ## 10. Bảo mật & giám sát
@@ -661,6 +672,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.22 — 23/11/2026**
+- Triển khai frontend AI B8: form sinh câu kèm cảnh báo cố định dưới ô ghi chú, polling job có backoff, trang job rà soát từng câu với nút "Đã rà soát", sinh lại từ job cũ; trang và endpoint `GET /admin/ai-usage` với chi phí ước tính theo bảng giá model cấu hình (`AiPricing:Models`). `POST /ai/generate` từ chối môn ngoài tổ người gửi trước khi giữ quota. Thêm "Chi tiết triển khai B8" ở 9.2, cập nhật 4.1.
 
 **0.21 — 23/11/2026**
 - Triển khai Worker B6: claim idempotent có fencing theo `attempt`, heartbeat lease + visibility, quota token trước mỗi lần gọi model và ghi token sau mỗi lần gọi, lưu câu + kết quả job trong một transaction, phân loại lỗi/backoff/shutdown, quét định kỳ job treo và gửi lại job kẹt `Queued`, adapter Bedrock Converse (bind `Bedrock:Region`, fallback `AWS:Region`). Thêm cột `ai_generation_jobs.last_enqueued_at`, mã lỗi `QuotaExceeded`/`RequesterUnavailable`/`AttemptsExhausted`. Thêm mục "Chi tiết triển khai B6" ở 4.1.2, cập nhật 4.1.1 và 8.1.

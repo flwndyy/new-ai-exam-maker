@@ -18,6 +18,17 @@ public static class AiServiceCollectionExtensions
         configuration.GetSection(AiQuotaOptions.SectionName).Bind(options);
         services.AddSingleton(options);
 
+        var pricing = new AiPricingOptions();
+        configuration.GetSection(AiPricingOptions.SectionName).Bind(pricing);
+        if (pricing.Models.Count == 0)
+        {
+            pricing.Models = [.. AiPricingOptions.Defaults];
+        }
+
+        services.AddSingleton(pricing);
+        // Built eagerly so an invalid price table (negative, blank or duplicate model id) fails startup.
+        services.AddSingleton(new AiCostEstimator(pricing));
+
         services.AddSingleton(TimeProvider.System);
 
         // Credentials come from the EC2 instance profile; the region is optional configuration.
@@ -54,6 +65,8 @@ public static class AiServiceCollectionExtensions
         services.AddScoped<IAiDuplicateKeySource, EfAiDuplicateKeySource>();
         services.AddScoped<AiGenerationService>();
         services.AddScoped<AiJobQueries>();
+        services.AddScoped<IAiUsageReportReader, EfAiUsageReportReader>();
+        services.AddScoped<AiUsageReportQueries>();
 
         return services;
     }

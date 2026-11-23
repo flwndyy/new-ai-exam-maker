@@ -15,15 +15,25 @@ export function RoleNav() {
       <Link href="/questions/" className="text-sm text-slate-600 hover:text-slate-900">
         {vi.nav.questions}
       </Link>
+      {(me.role === "teacher" || me.role === "head") && (
+        <Link href="/ai/" className="text-sm text-slate-600 hover:text-slate-900">
+          {vi.nav.ai}
+        </Link>
+      )}
       {(me.role === "head" || me.role === "admin") && (
         <Link href="/review/" className="text-sm text-slate-600 hover:text-slate-900">
           {vi.nav.review}
         </Link>
       )}
       {me.role === "admin" && (
-        <Link href="/admin/" className="text-sm text-slate-600 hover:text-slate-900">
-          {vi.nav.admin}
-        </Link>
+        <>
+          <Link href="/admin/ai-usage/" className="text-sm text-slate-600 hover:text-slate-900">
+            {vi.nav.aiUsage}
+          </Link>
+          <Link href="/admin/" className="text-sm text-slate-600 hover:text-slate-900">
+            {vi.nav.admin}
+          </Link>
+        </>
       )}
     </>
   );

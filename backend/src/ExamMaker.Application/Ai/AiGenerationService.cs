@@ -30,7 +30,8 @@ public sealed class AiGenerationService(
             NextUtcMidnight(date));
     }
 
-    public async Task<AiSubmitResult> SubmitAsync(Guid userId, AiGenerateRequest request, CancellationToken ct)
+    public async Task<AiSubmitResult> SubmitAsync(
+        Guid userId, Guid? departmentId, AiGenerateRequest request, CancellationToken ct)
     {
         var errors = AiGenerateRequestValidator.Validate(request, options);
         if (errors.Count > 0)
@@ -39,8 +40,9 @@ public sealed class AiGenerationService(
         }
 
         // Questions must match (topic, subject, grade) by composite FK, so a mismatched request would
-        // only produce a failed job. Reject it before any quota is reserved.
-        errors = await ValidateCatalogAsync(request, ct);
+        // only produce a failed job; so would a subject outside the requester's department (the worker
+        // fails it with RequesterUnavailable). Reject both before any quota is reserved.
+        errors = await ValidateCatalogAsync(request, departmentId, ct);
         if (errors.Count > 0)
         {
             return new AiSubmitResult.ValidationFailed(errors);
@@ -91,12 +93,18 @@ public sealed class AiGenerationService(
         return new AiSubmitResult.Accepted(jobId.Value);
     }
 
-    private async Task<Dictionary<string, string[]>> ValidateCatalogAsync(AiGenerateRequest request, CancellationToken ct)
+    private async Task<Dictionary<string, string[]>> ValidateCatalogAsync(
+        AiGenerateRequest request, Guid? departmentId, CancellationToken ct)
     {
         var errors = new Dictionary<string, string[]>();
-        if (!await catalog.SubjectExistsAsync(request.SubjectId, ct))
+        var subjectDepartmentId = await catalog.FindSubjectDepartmentAsync(request.SubjectId, ct);
+        if (subjectDepartmentId is null)
         {
             errors["subjectId"] = [AiMessages.SubjectNotFound];
+        }
+        else if (subjectDepartmentId != departmentId)
+        {
+            errors["subjectId"] = [AiMessages.SubjectNotInDepartment];
         }
 
         var topic = await catalog.FindTopicAsync(request.TopicId, ct);

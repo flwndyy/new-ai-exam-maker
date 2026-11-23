@@ -53,6 +53,49 @@ public sealed class AiRegistrationTests
     }
 
     [Fact]
+    public void Pricing_defaults_apply_when_nothing_is_configured()
+    {
+        using var provider = BuildProvider(BaseSettings());
+
+        var estimator = provider.GetRequiredService<AiCostEstimator>();
+
+        Assert.Equal(0.024m, estimator.Estimate("global.anthropic.claude-haiku-4-5-20251001-v1:0", 4000, 4000, out _));
+        Assert.Equal(0.072m, estimator.Estimate("global.anthropic.claude-sonnet-4-6", 4000, 4000, out _));
+    }
+
+    [Fact]
+    // The .NET binder appends configured list items to an existing list; configured prices must replace the defaults.
+    public void Configured_pricing_replaces_defaults()
+    {
+        var settings = BaseSettings();
+        settings["AiPricing:Models:0:ModelId"] = "custom-model";
+        settings["AiPricing:Models:0:InputPer1MUsd"] = "2";
+        settings["AiPricing:Models:0:OutputPer1MUsd"] = "4";
+        using var provider = BuildProvider(settings);
+
+        var options = provider.GetRequiredService<AiPricingOptions>();
+        var estimator = provider.GetRequiredService<AiCostEstimator>();
+
+        var only = Assert.Single(options.Models);
+        Assert.Equal("custom-model", only.ModelId);
+        Assert.Equal(0.006m, estimator.Estimate("custom-model", 1000, 1000, out _));
+        Assert.Equal(0m, estimator.Estimate("global.anthropic.claude-sonnet-4-6", 4000, 4000, out var priced));
+        Assert.False(priced);
+    }
+
+    [Fact]
+    // docs/context.md B8: a bad price table must fail startup, not the first admin request.
+    public void Negative_configured_price_fails_at_registration()
+    {
+        var settings = BaseSettings();
+        settings["AiPricing:Models:0:ModelId"] = "custom-model";
+        settings["AiPricing:Models:0:InputPer1MUsd"] = "-1";
+        settings["AiPricing:Models:0:OutputPer1MUsd"] = "4";
+
+        Assert.Throws<InvalidOperationException>(() => BuildProvider(settings));
+    }
+
+    [Fact]
     public void Quota_options_default_to_the_decisions_in_context_md()
     {
         using var provider = BuildProvider(BaseSettings());
