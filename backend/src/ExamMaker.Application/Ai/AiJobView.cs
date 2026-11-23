@@ -17,6 +17,7 @@ public sealed record AiJobView(
     string? PromptVersion,
     long InputTokens,
     long OutputTokens,
+    int DuplicatesDropped,
     IReadOnlyList<Guid> QuestionIds,
     DateTimeOffset CreatedAt,
     DateTimeOffset? StartedAt,

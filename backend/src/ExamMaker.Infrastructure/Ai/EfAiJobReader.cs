@@ -52,7 +52,7 @@ public sealed class EfAiJobReader(ExamMakerDbContext db) : IAiJobReader
     private static IQueryable<JobRow> Project(IQueryable<AiGenerationJob> query) =>
         query.AsNoTracking().Select(j => new JobRow(
             j.Id, j.RequestedBy, j.Requester!.FullName, j.Status, j.Params, j.Attempt, j.MaxAttempts,
-            j.ErrorCode, j.ErrorMessage, j.ModelId, j.PromptVersion, j.InputTokens, j.OutputTokens,
+            j.ErrorCode, j.ErrorMessage, j.ModelId, j.PromptVersion, j.InputTokens, j.OutputTokens, j.DuplicatesDropped,
             j.CreatedAt, j.StartedAt, j.FinishedAt));
 
     private async Task<List<AiJobView>> ToViewsAsync(List<JobRow> rows, CancellationToken ct)
@@ -84,6 +84,7 @@ public sealed class EfAiJobReader(ExamMakerDbContext db) : IAiJobReader
                 r.PromptVersion,
                 r.InputTokens,
                 r.OutputTokens,
+                r.DuplicatesDropped,
                 questionsByJob[r.Id].ToList(),
                 ToUtc(r.CreatedAt),
                 r.StartedAt is { } started ? ToUtc(started) : null,
@@ -109,6 +110,7 @@ public sealed class EfAiJobReader(ExamMakerDbContext db) : IAiJobReader
         string? PromptVersion,
         long InputTokens,
         long OutputTokens,
+        int DuplicatesDropped,
         DateTime CreatedAt,
         DateTime? StartedAt,
         DateTime? FinishedAt);

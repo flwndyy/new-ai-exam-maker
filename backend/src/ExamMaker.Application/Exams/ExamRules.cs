@@ -62,11 +62,11 @@ public static class ExamRules
         }
         else if (action is ExamAction.Publish or ExamAction.Unpublish)
         {
-            if (actor.Role != Roles.Admin) throw Forbidden();
+            if (!actor.IsActive || actor.Role != Roles.Admin) throw Forbidden();
         }
         else if (action == ExamAction.Archive)
         {
-            if (!(actor.Role == Roles.Admin || actor.Role == Roles.Head && actor.DepartmentId == exam.DepartmentId
+            if (!actor.IsActive || !(actor.Role == Roles.Admin || actor.Role == Roles.Head && actor.DepartmentId == exam.DepartmentId
                 || AccessRules.IsOwner(actor, Resource(exam)))) throw Forbidden();
         }
         else RequireOwner(actor, exam);

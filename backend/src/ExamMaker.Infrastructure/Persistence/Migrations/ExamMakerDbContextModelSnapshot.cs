@@ -36,6 +36,12 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("DuplicatesDropped")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("duplicates_dropped");
+
                     b.Property<string>("ErrorCode")
                         .HasColumnType("text")
                         .HasColumnName("error_code");
@@ -102,6 +108,8 @@ namespace ExamMaker.Infrastructure.Persistence.Migrations
                     b.ToTable("ai_generation_jobs", null, t =>
                         {
                             t.HasCheckConstraint("ck_ai_generation_jobs_attempts", "attempt >= 0 AND max_attempts >= 1 AND attempt <= max_attempts");
+
+                            t.HasCheckConstraint("ck_ai_generation_jobs_duplicates_dropped", "duplicates_dropped >= 0");
 
                             t.HasCheckConstraint("ck_ai_generation_jobs_error", "(status <> 'Failed' OR (error_code IS NOT NULL AND length(btrim(error_code)) > 0)) AND (status <> 'Succeeded' OR error_code IS NULL)");
 

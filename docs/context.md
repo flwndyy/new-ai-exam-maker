@@ -75,26 +75,26 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 
 ### 3.2 Ma trận quyền chi tiết
 
-| Hành động                                                                             | Teacher                            | Head                             | Admin                   |
-| ------------------------------------------------------------------------------------- | ---------------------------------- | -------------------------------- | ----------------------- |
-| Sinh câu hỏi bằng AI (trong quota)                                                    | ✓                                  | ✓                                | –                       |
-| Xem câu hỏi `Draft`/`Rejected`                                                        | của mình                           | của mình                         | tất cả (chỉ xem)        |
-| Sửa/xóa câu hỏi `Draft`/`Rejected` của mình (xóa chỉ khi chưa được đề nào tham chiếu) | ✓                                  | ✓                                | –                       |
-| Gửi duyệt / rút lại câu hỏi của mình (`Draft`/`Rejected` → `Submitted`)               | ✓                                  | ✓                                | –                       |
-| Đánh dấu "Đã rà soát" câu AI của mình (`mark-reviewed`)                               | ✓                                  | ✓                                | –                       |
-| Archive câu hỏi `Approved`                                                            | của mình                           | của mình hoặc cùng tổ | tất cả                  |
-| Duyệt/từ chối câu hỏi                                                                 | –                                  | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
-| Xem câu hỏi `Approved`                                                                | cùng tổ                            | cùng tổ                          | tất cả                  |
-| Tạo đề, ghép câu (của mình hoặc `Approved` cùng tổ)                                   | ✓                                  | ✓                                | –                       |
-| Gửi duyệt / rút lại phiên bản đề của mình (`Draft`/`Rejected` → `Submitted`)          | ✓                                  | ✓                                | –                       |
-| Tạo phiên bản mới từ đề đã có (của mình)                                              | ✓                                  | ✓                                | –                       |
-| Duyệt/từ chối phiên bản đề                                                            | –                                  | ✓ (cùng tổ, không phải của mình) | ✓ (không phải của mình) |
-| Publish / Unpublish phiên bản đề `Approved`                                           | –                                  | –                                | ✓                       |
-| Archive phiên bản đề `Approved`/`Rejected`                                            | của mình                           | cùng tổ                          | tất cả                  |
-| Đọc danh mục môn/chương/tổ (`GET /subjects`, `/topics`, `/departments`)               | ✓                                  | ✓                                | ✓                       |
-| Xuất đề học sinh                                                                      | đề của mình & đề Published cùng tổ | như teacher                      | tất cả                  |
-| Xuất **file đáp án/lời giải**                                                         | đề của mình                        | đề trong tổ                      | tất cả                  |
-| Quản lý user, tổ, môn, chương                                                         | –                                  | –                                | ✓                       |
+| Hành động                                                                             | Teacher                            | Head                                                | Admin                   |
+| ------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------- | ----------------------- |
+| Sinh câu hỏi bằng AI (trong quota)                                                    | ✓                                  | ✓                                                   | –                       |
+| Xem câu hỏi `Draft`/`Rejected`                                                        | của mình                           | của mình                                            | tất cả (chỉ xem)        |
+| Sửa/xóa câu hỏi `Draft`/`Rejected` của mình (xóa chỉ khi chưa được đề nào tham chiếu) | ✓                                  | ✓                                                   | –                       |
+| Gửi duyệt / rút lại câu hỏi của mình (`Draft`/`Rejected` → `Submitted`)               | ✓                                  | ✓                                                   | –                       |
+| Đánh dấu "Đã rà soát" câu AI của mình (`mark-reviewed`)                               | ✓                                  | ✓                                                   | –                       |
+| Archive câu hỏi `Approved`                                                            | của mình                           | của mình hoặc cùng tổ                               | tất cả                  |
+| Duyệt/từ chối câu hỏi                                                                 | –                                  | ✓ (cùng tổ, không phải của mình)                    | ✓ (không phải của mình) |
+| Xem câu hỏi `Approved`                                                                | cùng tổ                            | cùng tổ                                             | tất cả                  |
+| Tạo đề, ghép câu (của mình hoặc `Approved` cùng tổ)                                   | ✓                                  | ✓                                                   | –                       |
+| Gửi duyệt / rút lại phiên bản đề của mình (`Draft`/`Rejected` → `Submitted`)          | ✓                                  | ✓                                                   | –                       |
+| Tạo phiên bản mới từ đề đã có (của mình)                                              | ✓                                  | ✓                                                   | –                       |
+| Duyệt/từ chối phiên bản đề                                                            | –                                  | ✓ (cùng tổ, không phải của mình)                    | ✓ (không phải của mình) |
+| Publish / Unpublish phiên bản đề `Approved`                                           | –                                  | –                                                   | ✓                       |
+| Archive phiên bản đề `Approved`/`Rejected`                                            | của mình                           | cùng tổ                                             | tất cả                  |
+| Đọc danh mục môn/chương/tổ (`GET /subjects`, `/topics`, `/departments`)               | ✓                                  | ✓                                                   | ✓                       |
+| Xuất đề học sinh                                                                      | đề của mình & đề Published cùng tổ | như teacher                                         | tất cả                  |
+| Xuất **file đáp án/lời giải**                                                         | đề của mình                        | đề trong tổ                                         | tất cả                  |
+| Quản lý user, tổ, môn, chương                                                         | –                                  | –                                                   | ✓                       |
 | Xem audit log / thống kê AI                                                           | –                                  | log trong tổ (snapshot tổ; dòng NULL chỉ Admin xem) | tất cả                  |
 
 ### 3.3 Đồng bộ Cognito ↔ PostgreSQL
@@ -189,7 +189,7 @@ AI có thể sai kiến thức/đáp án, nên đầu ra **luôn là `Draft` và
 
 - Lõi AI nằm ở `Application/Ai/Generation`, thuần logic, không gọi AWS. Worker (B6) dùng `AiQuestionGenerator` cho một lần xử lý job; triển khai Bedrock thật của `IAiModelClient` thuộc B6, test dùng fake có kịch bản.
 - **Prompt**: template trong code, phiên bản `AiPromptBuilder.Version` (hiện `question-gen-v1`), đổi nội dung/schema prompt thì phải tăng version; job lưu `prompt_version` và `model_id` từ kết quả. Prompt chỉ chứa tên môn/chương và tham số job, không có dữ liệu cá nhân. Ghi chú giáo viên và tên danh mục được mã hóa thành chuỗi JSON (escape `"`, `\`, ký tự điều khiển, `<`, `>`, `&`), ghi chú nằm trong khối `<teacher_note>` và system prompt quy định khối này chỉ là dữ liệu, không đổi được quy tắc, định dạng, số câu, dạng, chương hay mức độ.
-- **Schema đầu ra**: một object `{"questions":[...]}`, mỗi phần tử đúng các khóa `stem`, `payload`, `explanation` (tùy chọn, chuỗi hoặc null); khóa thừa/thiếu/trùng là vi phạm. Chấp nhận bọc trong một khối ```` ```json ```` duy nhất; không chấp nhận comment, dấu phẩy thừa hay văn bản ngoài JSON. Số câu phải **đúng bằng** số câu yêu cầu. Dạng/mức độ lấy từ yêu cầu job, không lấy từ model.
+- **Schema đầu ra**: một object `{"questions":[...]}`, mỗi phần tử đúng các khóa `stem`, `payload`, `explanation` (tùy chọn, chuỗi hoặc null); khóa thừa/thiếu/trùng là vi phạm. Chấp nhận bọc trong một khối ` ```json ` duy nhất; không chấp nhận comment, dấu phẩy thừa hay văn bản ngoài JSON. Số câu phải **đúng bằng** số câu yêu cầu. Dạng/mức độ lấy từ yêu cầu job, không lấy từ model.
 - Mỗi câu kiểm bằng cùng `QuestionRules.Validate` (gồm `QuestionPayloadRules` mục 8.2) như câu tạo tay: chuẩn hóa stem/explanation, giới hạn 10000 ký tự, payload đúng dạng được yêu cầu. Câu hợp lệ nhận `ordinal` từ 1 theo thứ tự trả về, dùng cho khóa `(ai_job_id, ai_ordinal)`.
 - **Sửa lại (repair)**: JSON hỏng hoặc sai schema → gửi tiếp trong cùng hội thoại thông điệp lỗi do parser sinh (vị trí lỗi như `questions[1].payload`, không trích nội dung model), tối đa `AiGeneration:MaxRepairAttempts` lần (mặc định 1). Vẫn sai → `Failed` với `InvalidJson`/`SchemaViolation`. Model dừng do giới hạn token → `OutputTruncated`, bị lọc nội dung → `ContentRefused`; hai trường hợp này không sửa lại. Mặc định `MaxOutputTokens` 8192, `Temperature` 0.7, cấu hình ở mục `AiGeneration`.
 - **Token theo từng lần gọi**: generator gọi callback sau **mọi** lần gọi model hoàn tất (kể cả đầu ra bị loại) để worker cộng dồn token vào job/`ai_usage_daily`; callback ném lỗi (ví dụ vượt trần token ngày) thì dừng, không gọi tiếp.
@@ -303,19 +303,19 @@ flowchart LR
 
 ### 5.2 Dịch vụ & vai trò
 
-| Dịch vụ                                                   | Vai trò                                                                                            |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| CloudFront + S3 + ACM                                     | Host frontend (Next.js **static export**); HTTPS cho domain; cổng vào cho `/api/*` → EC2           |
-| Cognito                                                   | User Pool, 3 group; phát JWT; self sign-up **tắt**                                                 |
-| EC2 (`t4g.small`, ARM64) + EBS 30 GB + Elastic IP         | Nginx + .NET 10 API + Worker (BackgroundService đọc SQS) cùng máy                                  |
-| RDS PostgreSQL (`db.t4g.micro`, Single-AZ)                | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập                                         |
-| SQS (+ DLQ)                                               | Hàng đợi job AI                                                                                    |
-| S3                                                        | Bucket frontend (qua OAC); bucket tài liệu/file xuất (sau MVP), private + presigned URL            |
-| IAM                                                       | Instance profile EC2, least privilege (SQS, Bedrock, SSM, Cognito Admin\*, S3 nếu dùng)            |
-| KMS                                                       | Mã hóa; **ưu tiên key do AWS quản lý** (aws/ssm, aws/rds, aws/s3) để không phát sinh phí key riêng |
-| Parameter Store                                           | Connection string, ModelId, cấu hình quota, ID Cognito, origin secret                              |
-| CloudWatch (retention 7 ngày)                             | Log, alarm, metric (mục 10)                                                                        |
-| **Amazon Bedrock**                                        | LLM sinh câu hỏi (endpoint gọi từ EC2 worker tại `ap-southeast-1`; dùng inference profile `global.*` định tuyến suy luận đa region, xem mục 1, 6 & 10) — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6 |
+| Dịch vụ                                           | Vai trò                                                                                                                                                                                                      |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CloudFront + S3 + ACM                             | Host frontend (Next.js **static export**); HTTPS cho domain; cổng vào cho `/api/*` → EC2                                                                                                                     |
+| Cognito                                           | User Pool, 3 group; phát JWT; self sign-up **tắt**                                                                                                                                                           |
+| EC2 (`t4g.small`, ARM64) + EBS 30 GB + Elastic IP | Nginx + .NET 10 API + Worker (BackgroundService đọc SQS) cùng máy                                                                                                                                            |
+| RDS PostgreSQL (`db.t4g.micro`, Single-AZ)        | Dữ liệu nghiệp vụ; private subnet, chỉ SG của EC2 truy cập                                                                                                                                                   |
+| SQS (+ DLQ)                                       | Hàng đợi job AI                                                                                                                                                                                              |
+| S3                                                | Bucket frontend (qua OAC); bucket tài liệu/file xuất (sau MVP), private + presigned URL                                                                                                                      |
+| IAM                                               | Instance profile EC2, least privilege (SQS, Bedrock, SSM, Cognito Admin\*, S3 nếu dùng)                                                                                                                      |
+| KMS                                               | Mã hóa; **ưu tiên key do AWS quản lý** (aws/ssm, aws/rds, aws/s3) để không phát sinh phí key riêng                                                                                                           |
+| Parameter Store                                   | Connection string, ModelId, cấu hình quota, ID Cognito, origin secret                                                                                                                                        |
+| CloudWatch (retention 7 ngày)                     | Log, alarm, metric (mục 10)                                                                                                                                                                                  |
+| **Amazon Bedrock**                                | LLM sinh câu hỏi (endpoint gọi từ EC2 worker tại `ap-southeast-1`; dùng inference profile `global.*` định tuyến suy luận đa region, xem mục 1, 6 & 10) — khoản chi phí biến đổi lớn nhất, tính riêng ở mục 6 |
 
 ### 5.3 CloudFront → EC2 (đã chốt, 19/11/2026)
 
@@ -363,22 +363,22 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 - **Quy mô & Quota AI:** ≤ 20 người dùng đồng thời (~30 tài khoản giáo viên demo) · quota tối đa **10 lần sinh/user/ngày** (tối đa 10 câu/lần).
 - **Ước lượng Bedrock:** Trung bình 1 job (5–10 câu + bước kiểm chứng đáp án `ai_verification` + hệ số retry 1.2×) tiêu thụ **~4,000 input tokens + ~4,000 output tokens**. Kết hợp **Claude Haiku 4.5** (`global.anthropic.claude-haiku-4-5-20251001-v1:0`, $1.00/1M input, $5.00/1M output → ~$0.024/job, đang `ACTIVE` tại `ap-southeast-1` do các dòng Claude 3/3.5 cũ đã EOL) cho ~500 jobs/tháng quá trình dev/test và **Claude Sonnet 4.6** (`global.anthropic.claude-sonnet-4-6`, $3.00/1M input, $15.00/1M output → ~$0.072/job, đang `ACTIVE` tại `ap-southeast-1`) cho ~100 jobs/tháng demo chính.
 
-| Hạng mục                                   | Cách tính                                                                                       | Chi phí/tháng (USD)                            | Số tháng | Tổng               |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------- | ------------------ |
-| EC2 (`t4g.small`, 2 vCPU, 2 GB)            | $0.0212/giờ × 480 giờ (07:00–23:00)                                                             | $10.18                                         | 2        | $20.36             |
-| EBS `gp3` 30 GB                            | 30 GB × $0.096/GB-tháng                                                                         | $2.88                                          | 2        | $5.76              |
-| IPv4 công khai / Elastic IP                | 1 EIP × $0.005/giờ × 730 giờ (tính cả khi dừng EC2)                                             | $3.65                                          | 2        | $7.30              |
-| RDS PostgreSQL (`db.t4g.micro`, Single-AZ) | $0.020/giờ × 480 giờ (07:00–23:00)                                                              | $9.60                                          | 2        | $19.20             |
+| Hạng mục                                   | Cách tính                                                                                             | Chi phí/tháng (USD)                            | Số tháng | Tổng               |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------- | ------------------ |
+| EC2 (`t4g.small`, 2 vCPU, 2 GB)            | $0.0212/giờ × 480 giờ (07:00–23:00)                                                                   | $10.18                                         | 2        | $20.36             |
+| EBS `gp3` 30 GB                            | 30 GB × $0.096/GB-tháng                                                                               | $2.88                                          | 2        | $5.76              |
+| IPv4 công khai / Elastic IP                | 1 EIP × $0.005/giờ × 730 giờ (tính cả khi dừng EC2)                                                   | $3.65                                          | 2        | $7.30              |
+| RDS PostgreSQL (`db.t4g.micro`, Single-AZ) | $0.020/giờ × 480 giờ (07:00–23:00)                                                                    | $9.60                                          | 2        | $19.20             |
 | RDS storage (`gp3` 20 GB) + backup         | 20 GB × $0.138 + 5 GB manual snapshot × $0.095 (auto backup ≤ 20 GB free; trần autoscaling max 40 GB) | $3.24                                          | 2        | $6.48              |
-| CloudFront                                 | Always Free (≤ 1 TB data out + 10M HTTPS requests/tháng; demo < 10 GB)                          | $0.00                                          | 2        | $0.00              |
-| S3                                         | ≤ 5 GB × $0.025/GB + ~50,000 PUT/GET requests                                                   | $0.40                                          | 2        | $0.80              |
-| Cognito                                    | Always Free (≤ 10,000 MAU; quy mô dự án < 100 user)                                             | $0.00                                          | 2        | $0.00              |
-| SQS (+ DLQ)                                | Always Free (≤ 1,000,000 requests/tháng; worker long-polling 20s ~260k reqs)                    | $0.00                                          | 2        | $0.00              |
-| CloudWatch (log 7 ngày, alarm, metric)     | 5 GB log + 10 alarm/metric đầu free; dự trù vượt nhẹ log/metric                                 | $1.50                                          | 2        | $3.00              |
-| Domain / Route 53                          | Hosted zone $0.50 + queries $0.40/tháng (+ phí domain ~$10.00/năm tính 1 lần)                   | $0.90 (+ $10 một lần)                          | 2        | $11.80             |
+| CloudFront                                 | Always Free (≤ 1 TB data out + 10M HTTPS requests/tháng; demo < 10 GB)                                | $0.00                                          | 2        | $0.00              |
+| S3                                         | ≤ 5 GB × $0.025/GB + ~50,000 PUT/GET requests                                                         | $0.40                                          | 2        | $0.80              |
+| Cognito                                    | Always Free (≤ 10,000 MAU; quy mô dự án < 100 user)                                                   | $0.00                                          | 2        | $0.00              |
+| SQS (+ DLQ)                                | Always Free (≤ 1,000,000 requests/tháng; worker long-polling 20s ~260k reqs)                          | $0.00                                          | 2        | $0.00              |
+| CloudWatch (log 7 ngày, alarm, metric)     | 5 GB log + 10 alarm/metric đầu free; dự trù vượt nhẹ log/metric                                       | $1.50                                          | 2        | $3.00              |
+| Domain / Route 53                          | Hosted zone $0.50 + queries $0.40/tháng (+ phí domain ~$10.00/năm tính 1 lần)                         | $0.90 (+ $10 một lần)                          | 2        | $11.80             |
 | **Bedrock**                                | 4k in + 4k out tokens/job: 500 jobs Dev (Haiku 4.5: $12.00) + 100 jobs Demo (Sonnet 4.6: $7.20)/tháng | $19.20                                         | 2        | $38.40             |
-| **Dự phòng**                               | **≥ 20% ngân sách $200 (22.5%)** — bù khi chạy lố giờ hoặc tăng lượt gọi AI                     | —                                              | —        | **$45.00**         |
-| **Tổng**                                   | Hạ tầng ($74.70) + Bedrock ($38.40) + Dự phòng ($45.00)                                         | **$51.55/tháng** (+ $10 domain & $45 dự phòng) | 2        | **$158.10 ≤ $200** |
+| **Dự phòng**                               | **≥ 20% ngân sách $200 (22.5%)** — bù khi chạy lố giờ hoặc tăng lượt gọi AI                           | —                                              | —        | **$45.00**         |
+| **Tổng**                                   | Hạ tầng ($74.70) + Bedrock ($38.40) + Dự phòng ($45.00)                                               | **$51.55/tháng** (+ $10 domain & $45 dự phòng) | 2        | **$158.10 ≤ $200** |
 
 > _Ghi chú độ an toàn:_ Ngay cả trong trường hợp cao điểm chạy **24/7 (730 giờ/tháng)** suốt cả 2 tháng không tắt máy (EC2 +$10.60, RDS +$10.00 → tổng +$20.60 so với $158.10) hoặc chọn `t3.small` (x86, +$4.98), tổng chi phí toàn dự án kể cả $45.00 dự phòng vẫn chỉ ở mức **$178.70–$183.68 ≤ $200.00**.
 
@@ -397,7 +397,7 @@ Không dùng ALB, nên kết nối này phải tự bảo mật:
 | Tầng     | Công nghệ                                                                                                           |
 | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | Frontend | **Next.js** (App Router, TypeScript, static export), Tailwind CSS, TanStack Query, React Hook Form + Zod, **KaTeX** |
-| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, validation thuần ở Application, Serilog → CloudWatch |
+| Backend  | **.NET 10** (LTS), ASP.NET Core Web API, EF Core + Npgsql, validation thuần ở Application, Serilog → CloudWatch     |
 | CSDL     | PostgreSQL, EF Core migrations                                                                                      |
 | AWS SDK  | SQS, SimpleSystemsManagement, BedrockRuntime, CognitoIdentityProvider (admin)                                       |
 | CI/CD    | GitHub Actions (mục 11)                                                                                             |
@@ -638,17 +638,24 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 
 ## Lịch sử thay đổi
 
-**0.20 — 23/11/2026 (đánh số 0.20 để tránh trùng 0.19 với nhánh B4 `feat/question-verifier`)**
+**0.20 — 23/11/2026**
+
 - Chuẩn hóa AWS Systems Manager Parameter Store (O12): kiểm tra `modelLifecycle` cho thấy các model Claude 3/3.5 cũ đã EOL tại `ap-southeast-1`; chuyển sang inference profile `ACTIVE` gồm `global.anthropic.claude-haiku-4-5-20251001-v1:0` (dev/test) và `global.anthropic.claude-sonnet-4-6` (demo), ghi rõ hệ quả định tuyến cross-region + IAM ARN cho `global.*`, đồng thời tính lại mục 6 ($158.10 ≤ $200, kịch bản 24/7 $178.70–$183.68) và mục 14.
 - Cập nhật phản hồi review PR #75 (lần 4–8): bổ sung ghi chú lưu trú dữ liệu & chốt đánh đổi định tuyến cross-region Bedrock tại mục 1, 5.2, 10, 14 (quy tắc sử dụng và dòng cảnh báo UI dự kiến triển khai ở task B8 cho ô ghi chú tự do của giáo viên); đổi khóa công tắc kiểm chứng đáp án thành `/exammaker/dev/AiGeneration/VerifyAnswers` khớp trực tiếp `AiGenerationOptions.VerifyAnswers` của B4; tách các secret không dành cho app (`Origin/VerifySecret`, `Rds/MasterPassword`) sang prefix riêng `/exammaker-ops/dev/*` kèm statement `Deny` trong IAM policy EC2; bỏ placeholder foundation-model không điều kiện để bắt buộc mọi lệnh gọi model đi qua `bedrock:InferenceProfileArn`; tách trap `EXIT` / `INT` (`exit 130`) / `TERM` (`exit 143`), kiểm tra cận trên `int32`/`int64` cho quota/rate-limit, bảo vệ trọn bộ 3 khóa `Bedrock/{ModelId,DevModelId,DemoModelId}` + `AiGeneration/VerifyAnswers` khi chạy `OVERWRITE_CONFIG=1`, và làm rõ check EOL foundation model trong `verify-ssm.sh` là best-effort bổ trợ bên cạnh `profile.status == ACTIVE`.
 
+**0.19 — 22/11/2026**
+- Triển khai lõi AI B4: lọc câu trùng theo khóa chuẩn hóa (stem + text phương án/ý) với ngân hàng cùng môn/chương và trong lô, giữ ordinal gốc, thêm `ai_generation_jobs.duplicates_dropped`; kiểm chứng đáp án tùy chọn bằng một lần gọi model (`answer-verify-v1`, cờ `AiGeneration:VerifyAnswers`), lỗi chỉ đưa câu về `NotChecked`. Thêm mục "Chi tiết triển khai B4" ở 4.1.2 và cập nhật 8.1.
+
 **0.18 — 22/11/2026**
+
 - Triển khai `GET /api/v1/audit-logs` (A8), cột `audit_logs.department_id` và `audit_logs.is_secondary`, index `(created_at, id)`: lọc phạm vi Head theo snapshot tổ tại thời điểm sự kiện (giữ hiển thị `actor.fullName` kể cả khi actor đã chuyển tổ), dòng `department_id` NULL chỉ Admin xem, khóa constructor/setter của `AuditLog` để bắt buộc tạo dòng qua `AuditLog.Create`, dùng `is_secondary` chống trùng dòng trên danh sách Admin khi chuyển tổ giữa hai tổ khác NULL (kèm ghi audit chuyển tổ cho các `Topic` con khi chuyển `Subject`, và che GUID tổ/môn của tổ khác trong `note` khi Head xem thông qua hằng định dạng dùng chung), lấy tổ cố định của câu bị xóa cho `RemoveQuestionFromSet`, đổi cận `to` của `GET /audit-logs` sang inclusive (`<=`, chưa có consumer phụ thuộc cận exclusive cũ) với kiểm tra chặt định dạng ISO-8601 / `YYYY-MM-DD`, và chốt backfill phương án (b) chỉ cho thực thể hiện có mang tổ bất biến (`Question`, `Exam`, `ExamVersion`, `Department`). Cập nhật mục 3.2, A3, 8.1/A2, 14, `docs/erd.md` và `docs/api/openapi.yaml`.
 
 **0.17 — 22/11/2026**
+
 - Triển khai lõi AI B3: prompt có phiên bản và cô lập ghi chú giáo viên, parser/validator đầu ra dùng chung `QuestionRules`, một vòng sửa lại trong cùng hội thoại, phân loại lỗi retryable/non-retryable, backoff visibility và interface model kèm fake cho test. Thêm mục "Chi tiết triển khai B3" ở 4.1.2.
 
 **0.16 — 21/11/2026**
+
 - Triển khai Amazon SQS + DLQ (O11): Standard queue `exammaker-dev-ai-jobs` (`VisibilityTimeout = 300s`, Long Polling `20s`, `maxReceiveCount = 3`, SSE-SQS $0) + DLQ `exammaker-dev-ai-jobs-dlq` (retention 14 ngày, `RedriveAllowPolicy`); ghi rõ ràng buộc timeout Bedrock / heartbeat của Worker B6 trong mục 4.1.1.
 
 **0.15 — 21/11/2026**
@@ -660,6 +667,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 - Triển khai A7: API đề/phiên bản và composition dùng chung B9; snapshot/hash khi submit, token lượt duyệt mili giây, publish duy nhất và audit atomic. Bổ sung quy tắc khóa nguồn phối hợp A6, clone có warning, bảo vệ đáp án và lưu snapshot khi archive bản Rejected.
 
 **0.13 — 21/11/2026**
+
 - Triển khai đăng nhập frontend B2: Authorization Code + PKCE với Cognito, access token trong bộ nhớ, refresh token trong `sessionStorage`, xử lý 401 (`signedOut`/`denied`) và đăng xuất. Bổ sung mục "Chi tiết triển khai B2" ở 9.2 và `docs/b2-auth-frontend.md`.
 - CSP meta sinh lúc build bằng hash script inline; đề xuất header bổ sung cho O5. Chưa xác nhận smoke test Cognito thật (checklist trong `docs/b2-auth-frontend.md`).
 
@@ -687,19 +695,23 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 - Triển khai A6: ngân hàng câu hỏi, state machine ở Application, payload validation, review queue, audit và khóa chống chuyển trạng thái đồng thời.
 
 **0.8 — 20/11/2026**
+
 - Sửa review: bảo vệ tham chiếu job AI đang chờ/chạy, khóa phối hợp với B5, audit xóa có metadata, tên NFC và bộ lọc đúng endpoint.
 - Triển khai A5: API danh mục, phân quyền admin, phân trang/lọc, ràng buộc FK/unique và audit trong cùng transaction. Không thay schema hoặc seed.
 
 **0.7 — 20/11/2026**
+
 - Triển khai Amazon RDS PostgreSQL 16 (O10): Single-AZ, private subnet, mã hóa KMS, backup tự động 3 ngày, `rds.force_ssl=1`; ghi nhận trần autoscaling RDS 40 GB trong mục 6.
 - Sửa review PR #64: log chẩn đoán an toàn, timeout async/lock có giới hạn, audit đổi quyền, client AWS dùng chung, tối giản Create và tách bootstrap khỏi service API.
 - Triển khai quản lý user A4, đồng bộ Cognito có đền bù/fail-closed, đối soát chỉ đọc và bootstrap admin CLI. Bổ sung created_at và unique email cho users theo hợp đồng API.
 
 **0.6 — 20/11/2026**
+
 - Hoàn thiện xác thực A3: access token Cognito, hồ sơ/quyền DB theo request và policy mặc định. Quy tắc quyền dùng chung ở Application; tự duyệt trả 403 `SelfReview`, các lỗi quyền khác trả `Forbidden`.
 - Thống nhất comment kỹ thuật tiếng Anh; tài liệu giải thích tiếng Việt. Bổ sung hướng dẫn B2 xử lý 401 và cấu hình Authority. Chưa xác nhận smoke test Cognito thật.
 
 **0.5 — 19/11/2026**
+
 - Sửa theo review PR #55: audit hệ thống, composite FK catalog, CHECK theo trạng thái, trigger đóng băng snapshot và integration test PostgreSQL chạy trong CI.
 - Hoàn thiện schema A2 cho 13 bảng, khóa ghép, điểm numeric, snapshot nullable khi Draft, quota UTC và audit UUID. Bổ sung CHECK tổ của người dùng và định danh câu AI; giữ các quy tắc chuyển trạng thái ở tầng Application.
 - Danh mục seed gồm 4 tổ riêng, 4 môn Toán/Vật lí/Hóa học/Sinh học và 82 chương khối 10–12 theo Chân Trời Sáng Tạo, từ `docs/catalog-seed-draft.md`.

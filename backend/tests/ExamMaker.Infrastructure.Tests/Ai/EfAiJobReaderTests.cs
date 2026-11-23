@@ -180,4 +180,33 @@ public sealed class EfAiJobReaderTests(PostgresFixture fixture) : IClassFixture<
         Assert.Equal(1, page.TotalItems);
         Assert.Equal(1, page.TotalPages);
     }
+
+    [PostgresFact]
+    public async Task Duplicates_dropped_round_trips()
+    {
+        var userId = await AiTestData.CreateUserAsync(fixture);
+        var jobId = await CreateJobAsync(userId);
+        await using (var context = fixture.CreateContext())
+        {
+            var entity = await context.AiGenerationJobs.SingleAsync(j => j.Id == jobId);
+            entity.DuplicatesDropped = 2;
+            await context.SaveChangesAsync();
+        }
+
+        var job = await GetAsync(jobId);
+
+        Assert.Equal(2, job!.DuplicatesDropped);
+    }
+
+    [PostgresFact]
+    public async Task Negative_duplicates_dropped_is_rejected()
+    {
+        var userId = await AiTestData.CreateUserAsync(fixture);
+        var jobId = await CreateJobAsync(userId);
+        await using var context = fixture.CreateContext();
+        var entity = await context.AiGenerationJobs.SingleAsync(j => j.Id == jobId);
+        entity.DuplicatesDropped = -1;
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => context.SaveChangesAsync());
+    }
 }

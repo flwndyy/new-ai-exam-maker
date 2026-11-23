@@ -2004,7 +2004,7 @@ components:
         - $ref: '#/components/schemas/AiGenerateRequest'
     AiJob:
       type: object
-      required: [id, status, params, attempt, maxAttempts, inputTokens, outputTokens, createdAt, requestedBy]
+      required: [id, status, params, attempt, maxAttempts, inputTokens, outputTokens, duplicatesDropped, createdAt, requestedBy]
       properties:
         id: { type: string, format: uuid }
         requestedBy: { $ref: '#/components/schemas/UserRef' }
@@ -2020,6 +2020,10 @@ components:
         promptVersion: { type: [string, 'null'] }
         inputTokens: { type: integer, minimum: 0 }
         outputTokens: { type: integer, minimum: 0 }
+        duplicatesDropped:
+          type: integer
+          minimum: 0
+          description: Số câu AI sinh ra bị bỏ vì trùng (trong lô hoặc với ngân hàng cùng môn + chương).
         questionIds:
           type: array
           description: Các câu `Draft` đã sinh, theo `aiOrdinal`; rỗng nếu chưa `Succeeded`.

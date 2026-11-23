@@ -10,6 +10,12 @@ public sealed class AiGenerationOptions
     public int MaxOutputTokens { get; set; } = 8192;
 
     public double Temperature { get; set; } = 0.7;
+
+    /// <summary>Run the optional blind-solve answer verification (docs/context.md 4.1.2); off by default because it costs tokens.</summary>
+    public bool VerifyAnswers { get; set; }
+
+    /// <summary>Output token cap for the single verification call, which only returns short answers.</summary>
+    public int VerifyMaxOutputTokens { get; set; } = 2048;
 }
 
 public sealed record AiGenerationResult(
