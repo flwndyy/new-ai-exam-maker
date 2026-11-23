@@ -78,19 +78,6 @@
       ]
     },
     {
-      "Sid": "DenyNonAppSecretsInParameterStore",
-      "Effect": "Deny",
-      "Action": [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath"
-      ],
-      "Resource": [
-        "${PARAMETER_ARN_PREFIX}/Rds/MasterPassword",
-        "${PARAMETER_ARN_PREFIX}/Origin/*"
-      ]
-    },
-    {
       "Sid": "WriteApplicationLogs",
       "Effect": "Allow",
       "Action": [

@@ -38,7 +38,9 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL="*"
 
-AWS_REGION="${AWS_REGION:-ap-southeast-1}"
+EXPECTED_REGION="ap-southeast-1"
+AWS_REGION="${AWS_REGION:-$EXPECTED_REGION}"
+ALLOW_NON_DEFAULT_REGION="${ALLOW_NON_DEFAULT_REGION:-0}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
 SSM_OPS_PREFIX="${SSM_OPS_PREFIX:-/exammaker-ops/${ENV_NAME}}"
@@ -79,6 +81,31 @@ CW_METRIC_NAMESPACE="${CW_METRIC_NAMESPACE:-ExamMaker/$(echo "${ENV_NAME:0:1}" |
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
+
+if [ "$AWS_REGION" != "$EXPECTED_REGION" ] && [ "$ALLOW_NON_DEFAULT_REGION" != "1" ]; then
+  echo "ERROR: AWS_REGION is '${AWS_REGION}', but AI Exam Maker requires '${EXPECTED_REGION}' (Singapore). Unset AWS_REGION, switch CloudShell to ${EXPECTED_REGION}, or set ALLOW_NON_DEFAULT_REGION=1 if intentional." >&2
+  exit 1
+fi
+
+if [ "$BEDROCK_REGION" != "$EXPECTED_REGION" ] && [ "$ALLOW_NON_DEFAULT_REGION" != "1" ]; then
+  echo "ERROR: BEDROCK_REGION is '${BEDROCK_REGION}', expected '${EXPECTED_REGION}' (or set ALLOW_NON_DEFAULT_REGION=1)." >&2
+  exit 1
+fi
+
+is_valid_inference_profile_format() {
+  [[ "$1" =~ ^(global|apac|us|eu)\.[A-Za-z0-9._:-]+$ ]]
+}
+
+for model_var in "BEDROCK_MODEL_ID:${BEDROCK_MODEL_ID}" \
+                 "BEDROCK_DEV_MODEL_ID:${BEDROCK_DEV_MODEL_ID}" \
+                 "BEDROCK_DEMO_MODEL_ID:${BEDROCK_DEMO_MODEL_ID}"; do
+  m_name="${model_var%%:*}"
+  m_val="${model_var#*:}"
+  if ! is_valid_inference_profile_format "$m_val"; then
+    echo "ERROR: ${m_name} ('${m_val}') must be an inference profile ID (prefix global./apac./us./eu.) to match EC2 IAM policy." >&2
+    exit 1
+  fi
+done
 
 is_pos_int32() {
   local val="$1"
@@ -346,14 +373,19 @@ put_origin_secret_param() {
   legacy_status="$(check_ssm_param_status "$legacy_name")"
 
   # Automatically migrate legacy /exammaker/<env>/Origin/VerifySecret to /exammaker-ops/<env>/Origin/VerifySecret
+  # Always preserve/sync the legacy value into the ops parameter version history before deleting the legacy parameter.
   if [ "$legacy_status" = "exists" ]; then
-    if [ "$status" = "missing" ] && [ "$ROTATE_ORIGIN_SECRET" != "1" ]; then
-      local legacy_val=""
-      legacy_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_name" --with-decryption --query "Parameter.Value" --output text)"
+    local legacy_val=""
+    legacy_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_name" --with-decryption --query "Parameter.Value" --output text)"
+    if [ -z "$legacy_val" ]; then
+      echo "ERROR: Read empty value from legacy ${legacy_name}; aborting migration to avoid losing secret." >&2
+      return 1
+    fi
+
+    if [ "$status" = "missing" ]; then
       local mig_payload=""
-      mig_payload="$(jq -nc \
+      mig_payload="$(SECRET_PAYLOAD_VAL="$legacy_val" jq -nc \
         --arg name "$name" \
-        --arg val "$legacy_val" \
         --arg desc "$desc" \
         --arg env "$ENV_NAME" \
         '{
@@ -361,7 +393,7 @@ put_origin_secret_param() {
           Type: "SecureString",
           Tier: "Standard",
           KeyId: "alias/aws/ssm",
-          Value: $val,
+          Value: env.SECRET_PAYLOAD_VAL,
           Description: $desc,
           Tags: [
             {Key: "Project", Value: "ai-exam-maker"},
@@ -375,6 +407,36 @@ put_origin_secret_param() {
       fi
       status="exists"
       echo "    [MIGRATED] ${legacy_name} -> ${name} (version ${LAST_PUT_SECRET_VERSION}, isolated from app prefix)"
+    else
+      local ops_val=""
+      ops_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$name" --with-decryption --query "Parameter.Value" --output text)"
+      if [ "$legacy_val" != "$ops_val" ]; then
+        local sync_payload=""
+        sync_payload="$(SECRET_PAYLOAD_VAL="$legacy_val" jq -nc \
+          --arg name "$name" \
+          --arg desc "$desc" \
+          '{
+            Name: $name,
+            Type: "SecureString",
+            Tier: "Standard",
+            KeyId: "alias/aws/ssm",
+            Value: env.SECRET_PAYLOAD_VAL,
+            Description: $desc,
+            Overwrite: true
+          }')"
+        if ! put_secret_json_payload "$sync_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
+          echo "ERROR: Failed to sync legacy ${legacy_name} into ${name} before removal." >&2
+          return 1
+        fi
+        echo "    [SYNCED]   ${legacy_name} -> ${name} (version ${LAST_PUT_SECRET_VERSION} preserved before removal)"
+      fi
+    fi
+
+    local confirm_ops=""
+    confirm_ops="$(check_ssm_param_status "$name")"
+    if [ "$confirm_ops" != "exists" ]; then
+      echo "ERROR: Destination ${name} could not be confirmed; refusing to delete ${legacy_name}." >&2
+      return 1
     fi
     aws ssm delete-parameter --region "$AWS_REGION" --name "$legacy_name" >/dev/null
     echo "    [REMOVED]  ${legacy_name} (removed from app prefix '${SSM_PREFIX}/')"
@@ -414,16 +476,15 @@ put_origin_secret_param() {
       echo "ERROR: Failed to read current version of ${name} before rotation." >&2
       return 1
     fi
-    payload_json="$(jq -nc \
+    payload_json="$(SECRET_PAYLOAD_VAL="$secret_val" jq -nc \
       --arg name "$name" \
-      --arg val "$secret_val" \
       --arg desc "$desc" \
       '{
         Name: $name,
         Type: "SecureString",
         Tier: "Standard",
         KeyId: "alias/aws/ssm",
-        Value: $val,
+        Value: env.SECRET_PAYLOAD_VAL,
         Description: $desc,
         Overwrite: true
       }')"
@@ -433,9 +494,8 @@ put_origin_secret_param() {
     fi
     echo "    [ROTATED]  ${name} (SecureString previous version ${prev_ver} -> new version ${LAST_PUT_SECRET_VERSION} via alias/aws/ssm — follow 3-step rotation in runbook!)"
   else
-    payload_json="$(jq -nc \
+    payload_json="$(SECRET_PAYLOAD_VAL="$secret_val" jq -nc \
       --arg name "$name" \
-      --arg val "$secret_val" \
       --arg desc "$desc" \
       --arg env "$ENV_NAME" \
       '{
@@ -443,7 +503,7 @@ put_origin_secret_param() {
         Type: "SecureString",
         Tier: "Standard",
         KeyId: "alias/aws/ssm",
-        Value: $val,
+        Value: env.SECRET_PAYLOAD_VAL,
         Description: $desc,
         Tags: [
           {Key: "Project", Value: "ai-exam-maker"},
@@ -462,22 +522,31 @@ put_origin_secret_param() {
 migrate_ops_rds_master_password() {
   local legacy_rds_pw="${SSM_PREFIX}/Rds/MasterPassword"
   local ops_rds_pw="${SSM_OPS_PREFIX}/Rds/MasterPassword"
-  if [ "$(check_ssm_param_status "$legacy_rds_pw")" = "exists" ]; then
-    if [ "$(check_ssm_param_status "$ops_rds_pw")" = "missing" ]; then
-      local pw_val=""
-      pw_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_rds_pw" --with-decryption --query "Parameter.Value" --output text)"
+  local legacy_status=""
+  local ops_status=""
+  legacy_status="$(check_ssm_param_status "$legacy_rds_pw")"
+  ops_status="$(check_ssm_param_status "$ops_rds_pw")"
+
+  if [ "$legacy_status" = "exists" ]; then
+    local pw_val=""
+    pw_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$legacy_rds_pw" --with-decryption --query "Parameter.Value" --output text)"
+    if [ -z "$pw_val" ]; then
+      echo "ERROR: Read empty value from ${legacy_rds_pw}; aborting migration to avoid losing master password." >&2
+      return 1
+    fi
+
+    if [ "$ops_status" = "missing" ]; then
       local pw_payload=""
-      pw_payload="$(jq -nc \
+      pw_payload="$(SECRET_PAYLOAD_VAL="$pw_val" jq -nc \
         --arg name "$ops_rds_pw" \
-        --arg val "$pw_val" \
-        --arg desc "RDS master password migrated out of app prefix (O10/O12 least privilege)" \
+        --arg desc "RDS master password migrated out of app prefix (O10/O12)" \
         --arg env "$ENV_NAME" \
         '{
           Name: $name,
           Type: "SecureString",
           Tier: "Standard",
           KeyId: "alias/aws/ssm",
-          Value: $val,
+          Value: env.SECRET_PAYLOAD_VAL,
           Description: $desc,
           Tags: [
             {Key: "Project", Value: "ai-exam-maker"},
@@ -490,14 +559,131 @@ migrate_ops_rds_master_password() {
         return 1
       fi
       echo "    [MIGRATED] ${legacy_rds_pw} -> ${ops_rds_pw} (isolated from app prefix)"
+    else
+      local ops_pw_val=""
+      ops_pw_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$ops_rds_pw" --with-decryption --query "Parameter.Value" --output text)"
+      if [ "$pw_val" != "$ops_pw_val" ]; then
+        local sync_pw_payload=""
+        sync_pw_payload="$(SECRET_PAYLOAD_VAL="$pw_val" jq -nc \
+          --arg name "$ops_rds_pw" \
+          --arg desc "RDS master password synced from app prefix before removal (O10/O12)" \
+          '{
+            Name: $name,
+            Type: "SecureString",
+            Tier: "Standard",
+            KeyId: "alias/aws/ssm",
+            Value: env.SECRET_PAYLOAD_VAL,
+            Description: $desc,
+            Overwrite: true
+          }')"
+        if ! put_secret_json_payload "$sync_pw_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
+          echo "ERROR: Failed to sync ${legacy_rds_pw} to ${ops_rds_pw}." >&2
+          return 1
+        fi
+        echo "    [SYNCED]   ${legacy_rds_pw} -> ${ops_rds_pw} (version ${LAST_PUT_SECRET_VERSION})"
+      fi
+    fi
+
+    local confirm_pw=""
+    confirm_pw="$(check_ssm_param_status "$ops_rds_pw")"
+    if [ "$confirm_pw" != "exists" ]; then
+      echo "ERROR: Destination ${ops_rds_pw} could not be confirmed; refusing to delete ${legacy_rds_pw}." >&2
+      return 1
     fi
     aws ssm delete-parameter --region "$AWS_REGION" --name "$legacy_rds_pw" >/dev/null
     echo "    [REMOVED]  ${legacy_rds_pw} (removed from app prefix '${SSM_PREFIX}/')"
+  else
+    if [ "$ops_status" = "missing" ]; then
+      local conn_name="${SSM_PREFIX}/ConnectionStrings/ExamMaker"
+      local conn_status=""
+      conn_status="$(check_ssm_param_status "$conn_name")"
+      if [ "$conn_status" = "exists" ]; then
+        local conn_val=""
+        local extracted_pw=""
+        conn_val="$(aws ssm get-parameter --region "$AWS_REGION" --name "$conn_name" --with-decryption --query "Parameter.Value" --output text)"
+        extracted_pw="$(printf '%s' "$conn_val" | sed -n 's/.*Password=\([^;]*\).*/\1/p' | tr -d '\r\n')"
+        unset conn_val
+        if [ -n "$extracted_pw" ]; then
+          local backfill_payload=""
+          backfill_payload="$(SECRET_PAYLOAD_VAL="$extracted_pw" jq -nc \
+            --arg name "$ops_rds_pw" \
+            --arg desc "RDS master password backfilled under ops prefix (O10/O12)" \
+            --arg env "$ENV_NAME" \
+            '{
+              Name: $name,
+              Type: "SecureString",
+              Tier: "Standard",
+              KeyId: "alias/aws/ssm",
+              Value: env.SECRET_PAYLOAD_VAL,
+              Description: $desc,
+              Tags: [
+                {Key: "Project", Value: "ai-exam-maker"},
+                {Key: "Environment", Value: $env},
+                {Key: "Task", Value: "O10"}
+              ]
+            }')"
+          unset extracted_pw
+          if ! put_secret_json_payload "$backfill_payload" || [ -z "$LAST_PUT_SECRET_VERSION" ]; then
+            echo "ERROR: Failed to backfill ${ops_rds_pw}." >&2
+            return 1
+          fi
+          echo "    [CREATED]  ${ops_rds_pw} (SecureString version ${LAST_PUT_SECRET_VERSION} via alias/aws/ssm; isolated under ops prefix)"
+          return 0
+        fi
+      fi
+    fi
+    echo "    [KEPT]     ${ops_rds_pw} (SecureString already exists under ops prefix; no legacy Rds/MasterPassword under '${SSM_PREFIX}/')"
+  fi
+}
+
+resolve_effective_string_param() {
+  local suffix="$1"
+  local target_val="$2"
+  local full="${SSM_PREFIX}/${suffix}"
+  local st=""
+  st="$(check_ssm_param_status "$full")"
+  if [ "$st" = "exists" ]; then
+    if should_overwrite_param "$full"; then
+      printf '%s\n' "$target_val"
+    else
+      aws ssm get-parameter --region "$AWS_REGION" --name "$full" --query "Parameter.Value" --output text | tr -d '\r\n'
+    fi
+  elif [ "$st" = "missing" ]; then
+    printf '%s\n' "$target_val"
+  else
+    echo "ERROR: Failed to resolve status for '${full}'." >&2
+    return 1
+  fi
+}
+
+validate_effective_bedrock_models_before_write() {
+  local eff_model=""
+  local eff_dev=""
+  local eff_demo=""
+  eff_model="$(resolve_effective_string_param "Bedrock/ModelId" "$BEDROCK_MODEL_ID")"
+  eff_dev="$(resolve_effective_string_param "Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID")"
+  eff_demo="$(resolve_effective_string_param "Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID")"
+
+  local pair=""
+  for pair in "Bedrock/ModelId:${eff_model}" "Bedrock/DevModelId:${eff_dev}" "Bedrock/DemoModelId:${eff_demo}"; do
+    local k="${pair%%:*}"
+    local v="${pair#*:}"
+    if ! is_valid_inference_profile_format "$v"; then
+      echo "ERROR: Pre-write validation failed: effective '${SSM_PREFIX}/${k}' ('${v}') is not an inference profile ID (prefix global./apac./us./eu.)." >&2
+      return 1
+    fi
+  done
+
+  if [ "$eff_model" != "$eff_dev" ] && [ "$eff_model" != "$eff_demo" ]; then
+    echo "ERROR: Pre-write validation failed: effective '${SSM_PREFIX}/Bedrock/ModelId' ('${eff_model}') would not match effective DevModelId ('${eff_dev}') or DemoModelId ('${eff_demo}'). Include Bedrock/ModelId in OVERWRITE_KEYS or use OVERWRITE_BEDROCK_RUNTIME=1." >&2
+    return 1
   fi
 }
 
 echo "==> Region: ${AWS_REGION} | Env: ${ENV_NAME} | App Prefix: ${SSM_PREFIX} | Ops Prefix: ${SSM_OPS_PREFIX}"
 echo "==> Mode: OVERWRITE_CONFIG=${OVERWRITE_CONFIG}, OVERWRITE_BEDROCK_RUNTIME=${OVERWRITE_BEDROCK_RUNTIME}, OVERWRITE_KEYS='${OVERWRITE_KEYS}', ROTATE_ORIGIN_SECRET=${ROTATE_ORIGIN_SECRET}"
+
+validate_effective_bedrock_models_before_write
 
 echo ""
 echo "==> 1. AWS Core parameters..."
@@ -510,29 +696,27 @@ put_string_param "${SSM_PREFIX}/Bedrock/ModelId" "$BEDROCK_MODEL_ID" "Active Bed
 put_string_param "${SSM_PREFIX}/Bedrock/DevModelId" "$BEDROCK_DEV_MODEL_ID" "Target Bedrock model/inference profile ID for dev/cost-saving rollback (Claude Haiku 4.5)"
 put_string_param "${SSM_PREFIX}/Bedrock/DemoModelId" "$BEDROCK_DEMO_MODEL_ID" "Target Bedrock model/inference profile ID for demo (Claude Sonnet 4.6)"
 
-# Migrate legacy Bedrock/EnableAnswerVerification -> AiGeneration/VerifyAnswers (bound to AiGenerationOptions.VerifyAnswers in B4)
+# Migrate legacy Bedrock/EnableAnswerVerification -> AiGeneration/VerifyAnswers (AiGenerationOptions.VerifyAnswers in AiQuestionGenerator.cs)
 LEGACY_VERIFY_KEY="${SSM_PREFIX}/Bedrock/EnableAnswerVerification"
-if [ "$(check_ssm_param_status "$LEGACY_VERIFY_KEY")" = "exists" ]; then
-  if [ "$(check_ssm_param_status "${SSM_PREFIX}/AiGeneration/VerifyAnswers")" = "missing" ]; then
+LEGACY_VERIFY_STATUS="$(check_ssm_param_status "$LEGACY_VERIFY_KEY")"
+NEW_VERIFY_STATUS="$(check_ssm_param_status "${SSM_PREFIX}/AiGeneration/VerifyAnswers")"
+if [ "$LEGACY_VERIFY_STATUS" = "exists" ]; then
+  if [ "$NEW_VERIFY_STATUS" = "missing" ]; then
     LEGACY_VERIFY_VAL="$(aws ssm get-parameter --region "$AWS_REGION" --name "$LEGACY_VERIFY_KEY" --query "Parameter.Value" --output text)"
     if [ "$LEGACY_VERIFY_VAL" = "true" ] || [ "$LEGACY_VERIFY_VAL" = "false" ]; then
       AI_GENERATION_VERIFY_ANSWERS="$LEGACY_VERIFY_VAL"
     fi
   fi
   put_string_param "${SSM_PREFIX}/AiGeneration/VerifyAnswers" "$AI_GENERATION_VERIFY_ANSWERS" "Toggle optional AI answer verification pass (AiGeneration:VerifyAnswers; false for dev, true for demo)"
+  CONFIRM_VERIFY_STATUS="$(check_ssm_param_status "${SSM_PREFIX}/AiGeneration/VerifyAnswers")"
+  if [ "$CONFIRM_VERIFY_STATUS" != "exists" ]; then
+    echo "ERROR: Destination ${SSM_PREFIX}/AiGeneration/VerifyAnswers could not be confirmed; refusing to delete ${LEGACY_VERIFY_KEY}." >&2
+    exit 1
+  fi
   aws ssm delete-parameter --region "$AWS_REGION" --name "$LEGACY_VERIFY_KEY" >/dev/null
   echo "    [REMOVED]  ${LEGACY_VERIFY_KEY} (migrated to ${SSM_PREFIX}/AiGeneration/VerifyAnswers)"
 else
   put_string_param "${SSM_PREFIX}/AiGeneration/VerifyAnswers" "$AI_GENERATION_VERIFY_ANSWERS" "Toggle optional AI answer verification pass (AiGeneration:VerifyAnswers; false for dev, true for demo)"
-fi
-
-# Verify live SSM invariant: Bedrock/ModelId must match effective Bedrock/DevModelId or Bedrock/DemoModelId
-LIVE_ACTIVE_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/ModelId" --query "Parameter.Value" --output text)"
-LIVE_DEV_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/DevModelId" --query "Parameter.Value" --output text)"
-LIVE_DEMO_MODEL="$(aws ssm get-parameter --region "$AWS_REGION" --name "${SSM_PREFIX}/Bedrock/DemoModelId" --query "Parameter.Value" --output text)"
-if [ "$LIVE_ACTIVE_MODEL" != "$LIVE_DEV_MODEL" ] && [ "$LIVE_ACTIVE_MODEL" != "$LIVE_DEMO_MODEL" ]; then
-  echo "ERROR: Live '${SSM_PREFIX}/Bedrock/ModelId' ('${LIVE_ACTIVE_MODEL}') does not match DevModelId ('${LIVE_DEV_MODEL}') or DemoModelId ('${LIVE_DEMO_MODEL}'). Use OVERWRITE_BEDROCK_RUNTIME=1 or update ModelId." >&2
-  exit 1
 fi
 
 echo ""

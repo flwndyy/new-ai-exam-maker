@@ -19,13 +19,20 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL="*"
 
-AWS_REGION="${AWS_REGION:-ap-southeast-1}"
+EXPECTED_REGION="ap-southeast-1"
+AWS_REGION="${AWS_REGION:-$EXPECTED_REGION}"
+ALLOW_NON_DEFAULT_REGION="${ALLOW_NON_DEFAULT_REGION:-0}"
 ENV_NAME="${ENV_NAME:-dev}"
 SSM_PREFIX="${SSM_PREFIX:-/exammaker/${ENV_NAME}}"
 SSM_OPS_PREFIX="${SSM_OPS_PREFIX:-/exammaker-ops/${ENV_NAME}}"
 
 command -v aws >/dev/null 2>&1 || { echo "ERROR: aws CLI is required." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (pre-installed in AWS CloudShell; on Windows install via 'winget install jqlang.jq')." >&2; exit 1; }
+
+if [ "$AWS_REGION" != "$EXPECTED_REGION" ] && [ "$ALLOW_NON_DEFAULT_REGION" != "1" ]; then
+  echo "ERROR: AWS_REGION is '${AWS_REGION}', but AI Exam Maker requires '${EXPECTED_REGION}' (Singapore). Unset AWS_REGION, switch CloudShell to ${EXPECTED_REGION}, or set ALLOW_NON_DEFAULT_REGION=1 if intentional." >&2
+  exit 1
+fi
 
 PASSED=0
 FAILURES=0
@@ -277,13 +284,7 @@ is_valid_bedrock_id() {
     return 0
   fi
 
-  # 2. On-demand foundation model (non-profile) fallback
-  local on_demand_fm=""
-  on_demand_fm="$(jq -r --arg id "$mid" '.modelSummaries[]? | select(.modelId == $id and ((.inferenceTypesSupported // []) | index("ON_DEMAND") != null) and (.modelLifecycle.status // "") == "ACTIVE") | .modelId' <<<"$FOUNDATION_JSON" | tr -d '\r\n')"
-  if [ -n "$on_demand_fm" ]; then
-    BEDROCK_LIFECYCLE_NOTE="ON_DEMAND foundation model lifecycle confirmed ACTIVE"
-    return 0
-  fi
+  # Raw foundation model IDs are rejected because the EC2 IAM policy requires bedrock:InferenceProfileArn
   return 1
 }
 
@@ -292,9 +293,9 @@ if [ "$BEDROCK_QUERY_OK" -eq 1 ]; then
     key_name="${label_id%%:*}"
     model_val="${label_id#*:}"
     if [ -n "$model_val" ] && is_valid_bedrock_id "$model_val"; then
-      pass "O12 Bedrock: ${key_name} ('${model_val}') is valid in '${BEDROCK_REGION_VAL}' (${BEDROCK_LIFECYCLE_NOTE})"
+      pass "O12 Bedrock: ${key_name} ('${model_val}') is an ACTIVE inference profile in '${BEDROCK_REGION_VAL}' (${BEDROCK_LIFECYCLE_NOTE})"
     else
-      fail "O12 Bedrock: ${key_name} ('${model_val}') is missing, LEGACY/EOL, or not ACTIVE in '${BEDROCK_REGION_VAL}'"
+      fail "O12 Bedrock: ${key_name} ('${model_val}') is missing, not an ACTIVE inference profile, or underlying model is LEGACY/EOL in '${BEDROCK_REGION_VAL}'"
     fi
   done
 fi
@@ -307,7 +308,7 @@ fi
 
 AI_VERIFY="$(param_val "AiGeneration/VerifyAnswers")"
 if { [ "$AI_VERIFY" = "true" ] || [ "$AI_VERIFY" = "false" ]; } && ! param_exists "Bedrock/EnableAnswerVerification"; then
-  pass "O12 AiGeneration/VerifyAnswers is valid boolean ('${AI_VERIFY}', bound to AiGenerationOptions.VerifyAnswers)"
+  pass "O12 AiGeneration/VerifyAnswers is valid boolean ('${AI_VERIFY}', for AiGenerationOptions.VerifyAnswers in AiQuestionGenerator.cs)"
 else
   fail "O12 AiGeneration/VerifyAnswers must be 'true' or 'false' (got '${AI_VERIFY}') and legacy Bedrock/EnableAnswerVerification must be absent"
 fi
@@ -352,14 +353,17 @@ else
   fail "O12 AI Rate Limit invalid (PermitLimit='${RL_PERMIT}', Window='${RL_WINDOW}' — PermitLimit must be int32 > 0 and Window positive .NET TimeSpan > 0)"
 fi
 
-# 9. O12 Origin VerifySecret under ops prefix & secret isolation from app prefix
+# 9. O12 Origin VerifySecret & O10 Rds/MasterPassword under ops prefix & secret isolation from app prefix
 ORIGIN_TYPE="$(ops_param_type "Origin/VerifySecret")"
 ORIGIN_VAL="$(ops_param_val "Origin/VerifySecret")"
-if [ "$ORIGIN_TYPE" = "SecureString" ] && [ "${#ORIGIN_VAL}" -ge 32 ] && ! param_exists "Origin/VerifySecret" && ! param_exists "Rds/MasterPassword"; then
-  pass "O12 '${SSM_OPS_PREFIX}/Origin/VerifySecret' exists as SecureString (length ${#ORIGIN_VAL} >= 32) and ops secrets (Origin/VerifySecret, Rds/MasterPassword) are isolated from app prefix '${SSM_PREFIX}/'"
+RDS_PW_TYPE="$(ops_param_type "Rds/MasterPassword")"
+RDS_PW_VAL="$(ops_param_val "Rds/MasterPassword")"
+if [ "$ORIGIN_TYPE" = "SecureString" ] && [ "${#ORIGIN_VAL}" -ge 32 ] && [ "$RDS_PW_TYPE" = "SecureString" ] && [ -n "$RDS_PW_VAL" ] && ! param_exists "Origin/VerifySecret" && ! param_exists "Rds/MasterPassword"; then
+  pass "O12 '${SSM_OPS_PREFIX}/Origin/VerifySecret' (length ${#ORIGIN_VAL} >= 32) and '${SSM_OPS_PREFIX}/Rds/MasterPassword' exist as non-empty SecureStrings and are isolated from app prefix '${SSM_PREFIX}/'"
 else
-  fail "O12 Origin/VerifySecret or secret isolation invalid (ops type='${ORIGIN_TYPE}', length=${#ORIGIN_VAL}; app Origin/VerifySecret exists=$(param_exists "Origin/VerifySecret" && echo yes || echo no); app Rds/MasterPassword exists=$(param_exists "Rds/MasterPassword" && echo yes || echo no))"
+  fail "O12 ops secret isolation invalid (ops Origin/VerifySecret type='${ORIGIN_TYPE}', len=${#ORIGIN_VAL}; ops Rds/MasterPassword type='${RDS_PW_TYPE}', non_empty=$([ -n "$RDS_PW_VAL" ] && echo yes || echo no); app Origin/VerifySecret exists=$(param_exists "Origin/VerifySecret" && echo yes || echo no); app Rds/MasterPassword exists=$(param_exists "Rds/MasterPassword" && echo yes || echo no))"
 fi
+unset ORIGIN_VAL RDS_PW_VAL
 
 # 10. O12 CloudWatch metadata
 check_group_present "O12 CloudWatch metadata" \

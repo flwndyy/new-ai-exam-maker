@@ -1,8 +1,8 @@
 # Runbook — Quy ước & Vận hành AWS Systems Manager Parameter Store (Task O12)
 
 Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Systems Manager Parameter Store** cho dự án **AI Exam Maker** (`ap-southeast-1`), đảm bảo:
-- **Ánh xạ tự động vào .NET 10 `IConfiguration`** qua `ParameterStoreConfiguration.cs` khi cấu hình `ParameterStore__Path=/exammaker/<env>` cho **các khóa hiện đã được bind trong code** (xem cột *Nơi sử dụng* ở mục 2: `AWS:Region`, `Cognito:Region|UserPoolId|ClientId`, `ConnectionStrings:ExamMaker`, `Sqs:AiJobsQueueUrl`, `AiGeneration:VerifyAnswers`, `AiQuota:*`, `AiRateLimit:*`). Các khóa `Bedrock/*` sẽ được Worker B6 bind; các khóa `Rds/*`, `CloudWatch/*`, `Cognito/HostedUiDomain|Authority`, `Sqs/*Arn|Dlq*` phục vụ hạ tầng/OPS/frontend.
-- **Cô lập secret nội bộ OPS khỏi process ứng dụng (`/exammaker-ops/<env>/*`)**: các secret không dành cho ứng dụng .NET (`Origin/VerifySecret` của CloudFront/Nginx và `Rds/MasterPassword` của O10) được đặt dưới prefix riêng `/exammaker-ops/<env>/*` nằm ngoài phạm vi đọc của `AddSystemsManager("/exammaker/<env>")` và EC2 IAM role.
+- **Ánh xạ tự động vào .NET 10 `IConfiguration`** qua `ParameterStoreConfiguration.cs` khi cấu hình `ParameterStore__Path=/exammaker/<env>` cho **các khóa hiện đã được bind trong code** (xem cột *Nơi sử dụng* ở mục 2: `AWS:Region`, `Cognito:Region|UserPoolId|ClientId`, `ConnectionStrings:ExamMaker`, `Sqs:AiJobsQueueUrl`, `AiQuota:*`, `AiRateLimit:*`). Các khóa `Bedrock/*` và `AiGeneration/VerifyAnswers` (`AiGenerationOptions` trong `AiQuestionGenerator.cs`) sẽ được Worker B6 bind; các khóa `Rds/*`, `CloudWatch/*`, `Cognito/HostedUiDomain|Authority`, `Sqs/*Arn|Dlq*` phục vụ hạ tầng/OPS/frontend.
+- **Cô lập secret nội bộ OPS khỏi process ứng dụng (`/exammaker-ops/<env>/*`)**: các tham số không dành cho ứng dụng .NET (`Origin/VerifySecret` của CloudFront/Nginx và bản lưu `Rds/MasterPassword` của O10) được đặt dưới prefix riêng `/exammaker-ops/<env>/*` nằm ngoài phạm vi đọc của `AddSystemsManager("/exammaker/<env>")` và EC2 IAM role (lưu ý: trong MVP `ConnectionStrings/ExamMaker` vẫn dùng chung user DB master `exammaker_admin` — xem mục 4.1).
 - **Chi phí $0**: toàn bộ tham số dùng **Standard tier** (`≤ 10.000` tham số miễn phí) và mọi `SecureString` mã hóa bằng khóa **AWS-managed `alias/aws/ssm`** (không tạo KMS CMK tốn $1/tháng).
 - **Bảo mật**: tuyệt đối không lưu secret, connection string, Account ID hay giá trị thật trong Git hoặc file `appsettings.json`.
 
@@ -41,7 +41,7 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 | | `/exammaker/dev/Bedrock/ModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Worker B6 (chưa có code đọc ở hiện tại; Haiku 4.5 cho dev, đổi sang Sonnet 4.6 khi demo) |
 | | `/exammaker/dev/Bedrock/DevModelId` | `String` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Tham chiếu model dev/tiết kiệm chi phí (Claude Haiku 4.5) để rollback sau demo (B6) |
 | | `/exammaker/dev/Bedrock/DemoModelId` | `String` | `global.anthropic.claude-sonnet-4-6` | Tham chiếu model demo (Claude Sonnet 4.6) (B6) |
-| **AI Generation (O12)** | `/exammaker/dev/AiGeneration/VerifyAnswers` | `String` | `false` (`true` khi demo) | `AiGeneration:VerifyAnswers` (`AiGenerationOptions.cs` trong B4 / Worker B6; `docs/context.md` §4.1.2, §14) |
+| **AI Generation (O12)** | `/exammaker/dev/AiGeneration/VerifyAnswers` | `String` | `false` (`true` khi demo) | `AiGeneration:VerifyAnswers` (`AiGenerationOptions` trong `Application/Ai/Generation/AiQuestionGenerator.cs`, chờ Worker B6 bind; `docs/context.md` §4.1.2, §14) |
 | **AI Quota (O12)** | `/exammaker/dev/AiQuota/JobsPerUserPerDay` | `String` | `10` | `AiQuota:JobsPerUserPerDay` (`AiQuotaOptions.cs`) |
 | | `/exammaker/dev/AiQuota/MaxQuestionsPerJob` | `String` | `10` | `AiQuota:MaxQuestionsPerJob` (`AiQuotaOptions.cs`) |
 | | `/exammaker/dev/AiQuota/TokensPerUserPerDay` | `String` | `100000` | `AiQuota:TokensPerUserPerDay` (`AiQuotaOptions.cs`) |
@@ -79,8 +79,8 @@ Tài liệu quy định cấu trúc cây tham số tập trung tại **AWS Syste
 
 Script kiểm tra tự động **19 tiêu chí** cho **32 tham số chuẩn hóa** (31 tham số dưới `/exammaker/dev/*` gồm 5 O9 + 6 O10 + 4 O11 + 16 O12, và 1 secret `/exammaker-ops/dev/Origin/VerifySecret` của O12; riêng `/exammaker-ops/dev/Rds/MasterPassword` của O10 cũng được kiểm tra tier/KMS). Lưu ý chạy bằng danh tính **OPS** có quyền `bedrock:ListInferenceProfiles`, `bedrock:ListFoundationModels` và `bedrock:GetFoundationModel` (role runtime EC2 không cần các quyền này):
 1. Đủ nhóm tham số O9 (Cognito), O10 (RDS connection string + metadata), O11 (SQS + DLQ), O12 (AWS, Bedrock gồm `ModelId`/`DevModelId`/`DemoModelId`, `AiGeneration/VerifyAnswers`, AI Quota, AI Rate Limit, Origin Secret dưới `/exammaker-ops/dev/`, CloudWatch).
-2. Xác thực `Bedrock/ModelId`, `Bedrock/DevModelId`, `Bedrock/DemoModelId`: với inference profile (`global.*` / `apac.*`), **điều kiện bắt buộc duy nhất được ép cứng là `profile.status == "ACTIVE"`** tại `Bedrock/Region`; việc kiểm tra vòng đời EOL (`modelLifecycle.status`) của các foundation model đích chỉ là **kiểm tra bổ trợ theo cơ chế best-effort** (chỉ đánh fail khi AWS trả về rõ `LEGACY`; nếu model đích nằm ở region khác hoặc `get-foundation-model` bị throttle/AccessDenied thì in cảnh báo `[WARN]` và vẫn cho pass theo `profile.status == "ACTIVE"`). Với foundation model trực tiếp (không qua profile), bắt buộc `ON_DEMAND` và `modelLifecycle.status == "ACTIVE"`. Đồng thời `ModelId` phải khớp `DevModelId` hoặc `DemoModelId`.
-3. `ConnectionStrings/ExamMaker` và `/exammaker-ops/dev/Origin/VerifySecret` bắt buộc là `SecureString` (`Origin/VerifySecret` ≥ 32 ký tự); đồng thời xác minh **không còn `Origin/VerifySecret` hay `Rds/MasterPassword` nằm dưới `/exammaker/dev/`**; tuyệt đối không in giá trị secret ra terminal.
+2. Xác thực `Bedrock/ModelId`, `Bedrock/DevModelId`, `Bedrock/DemoModelId`: cả 3 giá trị **bắt buộc phải là inference profile ID** (khớp với EC2 IAM policy chỉ cho phép gọi foundation model thông qua `bedrock:InferenceProfileArn`) và **điều kiện bắt buộc duy nhất được ép cứng là `profile.status == "ACTIVE"`** tại `Bedrock/Region`; việc kiểm tra vòng đời EOL (`modelLifecycle.status`) của các foundation model đích chỉ là **kiểm tra bổ trợ theo cơ chế best-effort** (chỉ đánh fail khi AWS trả về rõ `LEGACY`; nếu model đích nằm ở region khác hoặc `get-foundation-model` bị throttle/AccessDenied thì in cảnh báo `[WARN]` và vẫn cho pass theo `profile.status == "ACTIVE"`). Đồng thời `ModelId` phải khớp `DevModelId` hoặc `DemoModelId`.
+3. `ConnectionStrings/ExamMaker`, `/exammaker-ops/dev/Origin/VerifySecret` (≥ 32 ký tự) và `/exammaker-ops/dev/Rds/MasterPassword` bắt buộc tồn tại ở dạng `SecureString` không rỗng; đồng thời xác minh **không còn `Origin/VerifySecret` hay `Rds/MasterPassword` nằm dưới `/exammaker/dev/`**; tuyệt đối không in giá trị secret ra terminal.
 4. Các giá trị quota/rate-limit là số nguyên dương nằm trong đúng giới hạn kiểu dữ liệu của .NET (`int32 <= 2147483647` cho `JobsPerUserPerDay`, `MaxQuestionsPerJob`, `MaxNoteLength`, `PermitLimit`; `int64 <= 9223372036854775807` cho `TokensPerUserPerDay`, `SystemTokensPerDay`), `MaxAttempts == 3` khớp SQS `maxReceiveCount=3`, `SystemTokensPerDay >= TokensPerUserPerDay`, và `AiRateLimit/Window` là `.NET TimeSpan > 0`.
 5. **Kiểm soát chi phí ($0):** 100% tham số dưới cả `/exammaker/dev/` và `/exammaker-ops/dev/` dùng **Standard tier** và 100% `SecureString` dùng khóa AWS-managed `alias/aws/ssm`.
 6. **Kiểm soát bảo mật:** không có tham số nào chứa `Secret`, `Password` hoặc `ConnectionStrings` bị lưu ở dạng `String` thuần.
@@ -97,11 +97,13 @@ Script kiểm tra tự động **19 tiêu chí** cho **32 tham số chuẩn hóa
 ParameterStore__Path=/exammaker/dev
 ```
 
-Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-ec2-policy.example.json`) chỉ được cấp quyền `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` trên `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev` và `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev/*` (kèm statement `Deny` tường minh cho `${PARAMETER_ARN_PREFIX}/Rds/MasterPassword` và `${PARAMETER_ARN_PREFIX}/Origin/*`). Nhờ đặt `/exammaker-ops/dev/Origin/VerifySecret` và `/exammaker-ops/dev/Rds/MasterPassword` ở prefix riêng `/exammaker-ops/dev/*`, cả `AddSystemsManager("/exammaker/dev")` lẫn EC2 instance profile đều **không thể đọc** hai secret này.
+Instance profile của EC2 (`aem-exammaker-ec2-role`, xem `infra/iam/exammaker-ec2-policy.example.json`) chỉ được cấp quyền `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` trên `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev` và `arn:aws:ssm:ap-southeast-1:<account-id>:parameter/exammaker/dev/*`. Lưu ý AWS SSM phân quyền `GetParametersByPath` theo đường dẫn prefix được truy vấn (`/exammaker/dev`), nên không dùng statement `Deny` trên từng tham số con dưới `/exammaker/dev/*`; biện pháp cô lập duy nhất có hiệu lực là đặt các tham số nội bộ OPS dưới prefix riêng `/exammaker-ops/dev/*`.
+
+> **Lưu ý về phạm vi cô lập:** Việc đặt `/exammaker-ops/dev/Origin/VerifySecret` ngoài `/exammaker/dev/*` thực sự ngăn EC2/app đọc secret bảo vệ biên CloudFront → Nginx. Riêng với `/exammaker-ops/dev/Rds/MasterPassword`, việc chuyển sang `/exammaker-ops/dev/` giúp loại bỏ bản sao tham số thừa khỏi `IConfiguration`, nhưng trong phạm vi MVP tham số `/exammaker/dev/ConnectionStrings/ExamMaker` mà ứng dụng đọc vẫn đang dùng chung user master `exammaker_admin` (nợ kỹ thuật đã ghi ở `docs/runbooks/rds.md` mục 5; để tách hoàn toàn quyền superuser DB khỏi app cần tạo thêm user DB riêng `exammaker_app`).
 
 ### 4.2 Chuyển đổi cấu hình Dev (Haiku 4.5) ↔ Demo (Sonnet 4.6)
 
-> **Trạng thái hiệu lực (chỉ có tác dụng sau khi hoàn thành Task B4 và B6):** Khóa `/exammaker/dev/AiGeneration/VerifyAnswers` ánh xạ thẳng vào `AiGeneration:VerifyAnswers` (`AiGenerationOptions.VerifyAnswers` của Task B4), còn các khóa `/exammaker/dev/Bedrock/*` (`Bedrock:Region`, `Bedrock:ModelId`, `Bedrock:DevModelId`, `Bedrock:DemoModelId`) sẽ được Worker B6 đọc khi triển khai adapter Bedrock thật. Trước khi B4/B6 được merge và deploy lên EC2, các lệnh dưới đây chỉ cập nhật giá trị sẵn trên Parameter Store.
+> **Trạng thái hiệu lực (chỉ có tác dụng sau khi hoàn thành Task B6):** Class `AiGenerationOptions` (trong `backend/src/ExamMaker.Application/Ai/Generation/AiQuestionGenerator.cs`, đã có thuộc tính `VerifyAnswers` từ B4) và các khóa `Bedrock/*` (`Bedrock:Region`, `Bedrock:ModelId`, `Bedrock:DevModelId`, `Bedrock:DemoModelId`) **hiện chưa được bind từ `IConfiguration` trong DI** — việc bind `AiGeneration` và `Bedrock` thuộc **Task B6 (Worker)**. Trước khi B6 hoàn tất và deploy lên EC2, các lệnh dưới đây chỉ cập nhật giá trị chờ sẵn trên Parameter Store.
 
 **Trước buổi demo (chuyển sang Sonnet 4.6 + bật kiểm chứng đáp án):**
 
@@ -150,11 +152,19 @@ EOF
       HAD_PREV=1
     fi
     if sudo mv -f /etc/exammaker/origin-secret.conf.tmp /etc/exammaker/origin-secret.conf; then
-      if sudo nginx -t && sudo systemctl reload nginx; then
+      if sudo nginx -t; then
         sudo rm -f /etc/exammaker/origin-secret.conf.bak
-        echo "SUCCESS: Updated /etc/exammaker/origin-secret.conf and reloaded Nginx."
+        if sudo systemctl is-active --quiet nginx; then
+          if sudo systemctl reload nginx; then
+            echo "SUCCESS: Updated /etc/exammaker/origin-secret.conf and reloaded Nginx."
+          else
+            echo "WARNING: nginx -t passed and /etc/exammaker/origin-secret.conf is saved, but systemctl reload nginx failed. Check systemctl status nginx." >&2
+          fi
+        else
+          echo "INFO: nginx -t passed and /etc/exammaker/origin-secret.conf is saved (nginx.service is currently inactive; secret will apply when Nginx starts)."
+        fi
       elif [ "$HAD_PREV" -eq 1 ] && [ -f /etc/exammaker/origin-secret.conf.bak ]; then
-        echo "ERROR: nginx -t or reload failed; restoring previous /etc/exammaker/origin-secret.conf" >&2
+        echo "ERROR: nginx -t failed; restoring previous /etc/exammaker/origin-secret.conf" >&2
         sudo mv -f /etc/exammaker/origin-secret.conf.bak /etc/exammaker/origin-secret.conf
       else
         sudo tee /etc/exammaker/origin-secret.conf >/dev/null <<'EOF_EMPTY'
@@ -162,7 +172,7 @@ map $http_x_origin_verify $origin_header_valid {
     default 0;
 }
 EOF_EMPTY
-        echo "WARNING: Initial nginx -t/reload failed and no prior backup existed. Wrote a DENY-ALL placeholder to /etc/exammaker/origin-secret.conf (all /api/* requests will return 403). After fixing the Nginx error, you MUST re-run this section 4.3 snippet to populate the real secret!" >&2
+        echo "WARNING: Initial nginx -t failed and no prior backup existed. Wrote a DENY-ALL placeholder to /etc/exammaker/origin-secret.conf (all /api/* requests will return 403). After fixing the Nginx syntax error, you MUST re-run this section 4.3 snippet to populate the real secret!" >&2
       fi
     else
       sudo rm -f /etc/exammaker/origin-secret.conf.tmp /etc/exammaker/origin-secret.conf.bak
@@ -213,11 +223,19 @@ unset SECRET
 >      then
 >        sudo cp -af /etc/exammaker/origin-secret.conf /etc/exammaker/origin-secret.conf.bak
 >        if sudo mv -f /etc/exammaker/origin-secret.conf.tmp /etc/exammaker/origin-secret.conf; then
->          if sudo nginx -t && sudo systemctl reload nginx; then
+>          if sudo nginx -t; then
 >            sudo rm -f /etc/exammaker/origin-secret.conf.bak
->            echo "SUCCESS: Nginx is now accepting BOTH old and new secrets without downtime."
+>            if sudo systemctl is-active --quiet nginx; then
+>              if sudo systemctl reload nginx; then
+>                echo "SUCCESS: Nginx is now accepting BOTH old and new secrets without downtime."
+>              else
+>                echo "WARNING: nginx -t passed and dual-secret config is saved, but systemctl reload nginx failed. Check systemctl status nginx." >&2
+>              fi
+>            else
+>              echo "INFO: nginx -t passed and dual-secret config is saved (nginx.service is currently inactive)."
+>            fi
 >          else
->            echo "ERROR: nginx -t or reload failed; restoring previous /etc/exammaker/origin-secret.conf" >&2
+>            echo "ERROR: nginx -t failed; restoring previous /etc/exammaker/origin-secret.conf" >&2
 >            sudo mv -f /etc/exammaker/origin-secret.conf.bak /etc/exammaker/origin-secret.conf
 >          fi
 >        else
