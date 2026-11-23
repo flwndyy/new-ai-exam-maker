@@ -26,20 +26,34 @@ const GRADES: Grade[] = [10, 11, 12];
 const MC_LABELS = ["A", "B", "C", "D"] as const;
 const TF_LABELS = ["a", "b", "c", "d"] as const;
 
-/** Parse a finite decimal number while rejecting values that would silently lose precision in IEEE-754 Number. */
+/** Format a JS number as a plain decimal string (never scientific notation like "1e-7") for text inputs. */
+function formatDecimalForInput(value: number): string {
+  const str = String(value);
+  if (!/[eE]/.test(str)) return str;
+  const sign = value < 0 ? "-" : "";
+  const [mantissa, expPart] = str.replace(/^-/, "").toLowerCase().split("e");
+  const exp = Number(expPart);
+  const [intPart, fracPart = ""] = mantissa.split(".");
+  const digits = intPart + fracPart;
+  const decimalPos = intPart.length + exp;
+  if (decimalPos <= 0) {
+    return `${sign}0.${"0".repeat(-decimalPos)}${digits}`;
+  }
+  if (decimalPos >= digits.length) {
+    return `${sign}${digits}${"0".repeat(decimalPos - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, decimalPos)}.${digits.slice(decimalPos)}`;
+}
+
+/** Parse a finite decimal number (accepting comma or dot) with at most 15 significant digits so Number() never rounds silently. */
 function parseExactDecimal(raw: string): number | null {
-  const trimmed = raw.trim();
+  const trimmed = raw.trim().replace(",", ".");
   if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(trimmed)) return null;
+  const unsigned = trimmed.replace(/^[+-]/, "");
+  const significantDigits = unsigned.replace(".", "").replace(/^0+/, "").replace(/0+$/, "");
+  if (significantDigits.length > 15) return null;
   const num = Number(trimmed);
   if (!Number.isFinite(num)) return null;
-  const normalized = trimmed
-    .replace(/^\+/, "")
-    .replace(/^(-?)0+(?=\d)/, "$1")
-    .replace(/^(-?)\./, "$10.")
-    .replace(/(\.\d*?[1-9])0+$/, "$1")
-    .replace(/\.0+$/, "");
-  const expected = normalized === "-0" ? "0" : normalized;
-  if (String(num) !== expected) return null;
   return num;
 }
 
@@ -53,7 +67,7 @@ function initMcOptions(q?: Question): Record<(typeof MC_LABELS)[number], string>
 
 function initEssayRubric(q?: Question): { criterion: string; points: string }[] {
   if (q?.type === "Essay" && "rubric" in q.payload && q.payload.rubric.length > 0) {
-    return q.payload.rubric.map((r) => ({ criterion: r.criterion, points: String(r.points) }));
+    return q.payload.rubric.map((r) => ({ criterion: r.criterion, points: formatDecimalForInput(r.points) }));
   }
   return [{ criterion: "", points: "1" }];
 }
@@ -101,7 +115,7 @@ function QuestionEditorForm({
   );
   const [shortTolerance, setShortTolerance] = useState(
     q?.type === "ShortAnswer" && "tolerance" in q.payload && q.payload.tolerance != null
-      ? String(q.payload.tolerance)
+      ? formatDecimalForInput(q.payload.tolerance)
       : "",
   );
   const [essayAnswer, setEssayAnswer] = useState(
@@ -160,7 +174,10 @@ function QuestionEditorForm({
           throw new Error(vi.questions.criterionRequired);
         }
         const pts = parseExactDecimal(r.points);
-        if (pts === null || pts <= 0) {
+        if (pts === null) {
+          throw new Error(vi.questions.criterionPointsInvalid);
+        }
+        if (pts <= 0) {
           throw new Error(vi.questions.criterionPointsPositive);
         }
         return {
@@ -200,9 +217,11 @@ function QuestionEditorForm({
     },
     onSuccess: ({ saved, aiReviewWasReset }) => {
       setIsDirty(false);
+      // Update question cache synchronously so QuestionEditorForm remounts immediately when the save settles,
+      // not 200ms later after a background refetch while the user has already started typing again.
+      queryClient.setQueryData(["question", saved.id], saved);
       onFeedback(aiReviewWasReset ? vi.questions.aiReviewResetNotice : vi.questions.savedSuccess);
       void queryClient.invalidateQueries({ queryKey: ["questions"] });
-      void queryClient.invalidateQueries({ queryKey: ["question", saved.id] });
       if (!id) router.replace(`/questions/detail/?id=${saved.id}`);
     },
     onError: (err: unknown) => onError(getUiErrorMessage(err)),
@@ -243,7 +262,7 @@ function QuestionEditorForm({
         if (action === "submit" && (getApiErrorCode(error) === "AiReviewRequired" || q?.source === "AI")) {
           void queryClient.invalidateQueries({ queryKey: ["question", id] });
           if (getApiErrorCode(error) === "AiReviewRequired") {
-            throw new Error(vi.questions.aiReviewResetNotice);
+            throw new Error(savedBeforeAction ? vi.questions.aiReviewResetNotice : vi.questions.aiReviewRequiredNotice);
           }
         }
         throw new Error(getApiErrorMessage(error));
@@ -521,9 +540,8 @@ function QuestionEditorForm({
               />
               {shortAnswerType === "number" && (
                 <input
-                  type="number"
-                  step="any"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   aria-label={vi.questions.shortTolerance}
                   placeholder={vi.questions.shortTolerance}
                   value={shortTolerance}
@@ -569,8 +587,8 @@ function QuestionEditorForm({
                   />
                   <input
                     required
-                    type="number"
-                    step="any"
+                    type="text"
+                    inputMode="decimal"
                     value={row.points}
                     onChange={(e) => {
                       setEssayRubric((prev) => prev.map((item, i) => (i === idx ? { ...item, points: e.target.value } : item)));

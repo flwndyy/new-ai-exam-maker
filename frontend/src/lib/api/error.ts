@@ -18,8 +18,14 @@ export function getApiErrorMessage(error: unknown, fallback = vi.common.requestF
   if (!error || typeof error !== "object") return fallback;
   const problem = error as ProblemPayload;
   if (problem.errors) {
-    const first = Object.values(problem.errors).flat().find(Boolean);
-    if (first) return first;
+    const entries = Object.entries(problem.errors)
+      .map(([field, messages]) => {
+        const joined = messages.filter(Boolean).join(", ");
+        if (!joined) return "";
+        return field ? `${field}: ${joined}` : joined;
+      })
+      .filter(Boolean);
+    if (entries.length > 0) return entries.join("; ");
   }
   return problem.detail || problem.title || fallback;
 }
@@ -28,12 +34,13 @@ const RAW_NETWORK_ERROR_RE = /^(failed to fetch|fetch failed|load failed|network
 
 /** Map raw browser/network errors (e.g. TypeError: Failed to fetch) to a localized fallback message. */
 export function getUiErrorMessage(error: unknown, fallback = vi.common.requestFailed): string {
-  if (error instanceof TypeError) {
-    return fallback;
-  }
   if (error instanceof Error) {
     const msg = error.message.trim();
     if (!msg || RAW_NETWORK_ERROR_RE.test(msg)) {
+      return fallback;
+    }
+    if (error instanceof TypeError) {
+      console.error(error);
       return fallback;
     }
     return msg;

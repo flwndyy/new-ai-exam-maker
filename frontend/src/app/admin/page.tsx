@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { fetchAllDepartments, fetchAllSubjects } from "@/lib/api/catalog";
@@ -61,6 +61,7 @@ export default function AdminPage() {
   const departmentsListQuery = useQuery({
     queryKey: ["catalog", "departments", "admin", deptPage],
     enabled: isAdmin && tab === "departments",
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, error } = await api.GET("/departments", {
         params: { query: { page: deptPage, pageSize: 20 } },
@@ -82,6 +83,7 @@ export default function AdminPage() {
   const subjectsListQuery = useQuery({
     queryKey: ["catalog", "subjects", "admin", subjectPage],
     enabled: isAdmin && tab === "subjects",
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, error } = await api.GET("/subjects", {
         params: { query: { page: subjectPage, pageSize: 20 } },
@@ -97,6 +99,7 @@ export default function AdminPage() {
   const topicsQuery = useQuery({
     queryKey: ["catalog", "topics", "admin", topicPage, topicFilterSubjectId],
     enabled: isAdmin && tab === "topics",
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, error } = await api.GET("/topics", {
         params: {
@@ -118,6 +121,7 @@ export default function AdminPage() {
   const usersQuery = useQuery({
     queryKey: ["admin", "users", userPage],
     enabled: isAdmin && tab === "users",
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, error } = await api.GET("/admin/users", {
         params: { query: { page: userPage, pageSize: 20 } },
@@ -568,7 +572,7 @@ export default function AdminPage() {
           </form>
 
           <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-            {(departmentsListQuery.data?.items ?? departmentsQuery.data)?.map((d) => (
+            {departmentsListQuery.data?.items.map((d) => (
               <li key={d.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                 <span>{d.name}</span>
                 <div className="flex gap-3 text-xs">
@@ -674,7 +678,7 @@ export default function AdminPage() {
           </form>
 
           <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-            {(subjectsListQuery.data?.items ?? subjectsQuery.data)?.map((s) => (
+            {subjectsListQuery.data?.items.map((s) => (
               <li key={s.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                 <span>{s.name}</span>
                 <div className="flex gap-3 text-xs">

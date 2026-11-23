@@ -10,7 +10,7 @@ import ReviewQueuePage from "@/app/review/page";
 import ReviewQuestionPage from "@/app/review/question/page";
 import { RoleNav } from "@/components/role-nav";
 import { fetchAllSubjects } from "@/lib/api/catalog";
-import { getUiErrorMessage } from "@/lib/api/error";
+import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import { vi as messages } from "@/messages/vi";
 
 const mocks = vi.hoisted(() => ({
@@ -384,13 +384,13 @@ describe("A10 admin, review, and role navigation screens", () => {
       expect(mocks.apiPost).toHaveBeenCalledWith("/questions/{id}/mark-reviewed", { params: { path: { id: mocks.searchId } } }),
     );
 
-    // If POST /questions/{id}/submit returns 409 AiReviewRequired (e.g. edited in another tab or after saving), show aiReviewResetNotice.
+    // If POST /questions/{id}/submit returns 409 AiReviewRequired without an edit, show aiReviewRequiredNotice.
     mocks.apiPost.mockResolvedValueOnce({
       data: undefined,
       error: { code: "AiReviewRequired", title: "Conflict", detail: "AI review required" },
     });
     fireEvent.click(screen.getByText(messages.questions.submit));
-    await waitFor(() => expect(screen.getByText(messages.questions.aiReviewResetNotice)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(messages.questions.aiReviewRequiredNotice)).toBeTruthy());
   });
 
   it("hides archive button for peer teachers and rejected questions, shows it for owner/head/admin on Approved, and rejects blank rubric criterion", async () => {
@@ -774,9 +774,102 @@ describe("A10 admin, review, and role navigation screens", () => {
     await waitFor(() => expect(screen.getByText(messages.admin.invalidSortOrder)).toBeTruthy());
     expect(mocks.apiPost).not.toHaveBeenCalled();
 
-    // 4. Raw network errors (e.g. TypeError: Failed to fetch) map to localized requestFailed.
+    // 4. Raw network errors (e.g. TypeError: Failed to fetch) map to localized requestFailed, and validation errors include field names.
     expect(getUiErrorMessage(new TypeError("Failed to fetch"))).toBe(messages.common.requestFailed);
     expect(getUiErrorMessage(new Error("Failed to fetch"))).toBe(messages.common.requestFailed);
     expect(getUiErrorMessage(new Error("Lỗi nghiệp vụ từ API"))).toBe("Lỗi nghiệp vụ từ API");
+    expect(
+      getApiErrorMessage({
+        errors: {
+          stem: ["Không được để trống"],
+          topicId: ["Không hợp lệ"],
+        },
+      }),
+    ).toBe("stem: Không được để trống; topicId: Không hợp lệ");
+  });
+
+  it("handles very small decimal rubric points without scientific notation and validates text tolerance including comma/invalid input", async () => {
+    mocks.auth.me.role = "teacher";
+    const tinyEssay = {
+      id: mocks.searchId,
+      subjectId: "s1",
+      topicId: "t1",
+      departmentId: "d1",
+      grade: 10,
+      type: "Essay",
+      difficulty: "Application",
+      stem: "Tiny rubric stem",
+      payload: {
+        modelAnswer: "Model",
+        rubric: [{ criterion: "Step 1", points: 0.0000001 }],
+      },
+      explanation: null,
+      status: "Draft",
+      revision: 1,
+      source: "Manual",
+      aiVerification: "NotChecked",
+      aiVerificationNote: null,
+      aiReviewedByAuthor: false,
+      createdBy: { id: mocks.auth.me.id, fullName: "Teacher" },
+      submittedAt: null,
+      createdAt: "2026-11-22T00:00:00.000Z",
+      updatedAt: "2026-11-22T00:00:00.000Z",
+    };
+
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") return { data: tinyEssay, error: undefined };
+      if (path === "/subjects") return { data: { items: [{ id: "s1", name: "Toán", departmentId: "d1" }] }, error: undefined };
+      if (path === "/topics") return { data: { items: [{ id: "t1", subjectId: "s1", grade: 10, name: "Chương 1", sortOrder: 1 }] }, error: undefined };
+      return { data: { items: [] }, error: undefined };
+    });
+    mocks.apiPut.mockResolvedValue({ data: { ...tinyEssay, updatedAt: "2026-11-22T00:05:00.000Z" }, error: undefined });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("0.0000001")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Chương 1")).toBeTruthy());
+
+    // Saving a question with 0.0000001 rubric points succeeds without misreporting "must be > 0".
+    fireEvent.click(screen.getByText(messages.common.save));
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut.mock.calls[0][1].body.payload.rubric[0].points).toBe(0.0000001);
+    cleanup();
+
+    // ShortAnswer tolerance rejects invalid text ("1e") on Submit and accepts comma ("0,01") as 0.01.
+    const shortQ = {
+      ...tinyEssay,
+      type: "ShortAnswer",
+      stem: "Short answer stem",
+      payload: {
+        answerType: "number",
+        acceptedAnswers: ["3.14"],
+        unit: null,
+        tolerance: 0.0000001,
+      },
+    };
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") return { data: shortQ, error: undefined };
+      if (path === "/subjects") return { data: { items: [{ id: "s1", name: "Toán", departmentId: "d1" }] }, error: undefined };
+      if (path === "/topics") return { data: { items: [{ id: "t1", subjectId: "s1", grade: 10, name: "Chương 1", sortOrder: 1 }] }, error: undefined };
+      return { data: { items: [] }, error: undefined };
+    });
+    mocks.apiPut.mockClear();
+    mocks.apiPut.mockResolvedValue({ data: { ...shortQ, updatedAt: "2026-11-22T00:06:00.000Z" }, error: undefined });
+    mocks.apiPost.mockResolvedValue({ data: { ...shortQ, status: "Submitted" }, error: undefined });
+
+    renderWithQuery(<QuestionDetailPage />);
+    const tolInput = await waitFor(() => screen.getByLabelText(messages.questions.shortTolerance) as HTMLInputElement);
+    expect(tolInput.value).toBe("0.0000001");
+
+    // Invalid tolerance "1e" must block submit with invalidTolerance error rather than silently sending null.
+    fireEvent.change(tolInput, { target: { value: "1e" } });
+    fireEvent.click(screen.getByText(messages.questions.submit));
+    await waitFor(() => expect(screen.getByText(messages.questions.invalidTolerance)).toBeTruthy());
+    expect(mocks.apiPut).not.toHaveBeenCalled();
+
+    // Comma decimal "0,01" is parsed cleanly to 0.01.
+    fireEvent.change(tolInput, { target: { value: "0,01" } });
+    fireEvent.click(screen.getByText(messages.questions.submit));
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut.mock.calls[0][1].body.payload.tolerance).toBe(0.01);
   });
 });
