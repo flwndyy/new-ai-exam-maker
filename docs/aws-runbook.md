@@ -181,6 +181,7 @@ public IP idle hoặc CloudFront distribution thử nghiệm.
 - Runbook Amazon Cognito User Pool (O9): [`runbooks/cognito.md`](runbooks/cognito.md)
 - Runbook Amazon RDS PostgreSQL 16 & Restore Drill (O10): [`runbooks/rds.md`](runbooks/rds.md)
 - Runbook AWS Systems Manager Parameter Store (O12): [`runbooks/parameter-store.md`](runbooks/parameter-store.md)
+- Runbook Amazon CloudWatch Logs & Alarms (O13): [`runbooks/cloudwatch.md`](runbooks/cloudwatch.md)
 - Runbook AWS Budgets $200 (O14): [`runbooks/budgets.md`](runbooks/budgets.md)
 - Runbook cấu hình AWS CLI cục bộ cho thành viên: [`runbooks/aws-local-cli.md`](runbooks/aws-local-cli.md)
 
