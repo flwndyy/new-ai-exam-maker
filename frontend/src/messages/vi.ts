@@ -281,6 +281,7 @@ export const vi = {
     reviewed: "Đã rà soát ✓",
     questionUnavailable: "Câu này không còn khả dụng.",
     questionLoadFailed: "Không tải được câu hỏi này.",
+    questionRefreshFailed: "Không tải được bản mới nhất của câu này; nội dung bên dưới có thể đã cũ.",
     retry: "Thử lại",
     reviewFailed: "Không đánh dấu được. Vui lòng thử lại.",
   },

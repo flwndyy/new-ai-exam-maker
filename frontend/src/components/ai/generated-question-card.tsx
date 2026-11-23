@@ -38,10 +38,17 @@ export function GeneratedQuestionCard({
   question,
   index,
   meId,
+  refreshFailed = false,
+  refreshing = false,
+  onRetry,
 }: {
   question: Question | null;
   index: number;
   meId: string;
+  /** The cached copy could not be reloaded: it may be stale, so reviewing it is blocked until a reload succeeds. */
+  refreshFailed?: boolean;
+  refreshing?: boolean;
+  onRetry?: () => void;
 }) {
   const queryClient = useQueryClient();
   const markReviewed = useMutation({
@@ -81,6 +88,17 @@ export function GeneratedQuestionCard({
         </span>
       </header>
 
+      {refreshFailed && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <span>{vi.ai.questionRefreshFailed}</span>
+          {onRetry && (
+            <button type="button" disabled={refreshing} onClick={onRetry} className="underline disabled:opacity-50">
+              {vi.ai.retry}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="text-sm text-slate-900">
         <MathMarkdown>{question.stem}</MathMarkdown>
       </div>
@@ -109,10 +127,10 @@ export function GeneratedQuestionCard({
         >
           {vi.common.edit}
         </Link>
-        {canMarkReviewed(question, meId) && (
+        {!refreshFailed && canMarkReviewed(question, meId) && (
           <button
             type="button"
-            disabled={markReviewed.isPending}
+            disabled={markReviewed.isPending || refreshing}
             onClick={() => markReviewed.mutate(question.id)}
             className="rounded border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm text-amber-900 hover:bg-amber-100 disabled:opacity-50"
           >

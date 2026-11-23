@@ -267,6 +267,39 @@ describe("AI job page", () => {
     expect(screen.getByRole("button", { name: messages.questions.markReviewed })).toBeTruthy();
   });
 
+  it("flags a cached question whose reload fails, blocks reviewing it, and recovers on retry", async () => {
+    let failing = 0;
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))]);
+    const base = mocks.apiGet.getMockImplementation()!;
+    mocks.apiGet.mockImplementation((path: string, init?: unknown) => {
+      if (path !== "/questions/{id}") return base(path, init);
+      if (failing > 0) {
+        failing -= 1;
+        return Promise.resolve({ data: undefined, error: { code: "ServiceUnavailable", title: "x" }, response: new Response(null, { status: 503 }) });
+      }
+      return ok(question(Q1));
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: false } } });
+    const view = () => (
+      <QueryClientProvider client={client}>
+        <JobPage />
+      </QueryClientProvider>
+    );
+    const first = render(view());
+    expect(await screen.findByRole("button", { name: messages.questions.markReviewed })).toBeTruthy();
+    first.unmount();
+
+    failing = 2; // the reload and its single automatic retry both fail
+    render(view());
+    expect(await screen.findByText(messages.ai.questionRefreshFailed, undefined, { timeout: 4000 })).toBeTruthy();
+    expect(screen.getByText(/Stem b1/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: messages.questions.markReviewed })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: messages.ai.retry }));
+    expect(await screen.findByRole("button", { name: messages.questions.markReviewed })).toBeTruthy();
+    expect(screen.queryByText(messages.ai.questionRefreshFailed)).toBeNull();
+  });
+
   it("writes mark-reviewed results to the shared question cache used by the detail page", async () => {
     setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))], { [Q1]: question(Q1) });
     mocks.apiPost.mockResolvedValue({

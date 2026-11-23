@@ -141,7 +141,16 @@ function JobPageInner() {
                   </button>
                 </div>
               ) : (
-                <GeneratedQuestionCard key={questionIds[i]} question={q.data ?? null} index={i + 1} meId={me?.id ?? ""} />
+                // A failed reload keeps the cached copy visible but flagged, with review blocked until a reload succeeds.
+                <GeneratedQuestionCard
+                  key={questionIds[i]}
+                  question={q.data ?? null}
+                  index={i + 1}
+                  meId={me?.id ?? ""}
+                  refreshFailed={q.isError}
+                  refreshing={q.isFetching}
+                  onRetry={() => void q.refetch()}
+                />
               ),
             )}
           </div>
