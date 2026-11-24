@@ -44,14 +44,21 @@ function errorMessage(error: unknown): string {
 
 function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId: string | null }) {
   const t = vi.exams.print;
+  // A version can be withdrawn and resubmitted under the same vid with a new snapshot, so an export is never
+  // served from cache: nothing is kept after the page closes and every open fetches again.
   const query = useQuery({
     queryKey: ["examExport", mode, vid],
     retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
     queryFn: () => fetchSheet(vid, mode),
   });
   const other: PrintMode = mode === "student" ? "answer" : "student";
-  const sheet = query.data;
+  // Only print what the server currently allows: data must come from a fetch made by this page instance
+  // (never a leftover cache entry), and once a refetch is refused (403/404/409) the old data is hidden.
+  const sheet = query.isError || !query.isFetchedAfterMount ? undefined : query.data;
 
   // "Lưu PDF" uses document.title as the file name: distinct names keep the student sheet and the answer key apart.
   const docTitle = sheet
@@ -69,9 +76,11 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center gap-3 print:hidden">
-        <button type="button" onClick={() => window.print()} className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white">
-          {t.printButton}
-        </button>
+        {sheet && (
+          <button type="button" onClick={() => window.print()} className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white">
+            {t.printButton}
+          </button>
+        )}
         {examId && (
           <Link href={printUrl(examId, vid, other)} className="text-sm text-blue-700 hover:underline">
             {other === "answer" ? t.toAnswer : t.toStudent}
@@ -82,7 +91,7 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
         </Link>
       </div>
 
-      {query.isLoading && <p>{vi.common.loading}</p>}
+      {!sheet && !query.isError && <p>{vi.common.loading}</p>}
       {query.isError && <p className="text-rose-600">{errorMessage(query.error)}</p>}
       {sheet && (
         <div className="space-y-5">

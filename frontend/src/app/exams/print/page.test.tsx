@@ -117,9 +117,13 @@ const answerKey = {
   ],
 };
 
-function renderPage(search: string) {
+// Same defaults as src/app/providers.tsx so cache behaviour matches the real app.
+function appClient() {
+  return new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: false } } });
+}
+
+function renderPage(search: string, client = appClient()) {
   mocks.search = search;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <ExamPrintPage />
@@ -176,6 +180,40 @@ describe("ExamPrintPage", () => {
     await waitFor(() => expect(document.title).toBe(`Kiểm tra 15 phút - ${messages.exams.print.versionCode} 3 - ${label}`));
     view.unmount();
     expect(document.title).toBe("App");
+  });
+
+  it.each(["student", "answer"] as const)(
+    "%s mode reloads on every open instead of printing a cached snapshot from before a resubmit",
+    async (mode) => {
+      const client = appClient();
+      const body = mode === "student" ? leakyStudentSheet : answerKey;
+      const resubmitted = { ...body, items: body.items.map((i) => ({ ...i, stem: `${i.stem} (mới)` })) };
+      mocks.apiGet.mockImplementation(() => ok(body));
+      const first = renderPage(`id=E1&vid=V1&mode=${mode}`, client);
+      expect(await screen.findByText("Câu trắc nghiệm")).toBeTruthy();
+      first.unmount();
+
+      // Withdraw → edit → resubmit happened elsewhere; same vid, new snapshot, reopened within staleTime.
+      mocks.apiGet.mockImplementation(() => ok(resubmitted));
+      renderPage(`id=E1&vid=V1&mode=${mode}`, client);
+      expect(screen.queryByText("Câu trắc nghiệm")).toBeNull();
+      expect(await screen.findByText("Câu trắc nghiệm (mới)")).toBeTruthy();
+      expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("hides previously loaded content and the print button when a refetch is refused", async () => {
+    const client = appClient();
+    mocks.apiGet.mockImplementation(() => ok(leakyStudentSheet));
+    renderPage("id=E1&vid=V1&mode=student", client);
+    expect(await screen.findByText("Câu trắc nghiệm")).toBeTruthy();
+
+    mocks.apiGet.mockImplementation(() => fail(409));
+    await client.refetchQueries({ queryKey: ["examExport"] });
+    expect(await screen.findByText(messages.exams.print.unavailable)).toBeTruthy();
+    expect(screen.queryByText("Câu trắc nghiệm")).toBeNull();
+    expect(screen.queryByText("Kiểm tra 15 phút")).toBeNull();
+    expect(screen.queryByRole("button", { name: messages.exams.print.printButton })).toBeNull();
   });
 
   it.each(["vid=V1&mode=foo", "mode=student", "id=E1"])("shows the invalid-link message and makes no API call for %s", (search) => {
