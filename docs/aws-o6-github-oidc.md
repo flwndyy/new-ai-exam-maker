@@ -37,11 +37,10 @@ Trong IAM → **Roles → Create role → Web identity**:
 workflow O7 phải dùng **Repository Variables/Secrets**, không được khai báo
 `environment:` trong job deploy, phải có tên workflow là **`Deploy frontend`** và
 phải dùng file `.github/workflows/deploy-frontend.yml` theo quy ước O7. Trust
-policy hiện tại chỉ khóa claim `workflow` theo **tên workflow** và claim `ref` theo
-`main`; nó không kiểm tra đường dẫn file. Vì vậy không workflow nào khác trong repo
-được đặt tên `Deploy frontend`. Nếu sau này O7 chuyển sang reusable workflow, có thể
-thay claim `workflow` bằng `job_workflow_ref` sau khi chạy thử và xác minh claim
-trong token thực tế. Nếu dùng GitHub Environment, phải đổi trust policy
+policy mẫu khóa thêm claim `workflow_ref` vào đúng file
+`.github/workflows/deploy-frontend.yml` trên `main`. Nếu sau này O7 chuyển sang
+reusable workflow, phải thay đổi trust policy sau khi xác minh claim trong token
+thực tế. Nếu dùng GitHub Environment, phải đổi trust policy
 để cho phép claim `sub` dạng `repo:flwndyy/new-ai-exam-maker:environment:<name>`
 và giới hạn environment đó chỉ chạy từ `main`.
 
@@ -51,35 +50,27 @@ Trust policy bắt buộc giới hạn đồng thời:
 - Branch: `main`.
 - Audience: `sts.amazonaws.com`.
 - Workflow name claim: `Deploy frontend`.
-- Workflow file convention: `.github/workflows/deploy-frontend.yml` trên `main`
-  (không phải điều kiện mà policy hiện tại kiểm tra).
+- Workflow file: `.github/workflows/deploy-frontend.yml` trên `main`.
 
 Vì vậy pull request và branch khác không thể assume role deploy production.
 
 ## 3. Quyền của role
 
-Gắn policy riêng cho đúng tài nguyên frontend sau khi O5 có bucket và distribution.
-Không dùng `AdministratorAccess`.
+Gắn policy riêng cho đúng bucket release và đúng EC2 instance. Không dùng
+`AdministratorAccess` và không tạo access key.
 
-Các quyền O7 dự kiến cần cấp:
+Theo phương án O5 thay thế hiện tại, O7 cần:
 
-- S3: `ListBucket` trên đúng bucket frontend.
-- S3 object: `PutObject`, `GetObject`, `DeleteObject` trên toàn bộ object của
-  bucket frontend (`arn:aws:s3:::<bucket-name>/*`), vì O5 upload build vào root
-  bucket (`index.html`, `/_next/static/*`, `/assets/*`).
-- CloudFront: `CreateInvalidation` trên đúng distribution.
+- S3 `PutObject` trên `frontend/releases/*`;
+- SSM `SendCommand` tới document `AWS-RunShellScript` và đúng EC2 instance;
+- `ssm:GetCommandInvocation` để workflow chờ kết quả.
 
 Policy mẫu tại `infra/iam/github-actions-frontend-deploy-policy.example.json` dùng
-placeholder `${FRONTEND_BUCKET_ARN}`, `${FRONTEND_BUCKET_OBJECT_ARN}` và
-`${CLOUDFRONT_DISTRIBUTION_ARN}`:
+placeholder `${FRONTEND_BUCKET_OBJECT_ARN}`,
+`${AWS_REGION}` và `${EC2_INSTANCE_ARN}`:
 
-- `${FRONTEND_BUCKET_ARN}` = `arn:aws:s3:::<bucket-name>` — không có `/*`, dùng cho
-  `s3:ListBucket`.
-- `${FRONTEND_BUCKET_OBJECT_ARN}` = `arn:aws:s3:::<bucket-name>/*` — có `/*`, dùng
-  cho `PutObject`, `GetObject` và `DeleteObject`.
-- `${CLOUDFRONT_DISTRIBUTION_ARN}` =
-  `arn:aws:cloudfront::<account-id>:distribution/<distribution-id>` — không có
-  region và phải gồm tiền tố `distribution/`.
+- `${FRONTEND_BUCKET_OBJECT_ARN}` = `arn:aws:s3:::<bucket-name>/frontend/releases/*`.
+- `${EC2_INSTANCE_ARN}` = ARN của EC2 đích.
 
 Thay placeholder bằng ARN thật trực tiếp trong IAM Console; không ghi ARN thật vào
 repo.
@@ -88,7 +79,8 @@ repo.
 
 - [ ] Provider URL và audience đúng.
 - [ ] `sub` chỉ cho phép `repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main`.
-- [ ] Claim `workflow` là `Deploy frontend` và claim `ref` là `refs/heads/main`.
+- [ ] Claim `workflow` là `Deploy frontend`, `workflow_ref` đúng file O7 và claim
+  `ref` là `refs/heads/main`.
 - [ ] Không workflow nào khác trong repository được đặt tên `Deploy frontend`.
 - [ ] Workflow O7 dùng Repository Variables/Secrets và không đặt `environment:`.
 - [ ] Role không có `AdministratorAccess`.
@@ -102,7 +94,7 @@ theo quy định của nhóm:
 
 - Frontend role ARN (`aem-github-frontend-deploy-role`).
 - Tên bucket frontend.
-- CloudFront distribution ID.
+- EC2 instance ID đích.
 
-O7 dùng `aws-actions/configure-aws-credentials` với OIDC và không dùng
-`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+O7 dùng `aws-actions/configure-aws-credentials` với OIDC, sau đó dùng S3 + SSM
+để triển khai lên EC2; không dùng `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
