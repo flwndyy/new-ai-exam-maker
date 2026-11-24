@@ -181,6 +181,43 @@ describe("ExamViewPage", () => {
     expect(screen.queryByRole("button", { name: messages.exams.editTitle })).toBeNull();
   });
 
+  it("shows both export links for an exportable version the user can read", async () => {
+    const v1 = summary("V1", 1, "Approved");
+    setupApi({ exam: examDetail(ME, [v1]), versions: { V1: { status: 200, body: { ...v1, items: [], warnings: [] } } } });
+    mocks.search = "id=E1&vid=V1";
+    renderPage();
+    const student = await screen.findByRole("link", { name: messages.exams.print.toStudent });
+    expect(student.getAttribute("href")).toMatch(/^\/exams\/print\/?\?id=E1&vid=V1&mode=student$/);
+    expect(screen.getByRole("link", { name: messages.exams.print.toAnswer }).getAttribute("href")).toMatch(
+      /^\/exams\/print\/?\?id=E1&vid=V1&mode=answer$/,
+    );
+  });
+
+  it.each(["Draft", "Rejected", "Archived"])("shows no export links for %s", async (status) => {
+    const v1 = summary("V1", 1, status);
+    setupApi({ exam: examDetail(ME, [v1]), versions: { V1: { status: 200, body: { ...v1, items: [], warnings: [] } } } });
+    mocks.search = "id=E1&vid=V1";
+    renderPage();
+    await waitFor(() => expect(requestedVids()).toContain("V1"));
+    await waitFor(() => expect(screen.queryByText(messages.common.loading)).toBeNull());
+    expect(screen.queryByRole("link", { name: messages.exams.print.toStudent })).toBeNull();
+    expect(screen.queryByRole("link", { name: messages.exams.print.toAnswer })).toBeNull();
+  });
+
+  it("on 403 shows the student-sheet notice with a link to mode=student and no answer link", async () => {
+    setupApi({
+      exam: examDetail(OTHER, [summary("V1", 1, "Published", OTHER)]),
+      versions: { V1: { status: 403, body: { code: "Forbidden", title: "Forbidden" } } },
+    });
+    mocks.search = "id=E1&vid=V1";
+    renderPage();
+    expect(await screen.findByText(messages.exams.studentSheetOnly)).toBeTruthy();
+    expect(screen.getByRole("link", { name: messages.exams.print.toStudent }).getAttribute("href")).toMatch(
+      /^\/exams\/print\/?\?id=E1&vid=V1&mode=student$/,
+    );
+    expect(screen.queryByRole("link", { name: messages.exams.print.toAnswer })).toBeNull();
+  });
+
   it("read-only view flags drifted sources and unavailable content", async () => {
     mocks.auth.me.role = "head";
     const v1 = summary("V1", 1, "Draft", OTHER);

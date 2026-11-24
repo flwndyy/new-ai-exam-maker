@@ -195,6 +195,52 @@ public sealed class ExamManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    // Exports must come from the frozen snapshot even after the live source question is edited.
+    public async Task Exports_read_frozen_snapshots_after_the_source_question_changes()
+    {
+        await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        await ComposeAsync(id, new ExamItemInput(q.Id, 2));
+        await ActAsync(owner, id, ExamAction.Submit); await ActAsync(head, id, ExamAction.Approve); await ActAsync(admin, id, ExamAction.Publish);
+        await using (var change = fixture.CreateContext())
+            await change.Questions.Where(x => x.Id == q.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Stem, "EDITED").SetProperty(x => x.Revision, 2)
+                .SetProperty(x => x.Payload, Payload.Replace("\"correctLabel\":\"A\"", "\"correctLabel\":\"D\"").Replace("\"One\"", "\"EDITED-OPTION\""))
+                .SetProperty(x => x.Explanation, "EDITED-EXPLANATION"));
+
+        await using var read = fixture.CreateContext();
+        var sheet = await Service(read).StudentSheetAsync(peer, id, default);
+        Assert.Equal("Synthetic exam", sheet.Header.ExamTitle); Assert.False(string.IsNullOrEmpty(sheet.Header.SubjectName));
+        Assert.Equal(1, sheet.Header.VersionNo); Assert.Equal(2m, sheet.Header.TotalPoints);
+        var item = Assert.Single(sheet.Items);
+        Assert.Equal("Synthetic question", item.Stem); Assert.Equal(1, item.Number);
+        Assert.False(item.Payload.TryGetProperty("correctLabel", out _));
+        Assert.Equal(4, item.Payload.GetProperty("options").GetArrayLength());
+        Assert.Equal("One", item.Payload.GetProperty("options")[0].GetProperty("text").GetString());
+
+        var key = await Service(read).AnswerKeyAsync(owner, id, default);
+        Assert.Equal("Synthetic question", Assert.Single(key.Items).Stem);
+        Assert.Equal("A", key.Items[0].Payload.GetProperty("correctLabel").GetString());
+        Assert.Equal("One", key.Items[0].Payload.GetProperty("options")[0].GetProperty("text").GetString());
+        Assert.Null(key.Items[0].Explanation);
+        Assert.Equal("Forbidden", (await Assert.ThrowsAsync<ExamException>(() => Service(read).AnswerKeyAsync(peer, id, default))).Code);
+    }
+
+    [PostgresFact]
+    public async Task Exports_refuse_editable_and_archived_versions()
+    {
+        await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var id = exam.Versions[0].Id;
+        await ComposeAsync(id, new ExamItemInput(q.Id, 1));
+        await using (var db = fixture.CreateContext())
+            Assert.Equal("ExportUnavailable", (await Assert.ThrowsAsync<ExamException>(() => Service(db).StudentSheetAsync(owner, id, default))).Code);
+        await ActAsync(owner, id, ExamAction.Submit);
+        await using (var db = fixture.CreateContext())
+            Assert.Equal("NotFound", (await Assert.ThrowsAsync<ExamException>(() => Service(db).StudentSheetAsync(outsider, id, default))).Code);
+        await ActAsync(head, id, ExamAction.Approve); await ActAsync(owner, id, ExamAction.Archive);
+        await using var read = fixture.CreateContext();
+        Assert.Equal("ExportUnavailable", (await Assert.ThrowsAsync<ExamException>(() => Service(read).StudentSheetAsync(owner, id, default))).Code);
+        Assert.Equal("ExportUnavailable", (await Assert.ThrowsAsync<ExamException>(() => Service(read).AnswerKeyAsync(owner, id, default))).Code);
+    }
+
+    [PostgresFact]
     public async Task Visibility_separates_published_metadata_from_answers_and_hides_other_versions()
     {
         await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var id = exam.Versions[0].Id;

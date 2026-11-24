@@ -59,4 +59,6 @@ public interface IExamManagement
     Task<ExamVersionView> UpdateVersionAsync(Guid actor, Guid id, ExamVersionInput input, CancellationToken cancellationToken);
     Task<ExamVersionView> TransitionAsync(Guid actor, Guid id, ExamAction action, ExamReviewInput? input, CancellationToken cancellationToken);
     Task<ExamVersionPage> ReviewQueueAsync(Guid actor, ExamReviewQuery query, CancellationToken cancellationToken);
+    Task<StudentSheet> StudentSheetAsync(Guid actor, Guid id, CancellationToken cancellationToken);
+    Task<AnswerKey> AnswerKeyAsync(Guid actor, Guid id, CancellationToken cancellationToken);
 }

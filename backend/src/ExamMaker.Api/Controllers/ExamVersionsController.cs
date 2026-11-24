@@ -57,6 +57,14 @@ public sealed class ExamVersionsController(IExamManagement exams, ICurrentUser c
     [Authorize(Policy = AccessPolicies.Admin)]
     public Task<ExamVersionView> Unpublish(Guid vid, CancellationToken cancellationToken) => Act(vid, ExamAction.Unpublish, null, cancellationToken);
 
+    /// <summary>Student sheet from the frozen snapshot; never contains answers, explanations or difficulty.</summary>
+    [HttpGet("{vid:guid}/student-sheet")]
+    public Task<StudentSheet> StudentSheet(Guid vid, CancellationToken cancellationToken) => exams.StudentSheetAsync(currentUser.User!.Id, vid, cancellationToken);
+
+    /// <summary>Answer key from the frozen snapshot for readers with answer access.</summary>
+    [HttpGet("{vid:guid}/answer-key")]
+    public Task<AnswerKey> AnswerKey(Guid vid, CancellationToken cancellationToken) => exams.AnswerKeyAsync(currentUser.User!.Id, vid, cancellationToken);
+
     private Task<ExamVersionView> Act(Guid id, ExamAction action, ExamReviewInput? input, CancellationToken cancellationToken) =>
         exams.TransitionAsync(currentUser.User!.Id, id, action, input, cancellationToken);
 }

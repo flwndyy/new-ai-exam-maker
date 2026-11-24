@@ -24,6 +24,8 @@ env:
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
   NEXT_PUBLIC_COGNITO_DOMAIN: ${{ vars.NEXT_PUBLIC_COGNITO_DOMAIN }}
   NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.NEXT_PUBLIC_COGNITO_CLIENT_ID }}
+  # Optional: school name printed on exam sheets (B10); unset omits the line.
+  NEXT_PUBLIC_SCHOOL_NAME: ${{ vars.NEXT_PUBLIC_SCHOOL_NAME }}
 
 jobs:
   deploy:
