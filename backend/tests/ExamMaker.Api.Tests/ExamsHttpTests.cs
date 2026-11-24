@@ -112,6 +112,74 @@ public sealed class ExamsHttpTests
             Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync($"/api/v1/exam-versions/{id}/{action}", new { })).StatusCode);
         Assert.Equal(0, app.Management.Calls);
     }
+
+    private static readonly string[] Sentinels = ["MODEL-ANSWER-SENTINEL", "EXPLANATION-SENTINEL", "ACCEPTED-SENTINEL"];
+
+    private static void AssertNoForbiddenKeys(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+            foreach (var property in element.EnumerateObject())
+            {
+                Assert.DoesNotContain(property.Name, ExamExportTests.ForbiddenKeys);
+                AssertNoForbiddenKeys(property.Value);
+            }
+        else if (element.ValueKind == JsonValueKind.Array)
+            foreach (var item in element.EnumerateArray()) AssertNoForbiddenKeys(item);
+    }
+
+    [Fact]
+    public async Task Student_sheet_json_contains_no_answer_fields_or_values()
+    {
+        using var app = new ExamsTestFactory(); using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.GetAsync($"/api/v1/exam-versions/{app.Management.Version.Id}/student-sheet");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        foreach (var sentinel in Sentinels) Assert.DoesNotContain(sentinel, raw);
+        var body = JsonDocument.Parse(raw).RootElement;
+        AssertNoForbiddenKeys(body);
+        Assert.Equal(1, body.GetProperty("header").GetProperty("versionNo").GetInt32());
+        Assert.Equal(1, body.GetProperty("items")[0].GetProperty("number").GetInt32());
+        Assert.Equal(4, body.GetProperty("items").GetArrayLength());
+        Assert.Equal(AuthTestFactory.Teacher.Id, app.Management.Actor);
+    }
+
+    [Fact]
+    public async Task Answer_key_json_carries_answers_and_explanations()
+    {
+        using var app = new ExamsTestFactory(); using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.GetAsync($"/api/v1/exam-versions/{app.Management.Version.Id}/answer-key");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        foreach (var sentinel in Sentinels) Assert.Contains(sentinel, raw);
+        Assert.Contains("correctLabel", raw);
+        foreach (var item in JsonDocument.Parse(raw).RootElement.GetProperty("items").EnumerateArray())
+            Assert.Equal(JsonValueKind.String, item.GetProperty("difficulty").ValueKind);
+    }
+
+    [Theory]
+    [InlineData("student-sheet", 404, "NotFound")]
+    [InlineData("student-sheet", 409, "ExportUnavailable")]
+    [InlineData("answer-key", 403, "Forbidden")]
+    [InlineData("answer-key", 409, "ExportUnavailable")]
+    public async Task Export_errors_map_to_problem_details(string route, int status, string code)
+    {
+        using var app = new ExamsTestFactory(); app.Management.Error = new(status, code, "Safe error");
+        using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        using var response = await client.GetAsync($"/api/v1/exam-versions/{app.Management.Version.Id}/{route}");
+        Assert.Equal((HttpStatusCode)status, response.StatusCode);
+        Assert.Equal(code, (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Anonymous_export_requests_never_dispatch()
+    {
+        using var app = new ExamsTestFactory(); using var client = app.CreateClient(); var id = app.Management.Version.Id;
+        foreach (var route in new[] { "student-sheet", "answer-key" })
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/api/v1/exam-versions/{id}/{route}")).StatusCode);
+        Assert.Equal(0, app.Management.Calls);
+    }
 }
 
 public sealed class ExamsTestFactory : AuthTestFactory
@@ -157,4 +225,18 @@ public sealed class FakeExams : IExamManagement
     public Task<ExamVersionView> TransitionAsync(Guid actor, Guid id, ExamAction action, ExamReviewInput? input, CancellationToken cancellationToken)
     { Review = input; return GetVersionAsync(actor, id, cancellationToken); }
     public Task<ExamVersionPage> ReviewQueueAsync(Guid actor, ExamReviewQuery query, CancellationToken cancellationToken) => VersionsAsync(actor, Exam.Id, query.Page, query.PageSize, cancellationToken);
+
+    private static readonly SheetHeader ExportHeader = new("Synthetic exam", "Synthetic subject", "Synthetic department", 10, 1, 45, 4);
+    // All four types carry answer sentinels so HTTP tests prove the real projection, not a hand-built DTO.
+    private static readonly ExportSnapshotItem[] ExportItems =
+    [
+        new(1, 1, "MultipleChoice", "Recognition", "MC stem", """{"options":[{"label":"A","text":"x"},{"label":"B","text":"y"},{"label":"C","text":"z"},{"label":"D","text":"w"}],"correctLabel":"B"}""", "EXPLANATION-SENTINEL"),
+        new(2, 1, "TrueFalse", "Understanding", "TF stem", """{"statements":[{"label":"a","text":"s1","isTrue":true},{"label":"b","text":"s2","isTrue":false},{"label":"c","text":"s3","isTrue":true},{"label":"d","text":"s4","isTrue":false}]}""", null),
+        new(3, 1, "ShortAnswer", "Application", "SA stem", """{"answerType":"text","acceptedAnswers":["ACCEPTED-SENTINEL"],"unit":"m"}""", null),
+        new(4, 1, "Essay", "HighApplication", "Essay stem", """{"modelAnswer":"MODEL-ANSWER-SENTINEL","rubric":[{"criterion":"c","points":1}]}""", null),
+    ];
+    public Task<StudentSheet> StudentSheetAsync(Guid actor, Guid id, CancellationToken cancellationToken)
+    { Capture(actor); return Task.FromResult(ExamExport.BuildStudentSheet(ExportHeader, ExportItems)); }
+    public Task<AnswerKey> AnswerKeyAsync(Guid actor, Guid id, CancellationToken cancellationToken)
+    { Capture(actor); return Task.FromResult(ExamExport.BuildAnswerKey(ExportHeader, ExportItems)); }
 }

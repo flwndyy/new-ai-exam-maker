@@ -97,6 +97,37 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
         return await VersionViewAsync(actor, id, [], cancellationToken);
     }
 
+    /// <summary>Return the student sheet built only from frozen snapshot columns with whitelisted payload fields.</summary>
+    public async Task<StudentSheet> StudentSheetAsync(Guid actorId, Guid id, CancellationToken cancellationToken)
+    {
+        var (header, items) = await LoadExportAsync(actorId, id, false, cancellationToken);
+        return ExamExport.BuildStudentSheet(header, items);
+    }
+
+    /// <summary>Return the teacher answer key from frozen snapshot columns after enforcing answer access.</summary>
+    public async Task<AnswerKey> AnswerKeyAsync(Guid actorId, Guid id, CancellationToken cancellationToken)
+    {
+        var (header, items) = await LoadExportAsync(actorId, id, true, cancellationToken);
+        return ExamExport.BuildAnswerKey(header, items);
+    }
+
+    /// <summary>Read a version with its snapshot rows only; live source questions are never loaded for exports.</summary>
+    private async Task<(SheetHeader Header, IReadOnlyList<ExportSnapshotItem> Items)> LoadExportAsync(Guid actorId, Guid id, bool answerKey, CancellationToken cancellationToken)
+    {
+        var actor = await ActorAsync(actorId, false, cancellationToken);
+        var v = await database.ExamVersions.AsNoTracking()
+            .Include(x => x.Exam).ThenInclude(e => e!.Subject)
+            .Include(x => x.Exam).ThenInclude(e => e!.Department)
+            .Include(x => x.Questions)
+            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken) ?? throw ExamRules.Missing();
+        var exam = v.Exam!;
+        ExamExport.Authorize(actor, exam, v.Status, answerKey);
+        var header = new SheetHeader(exam.Title, exam.Subject!.Name, exam.Department?.Name, exam.Grade, v.VersionNo, v.DurationMinutes, v.TotalPoints);
+        var items = v.Questions.Select(i => new ExportSnapshotItem(i.SortOrder, i.Points, i.Type, i.Difficulty, i.StemSnapshot,
+            i.PayloadSnapshot, i.ExplanationSnapshot)).ToArray();
+        return (header, items);
+    }
+
     /// <summary>Allocate the next version number under the exam lock and copy currently selectable source links.</summary>
     public Task<ExamVersionView> CreateVersionAsync(Guid actorId, Guid examId, ExamVersionCreateInput input, CancellationToken cancellationToken) =>
         MutateAsync(actorId, async actor =>

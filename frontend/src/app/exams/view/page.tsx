@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { ExamComposer } from "@/components/exams/exam-composer";
+import { ExportLinks } from "@/components/exams/export-links";
 import { ExamHeader } from "@/components/exams/exam-header";
 import { VersionActions } from "@/components/exams/version-actions";
 import { VersionReadonly } from "@/components/exams/version-readonly";
@@ -15,7 +16,7 @@ import { fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getUiErrorMessage } from "@/lib/api/error";
 import { useAuth } from "@/lib/auth/auth-context";
-import { pickDefaultVersionId, type Role, versionActions } from "@/lib/exams/rules";
+import { canExport, pickDefaultVersionId, type Role, versionActions } from "@/lib/exams/rules";
 import { vi } from "@/messages/vi";
 
 type HttpFailure = { status: number; error: unknown };
@@ -129,11 +130,17 @@ function ExamView({ id }: { id: string }) {
         </div>
       )}
 
+      {version && canExport(version.status) && <ExportLinks examId={id} versionId={version.id} canReadAnswers />}
+
       {versionQuery.isLoading && <p>{vi.common.loading}</p>}
       {versionQuery.isError && (
         <p className="text-rose-600">
           {versionStatus === 403 ? vi.exams.studentSheetOnly : versionStatus === 404 ? vi.exams.notFound : getUiErrorMessage(versionQuery.error)}
         </p>
+      )}
+      {/* A 403 on the detail means "no answer access": the student sheet may still be exportable. */}
+      {versionStatus === 403 && vid && summary && canExport(summary.status) && (
+        <ExportLinks examId={id} versionId={vid} canReadAnswers={false} />
       )}
       {version &&
         (actions.canEdit && me ? (

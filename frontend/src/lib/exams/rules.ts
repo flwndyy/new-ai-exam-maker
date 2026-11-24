@@ -20,6 +20,13 @@ export type VersionActionFlags = {
 
 const EDITABLE: ReadonlySet<ExamVersionStatus> = new Set(["Draft", "Rejected"]);
 
+const EXPORTABLE: ReadonlySet<ExamVersionStatus> = new Set(["Submitted", "Approved", "Published"]);
+
+/** Only frozen, never-archived versions can be exported (docs/context.md §4.4). */
+export function canExport(status: ExamVersionStatus): boolean {
+  return EXPORTABLE.has(status);
+}
+
 /** A bank question can be added when it is the author's own (not archived) or approved. */
 export function isSelectable(q: Question, meId: string): boolean {
   return (q.createdBy.id === meId && q.status !== "Archived") || q.status === "Approved";

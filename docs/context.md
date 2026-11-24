@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.23** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.24** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -92,8 +92,8 @@ Tổ chức thi trực tuyến, chấm điểm tự động. "Đưa vào thi c�
 | Publish / Unpublish phiên bản đề `Approved`                                           | –                                  | –                                                   | ✓                       |
 | Archive phiên bản đề `Approved`/`Rejected`                                            | của mình                           | cùng tổ                                             | tất cả                  |
 | Đọc danh mục môn/chương/tổ (`GET /subjects`, `/topics`, `/departments`)               | ✓                                  | ✓                                                   | ✓                       |
-| Xuất đề học sinh                                                                      | đề của mình & đề Published cùng tổ | như teacher                                         | tất cả                  |
-| Xuất **file đáp án/lời giải**                                                         | đề của mình                        | đề trong tổ                                         | tất cả                  |
+| Xuất đề học sinh (chỉ phiên bản `Submitted`/`Approved`/`Published`)                   | đề của mình & đề Published cùng tổ | đề trong tổ & đề của mình                           | tất cả                  |
+| Xuất **file đáp án/lời giải** (chỉ phiên bản `Submitted`/`Approved`/`Published`)      | đề của mình                        | đề trong tổ & đề của mình                           | tất cả                  |
 | Quản lý user, tổ, môn, chương                                                         | –                                  | –                                                   | ✓                       |
 | Xem audit log / thống kê AI                                                           | –                                  | log trong tổ (snapshot tổ; dòng NULL chỉ Admin xem) | tất cả                  |
 
@@ -301,6 +301,10 @@ Hai loại file riêng, **không bao giờ trộn**:
 - **Đáp án/lời giải cho giáo viên**: đáp án, lời giải, thang điểm/rubric. Quyền truy cập chặt hơn (mục 3.2).
 
 Công thức Toán/Lý/Hóa dùng LaTeX/KaTeX. **Cách xuất MVP**: trang xem trước có CSS in, xuất PDF bằng trình duyệt (KaTeX hiển thị đúng, không cần server dựng công thức). **DOCX** (cần chuyển LaTeX→công thức Word) để sau MVP. Vì vậy MVP chưa bắt buộc bucket S3 cho file xuất.
+
+- **Trạng thái được xuất**: chỉ `Submitted`/`Approved`/`Published` (409 `ExportUnavailable` với trạng thái khác). `Draft`/`Rejected` chưa có snapshot; `Archived` có thể đến từ `Rejected` với snapshot thiếu hoặc nội dung chưa từng được duyệt, và DB không lưu đường đi, nên không xuất. Xem lại bản `Archived` dùng màn chi tiết đề (B9).
+- **Ai xem được đáp án thì xem được đề học sinh** của cùng phiên bản (đáp án đã chứa toàn bộ đề); Head cần bản học sinh khi duyệt.
+- **Đề học sinh chỉ chép trường được phép** (whitelist) theo từng dạng câu, không chép payload rồi xóa trường đáp án, để trường đáp án thêm sau này không tự lọt sang.
 
 ---
 
@@ -565,6 +569,15 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 - **Cảnh báo**: câu có `currentSourceRevision` khác `sourceRevision` hiện "Câu nguồn đã thay đổi so với lúc chọn"; `warnings` của server hiện thành danh sách; câu không xem được nội dung vẫn giữ dòng, điểm và nút bỏ.
 - **Thao tác**: "Gửi duyệt" chỉ bật khi đã lưu và có ít nhất 1 câu; 409 `QuestionsNotApproved` tô đỏ các câu trong `invalidQuestionIds`. "Rút lại" cho `Submitted`; "Lưu trữ" (có xác nhận) cho `Approved`/`Rejected`; "Tạo phiên bản mới" sao chép từ bản đang xem, ẩn khi đề đã có bản `Draft`.
 
+#### Chi tiết triển khai B10
+
+- **Endpoint**: `GET /exam-versions/{vid}/student-sheet` và `/answer-key`, đọc **chỉ** cột snapshot của `exam_version_questions` (không đọc câu gốc), không khóa, không ghi audit (thao tác đọc). Thiết kế: `docs/superpowers/specs/2026-11-24-b10-exam-export-design.md`.
+- **Thứ tự kiểm**: không thấy phiên bản (`ExamRules.CanRead`) → 404; answer-key mà không có quyền đáp án (`ExamRules.CanReadAnswers`) → 403; trạng thái ngoài `Submitted`/`Approved`/`Published` hoặc snapshot thiếu → 409 `ExportUnavailable`.
+- **Whitelist đề học sinh** (`ExamExport.StudentPayload`): `MultipleChoice` → `options[].label/text`; `TrueFalse` → `statements[].label/text`; `ShortAnswer` → `answerType`, `unit` (null nếu không có); `Essay` → `{}`. Không có `difficulty`, `explanation`, người tạo/duyệt. Payload snapshot sai cấu trúc hoặc dạng lạ → 500, không bao giờ trả payload gốc.
+- **Trang in** `/exams/print/?id=<examId>&vid=<versionId>&mode=student|answer`: chế độ học sinh chỉ gọi `student-sheet`, chế độ đáp án chỉ gọi `answer-key`; nút "In / Lưu PDF" gọi `window.print()`; khi in ẩn menu, khổ A4. Tham số thiếu/sai thì báo lỗi, không gọi API.
+- **Tên trường** trên header lấy từ `NEXT_PUBLIC_SCHOOL_NAME` (build-time, tùy chọn, không commit giá trị thật); trống thì bỏ dòng.
+- **Liên kết** từ `/exams/view/`: bản xuất được và đọc được chi tiết → "Xem đề học sinh" + "Xem đáp án"; đọc chi tiết bị 403 → chỉ link đề học sinh.
+
 ---
 
 ## 10. Bảo mật & giám sát
@@ -662,6 +675,7 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 - **Kiến trúc CPU**: **`t4g.small`** (ARM64) cho EC2 và **`db.t4g.micro`** cho RDS; backend publish `linux-arm64` (mục 5.2, 11). _Chốt 19/11/2026._
 - **Công cụ hạ tầng**: dựng qua **AWS Console + script/file cấu hình mẫu trong `/infra`** (Nginx, systemd, CloudFront Function, bootstrap) và **ghi runbook trong `docs/`**; IaC hoàn chỉnh để sau MVP (mục 5.4). _Chốt 19/11/2026._
 - **Backfill `audit_logs.department_id` theo phương án (b)**: chỉ backfill từ các thực thể hiện có mang tổ bất biến (`Question`, `Exam`, `ExamVersion`, `Department`); lịch sử cũ trước migration của `User`, `Subject`, `Topic`, `QuestionSet`, `AiJob` và thực thể đã xóa trước migration giữ `department_id` NULL (chỉ Admin xem) để không lộ lịch sử chéo tổ (mục 3.2, 8.1). _Chốt 22/11/2026._
+- **Quyền & phạm vi xuất đề (B10)**: Head xuất được đề học sinh của mọi đề trong tổ (ai xem được đáp án thì xem được đề học sinh); chỉ xuất phiên bản `Submitted`/`Approved`/`Published`, không xuất `Draft`/`Rejected`/`Archived` (mục 3.2, 4.4). _Chốt 24/11/2026._
 
 ---
 
@@ -684,6 +698,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.24 — 24/11/2026**
+- Triển khai xuất đề B10: `student-sheet`/`answer-key` đọc từ snapshot, whitelist payload đề học sinh, mã lỗi `ExportUnavailable`; trang in `/exams/print/` (CSS in + KaTeX, PDF qua trình duyệt) và link từ trang xem đề. Mở rộng quyền xuất đề học sinh của Head ra mọi đề trong tổ; chỉ xuất `Submitted`/`Approved`/`Published`. Cập nhật mục 3.2, 4.4, 9.2, 14.
 
 **0.23 — 23/11/2026**
 - Triển khai frontend soạn đề B9 trên API A7: danh sách/tạo đề, trang soạn phiên bản hai cột (ngân hàng câu, sắp xếp ↑ ↓, điểm thập phân chính xác, "Chia đều 10 điểm"), lưu thủ công, gửi duyệt/rút lại/lưu trữ/tạo phiên bản mới, cảnh báo câu nguồn đổi `revision` và tô câu chưa duyệt. Không đổi backend. Thêm "Chi tiết triển khai B9" ở 9.2.

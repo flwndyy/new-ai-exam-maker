@@ -753,9 +753,12 @@ export interface paths {
         };
         /**
          * Dữ liệu đề học sinh (không đáp án)
-         * @description Đọc từ **snapshot**; chỉ phiên bản từ `Submitted` trở đi (còn `Draft`/`Rejected` → 409, vì chưa có snapshot).
-         *     Schema `StudentSheet` **không có** trường đáp án/lời giải — tách hẳn khỏi `AnswerKey` để đáp án không lọt vào đề học sinh.
-         *     Quyền: đề của mình & đề `Published` cùng tổ (Teacher/Head), tất cả (Admin).
+         * @description Đọc từ **snapshot**; chỉ phiên bản `Submitted`/`Approved`/`Published`. Trạng thái khác (`Draft`/`Rejected` chưa có snapshot,
+         *     `Archived` có thể thiếu snapshot hoặc chưa từng được duyệt) hoặc snapshot thiếu → 409 `ExportUnavailable`.
+         *     Schema `StudentSheet` **không có** trường đáp án/lời giải — server chỉ chép trường được phép theo từng dạng câu (whitelist),
+         *     tách hẳn khỏi `AnswerKey` để đáp án không lọt vào đề học sinh.
+         *     Quyền: Admin tất cả; tác giả đề của mình; Head mọi đề cùng tổ; Teacher phiên bản `Published` cùng tổ.
+         *     Không thấy phiên bản → 404 (không lộ phiên bản riêng tư).
          *     Frontend dựng trang xem trước có CSS in + KaTeX và xuất PDF bằng trình duyệt; tên trường (header) do frontend cấu hình.
          */
         get: operations["getStudentSheet"];
@@ -776,8 +779,9 @@ export interface paths {
         };
         /**
          * Dữ liệu đáp án/lời giải cho giáo viên
-         * @description Đọc từ snapshot, quyền chặt hơn: đề của mình (Teacher), đề trong tổ (Head), tất cả (Admin).
-         *     Người chỉ được xem đề học sinh → 403.
+         * @description Đọc từ snapshot, quyền chặt hơn: đề của mình (Teacher), đề trong tổ hoặc của mình (Head), tất cả (Admin).
+         *     Không thấy phiên bản → 404; người chỉ được xem đề học sinh → 403.
+         *     Chỉ phiên bản `Submitted`/`Approved`/`Published`; trạng thái khác hoặc snapshot thiếu → 409 `ExportUnavailable`.
          */
         get: operations["getAnswerKey"];
         put?: never;
@@ -1088,11 +1092,12 @@ export interface components {
          *     - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
          *     - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
          *     - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
+         *     - `ExportUnavailable` (409): phiên bản không xuất được (chỉ `Submitted`/`Approved`/`Published` có snapshot đầy đủ)
          *     - `QuotaExceeded` (429) · `RateLimited` (429)
          *     - `InternalError` (500)
          * @enum {string}
          */
-        ErrorCode: "ValidationFailed" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "SelfReview" | "InvalidStateTransition" | "AiReviewRequired" | "QuestionReferenced" | "QuestionsNotApproved" | "PublishedVersionExists" | "QuotaExceeded" | "RateLimited" | "InternalError";
+        ErrorCode: "ValidationFailed" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "SelfReview" | "InvalidStateTransition" | "AiReviewRequired" | "QuestionReferenced" | "QuestionsNotApproved" | "PublishedVersionExists" | "ExportUnavailable" | "QuotaExceeded" | "RateLimited" | "InternalError";
         PageMeta: {
             page: number;
             pageSize: number;

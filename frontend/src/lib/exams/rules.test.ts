@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ItemView } from "@/lib/exams/composer-schema";
-import { hasRevisionDrift, isSelectable, pickDefaultVersionId, versionActions } from "@/lib/exams/rules";
+import { canExport, hasRevisionDrift, isSelectable, pickDefaultVersionId, versionActions } from "@/lib/exams/rules";
 import type { components } from "@/lib/api/schema";
 
 type Question = components["schemas"]["Question"];
@@ -98,4 +98,11 @@ describe("versionActions", () => {
       expect(versionActions({ status, isAuthor: true, role: "admin", hasDraft: false })).toEqual(none);
     },
   );
+});
+
+describe("canExport", () => {
+  it("allows only frozen, exportable statuses", () => {
+    expect((["Submitted", "Approved", "Published"] as const).every(canExport)).toBe(true);
+    expect((["Draft", "Rejected", "Archived"] as const).some(canExport)).toBe(false);
+  });
 });

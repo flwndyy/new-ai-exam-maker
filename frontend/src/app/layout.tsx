@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="vi">
       <body>
         <Providers>
-          <header className="border-b border-slate-200">
+          <header className="border-b border-slate-200 print:hidden">
             <nav className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3">
               <Link href="/" className="font-semibold">
                 {vi.app.name}
@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <UserMenu />
             </nav>
           </header>
-          <main className="mx-auto max-w-5xl px-4 py-8">
+          <main className="mx-auto max-w-5xl px-4 py-8 print:max-w-none print:p-0">
             <AuthGate>{children}</AuthGate>
           </main>
         </Providers>

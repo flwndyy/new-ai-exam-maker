@@ -4,3 +4,20 @@
 body {
   @apply bg-white text-slate-900 antialiased;
 }
+
+/* B10 print preview: A4 pages, keep each question on one page, keep answer highlights when printing. */
+@page {
+  size: A4;
+  margin: 15mm;
+}
+
+.print-item {
+  break-inside: avoid;
+}
+
+@media print {
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
