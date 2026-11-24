@@ -108,6 +108,33 @@ describe("VersionActions", () => {
     await waitFor(() => expect(onVersionCreated).toHaveBeenCalledWith("V3"));
   });
 
+  it("puts the new version into the cached exam before navigating to it", async () => {
+    mocks.apiPost.mockReturnValue(ok({ ...version("Draft"), id: "V3", versionNo: 3 }, 201));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cachedExam = exam([{ id: "V2", status: "Approved" }]);
+    client.setQueryData(["exam", "E1"], cachedExam);
+    let versionsAtNavigation: string[] = [];
+    const onVersionCreated = vi.fn(() => {
+      versionsAtNavigation = (client.getQueryData(["exam", "E1"]) as ExamDetail).versions.map((v) => v.id);
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <VersionActions
+          exam={cachedExam}
+          version={version("Approved")}
+          role="teacher"
+          meId={ME}
+          dirty={false}
+          onNotApproved={vi.fn()}
+          onVersionCreated={onVersionCreated}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(button(messages.exams.createVersion)!);
+    await waitFor(() => expect(onVersionCreated).toHaveBeenCalledWith("V3"));
+    expect(versionsAtNavigation).toEqual(["V3", "V2"]);
+  });
+
   it("archive asks for confirmation first", async () => {
     confirm.mockReturnValue(false);
     renderActions(version("Approved"));

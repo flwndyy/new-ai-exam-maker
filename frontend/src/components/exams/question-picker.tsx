@@ -26,12 +26,15 @@ export function QuestionPicker({
   grade,
   meId,
   selectedIds,
+  addDisabled = false,
   onAdd,
 }: {
   subjectId: string;
   grade: Grade;
   meId: string;
   selectedIds: ReadonlySet<string>;
+  /** Temporarily disables "Thêm" (e.g. while the composer is saving). */
+  addDisabled?: boolean;
   onAdd: (q: Question) => void;
 }) {
   const [page, setPage] = useState(1);
@@ -136,8 +139,9 @@ export function QuestionPicker({
                 {canAdd && (
                   <button
                     type="button"
+                    disabled={addDisabled}
                     onClick={() => onAdd(q)}
-                    className="rounded border border-slate-300 px-3 py-1 text-sm font-medium hover:bg-slate-50"
+                    className="rounded border border-slate-300 px-3 py-1 text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
                   >
                     {vi.exams.add}
                   </button>

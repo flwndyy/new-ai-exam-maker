@@ -111,6 +111,8 @@ export function ExamComposer({
     },
   });
 
+  const saving = mutation.isPending;
+
   const reload = () => {
     setBanner(null);
     appliedVersion.current = version;
@@ -141,103 +143,107 @@ export function ExamComposer({
           setBanner(null);
           mutation.mutate(body);
         })}
-        className="space-y-3"
+        className="min-w-0"
       >
-        <h2 className="text-lg font-semibold text-slate-900">{vi.exams.itemsTitle}</h2>
-        <div className="flex flex-wrap items-end gap-4 text-sm">
-          <label className="space-y-1">
-            <span className="block font-medium text-slate-700">{vi.exams.duration}</span>
-            <input {...register("durationMinutes")} inputMode="numeric" className="w-24 rounded border border-slate-300 px-2 py-1" />
-          </label>
-          <span>
-            {vi.exams.totalPoints}: <strong data-testid="total-points">{total}</strong>
-          </span>
-          <span>
-            {vi.exams.questionCount}: <strong>{fields.length}</strong>
-          </span>
-        </div>
-        {errors.durationMinutes && <p className="text-xs text-rose-600">{errors.durationMinutes.message}</p>}
-        {itemsError && <p className="text-xs text-rose-600">{itemsError}</p>}
-
-        {fields.length === 0 ? (
-          <p className="rounded border border-dashed border-slate-300 p-4 text-sm text-slate-500">{vi.exams.noItems}</p>
-        ) : (
-          <ol className="space-y-2">
-            {fields.map((field, index) => {
-              const n = index + 1;
-              const pointsError = errors.items?.[index]?.points?.message;
-              return (
-                <VersionItemCard key={field.fieldKey} index={index} view={field.view} highlighted={highlightIds.has(field.sourceQuestionId)}>
-                  <label className="flex items-center gap-1 text-sm">
-                    <span>{vi.exams.pointsLabel}</span>
-                    <input
-                      {...register(`items.${index}.points`)}
-                      aria-label={`${vi.exams.pointsLabel} ${n}`}
-                      inputMode="decimal"
-                      className="w-20 rounded border border-slate-300 px-2 py-1"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    aria-label={`${vi.exams.moveUp} ${n}`}
-                    disabled={index === 0}
-                    onClick={() => move(index, index - 1)}
-                    className="rounded border px-2 py-1 text-sm disabled:opacity-30"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`${vi.exams.moveDown} ${n}`}
-                    disabled={index === fields.length - 1}
-                    onClick={() => move(index, index + 1)}
-                    className="rounded border px-2 py-1 text-sm disabled:opacity-30"
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`${vi.exams.remove} ${n}`}
-                    onClick={() => remove(index)}
-                    className="rounded border border-rose-200 px-2 py-1 text-sm text-rose-700"
-                  >
-                    ✕
-                  </button>
-                  {pointsError && <span className="w-full text-xs text-rose-600">{pointsError}</span>}
-                </VersionItemCard>
-              );
-            })}
-          </ol>
-        )}
-
-        {banner && (
-          <div className={`flex flex-wrap items-center gap-3 rounded border p-3 text-sm ${bannerClass[banner.kind]}`}>
-            <span>{banner.text}</span>
-            {banner.kind === "conflict" && (
-              <button type="button" onClick={reload} className="rounded border border-current px-3 py-1 font-medium">
-                {vi.exams.reload}
-              </button>
-            )}
+        {/* Lock every edit while a save is in flight: the response resets the form, which would
+            otherwise silently drop anything typed after the request was sent. */}
+        <fieldset disabled={saving} aria-busy={saving} className="m-0 min-w-0 space-y-3 border-0 p-0">
+          <h2 className="text-lg font-semibold text-slate-900">{vi.exams.itemsTitle}</h2>
+          <div className="flex flex-wrap items-end gap-4 text-sm">
+            <label className="space-y-1">
+              <span className="block font-medium text-slate-700">{vi.exams.duration}</span>
+              <input {...register("durationMinutes")} inputMode="numeric" className="w-24 rounded border border-slate-300 px-2 py-1" />
+            </label>
+            <span>
+              {vi.exams.totalPoints}: <strong data-testid="total-points">{total}</strong>
+            </span>
+            <span>
+              {vi.exams.questionCount}: <strong>{fields.length}</strong>
+            </span>
           </div>
-        )}
+          {errors.durationMinutes && <p className="text-xs text-rose-600">{errors.durationMinutes.message}</p>}
+          {itemsError && <p className="text-xs text-rose-600">{itemsError}</p>}
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={splitEvenly}
-            disabled={fields.length === 0}
-            className="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-40"
-          >
-            {vi.exams.splitEvenly}
-          </button>
-          <button
-            type="submit"
-            disabled={!isDirty || mutation.isPending}
-            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40"
-          >
-            {mutation.isPending ? vi.common.saving : vi.exams.save}
-          </button>
-        </div>
+          {fields.length === 0 ? (
+            <p className="rounded border border-dashed border-slate-300 p-4 text-sm text-slate-500">{vi.exams.noItems}</p>
+          ) : (
+            <ol className="space-y-2">
+              {fields.map((field, index) => {
+                const n = index + 1;
+                const pointsError = errors.items?.[index]?.points?.message;
+                return (
+                  <VersionItemCard key={field.fieldKey} index={index} view={field.view} highlighted={highlightIds.has(field.sourceQuestionId)}>
+                    <label className="flex items-center gap-1 text-sm">
+                      <span>{vi.exams.pointsLabel}</span>
+                      <input
+                        {...register(`items.${index}.points`)}
+                        aria-label={`${vi.exams.pointsLabel} ${n}`}
+                        inputMode="decimal"
+                        className="w-20 rounded border border-slate-300 px-2 py-1"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`${vi.exams.moveUp} ${n}`}
+                      disabled={index === 0}
+                      onClick={() => move(index, index - 1)}
+                      className="rounded border px-2 py-1 text-sm disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${vi.exams.moveDown} ${n}`}
+                      disabled={index === fields.length - 1}
+                      onClick={() => move(index, index + 1)}
+                      className="rounded border px-2 py-1 text-sm disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${vi.exams.remove} ${n}`}
+                      onClick={() => remove(index)}
+                      className="rounded border border-rose-200 px-2 py-1 text-sm text-rose-700"
+                    >
+                      ✕
+                    </button>
+                    {pointsError && <span className="w-full text-xs text-rose-600">{pointsError}</span>}
+                  </VersionItemCard>
+                );
+              })}
+            </ol>
+          )}
+
+          {banner && (
+            <div className={`flex flex-wrap items-center gap-3 rounded border p-3 text-sm ${bannerClass[banner.kind]}`}>
+              <span>{banner.text}</span>
+              {banner.kind === "conflict" && (
+                <button type="button" onClick={reload} className="rounded border border-current px-3 py-1 font-medium">
+                  {vi.exams.reload}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={splitEvenly}
+              disabled={fields.length === 0}
+              className="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-40"
+            >
+              {vi.exams.splitEvenly}
+            </button>
+            <button
+              type="submit"
+              disabled={!isDirty || saving}
+              className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+            >
+              {saving ? vi.common.saving : vi.exams.save}
+            </button>
+          </div>
+        </fieldset>
       </form>
 
       <QuestionPicker
@@ -245,7 +251,9 @@ export function ExamComposer({
         grade={exam.grade}
         meId={meId}
         selectedIds={selectedIds}
+        addDisabled={saving}
         onAdd={(q) => {
+          if (saving) return;
           if (fields.length >= MAX_EXAM_ITEMS) {
             setBanner({ kind: "error", text: vi.exams.validation.tooMany });
             return;

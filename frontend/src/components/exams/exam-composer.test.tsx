@@ -104,6 +104,8 @@ function renderComposer(v: ExamVersion, opts: { highlightIds?: string[]; onDirty
 }
 
 const pointsInput = (n: number) => screen.getByLabelText(`${messages.exams.pointsLabel} ${n}`) as HTMLInputElement;
+// :disabled also covers controls locked by an ancestor <fieldset disabled>, unlike the .disabled property.
+const isLocked = (el: Element) => el.matches(":disabled");
 const save = () => fireEvent.click(screen.getByRole("button", { name: messages.exams.save }));
 
 describe("ExamComposer", () => {
@@ -211,6 +213,26 @@ describe("ExamComposer", () => {
     rerender(ui({ ...initial, warnings: [{ code: "X", message: "m", sourceQuestionId: null }] } as ExamVersion));
     await new Promise((r) => setTimeout(r, 20));
     expect(pointsInput(1).value).toBe("4");
+  });
+
+  it("locks editing while a save is in flight so later edits cannot be overwritten", async () => {
+    let finishSave!: (value: unknown) => void;
+    mocks.apiPut.mockReturnValue(new Promise((resolve) => (finishSave = resolve)));
+    renderComposer(version([item("q1", "A", 1)]));
+    const addButton = within((await screen.findByText("Câu ngân hàng")).closest("li") as HTMLElement).getByRole("button", {
+      name: messages.exams.add,
+    }) as HTMLButtonElement;
+    fireEvent.change(pointsInput(1), { target: { value: "2" } });
+    save();
+    await waitFor(() => expect(isLocked(pointsInput(1))).toBe(true));
+    expect(isLocked(screen.getByLabelText(messages.exams.duration))).toBe(true);
+    expect(isLocked(screen.getByRole("button", { name: messages.exams.splitEvenly }))).toBe(true);
+    expect(isLocked(screen.getByRole("button", { name: `${messages.exams.remove} 1` }))).toBe(true);
+    expect(isLocked(addButton)).toBe(true);
+    finishSave(await ok(version([item("q1", "A", 2)])));
+    await waitFor(() => expect(isLocked(pointsInput(1))).toBe(false));
+    expect(pointsInput(1).value).toBe("2");
+    expect(isLocked(addButton)).toBe(false);
   });
 
   it("highlights rows the server reported as not approved", () => {

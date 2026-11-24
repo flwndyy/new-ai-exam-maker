@@ -62,6 +62,19 @@ export function VersionActions({
     },
     onSuccess: ({ action, data }) => {
       queryClient.setQueryData(["examVersion", data.id], data);
+      if (action === "createVersion") {
+        // The page resolves `vid` against the cached version list; add the new version first so the
+        // URL switch is not overridden back to an older version before the refetch lands.
+        queryClient.setQueryData<ExamDetail>(["exam", exam.id], (old) =>
+          old
+            ? {
+                ...old,
+                latestVersionNo: Math.max(old.latestVersionNo, data.versionNo),
+                versions: [data, ...old.versions.filter((v) => v.id !== data.id)],
+              }
+            : old,
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ["exam", exam.id] });
       void queryClient.invalidateQueries({ queryKey: ["exams"] });
       if (action === "createVersion") {
