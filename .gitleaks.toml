@@ -1,0 +1,10 @@
+title = "Repository Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated local session state is not application source."
+paths = [
+  '''(^|/)\.superpowers/''',
+]

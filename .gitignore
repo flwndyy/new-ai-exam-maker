@@ -451,6 +451,9 @@ cdk.out/
 .aws-sam/
 .worktrees/
 
+# Codex/Superpowers local session state; never commit generated metadata.
+.superpowers/
+
 # ---- Khác ----
 .DS_Store
 Thumbs.db
