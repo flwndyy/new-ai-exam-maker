@@ -6,6 +6,8 @@ Mỗi lần push vào `main`, GitHub Actions build frontend tĩnh, lưu một re
 
 Luồng này không phụ thuộc CloudFront, không cần SSH và không lưu AWS access key dài hạn trong GitHub.
 
+Workflow backend không theo dõi toàn bộ `infra/deploy/**`; nó chỉ chạy khi backend hoặc các script deploy backend thay đổi. Vì vậy release frontend không vô tình kích hoạt migration/deploy backend khi được đưa lên `main`.
+
 ```text
 GitHub Actions -> build frontend/out -> tar.gz + SHA-256
   -> S3 frontend/releases/<commit>-<attempt>/

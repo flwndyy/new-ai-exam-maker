@@ -5,7 +5,10 @@ on:
     branches: [main]
     paths:
       - "backend/**"
-      - "infra/deploy/**"
+      - "infra/deploy/deploy-on-ec2.sh"
+      - "infra/deploy/rollback-backend.sh"
+      - "infra/deploy/setup-backend-cd.sh"
+      - "infra/deploy/verify-backend-cd.sh"
       - ".github/workflows/deploy-backend.yml"
   workflow_dispatch:
     inputs:
