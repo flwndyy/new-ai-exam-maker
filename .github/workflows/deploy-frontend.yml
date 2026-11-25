@@ -93,8 +93,8 @@ jobs:
       - name: Package frontend release
         id: package
         run: |
-          release_id="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}"
-          archive="$RUNNER_TEMP/frontend-${release_id}.tar.gz"
+          release_id="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive="$RUNNER_TEMP/frontend.tar.gz"
           checksum="$archive.sha256"
           tar -C out -czf "$archive" .
           (cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" > "$checksum")

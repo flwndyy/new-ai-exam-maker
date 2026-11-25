@@ -606,7 +606,7 @@ Quy ước: lỗi `application/problem+json`; phân trang `page/pageSize`; UTC I
 
 ## 11. CI/CD, migration, rollback
 
-- **Frontend**: GitHub Actions dùng OIDC assume role frontend; chỉ workflow có claim name `Deploy frontend`, `workflow_ref` đúng file O7 và `ref` `main` được deploy → build → đóng gói release → upload S3 → gọi SSM để EC2 giải nén, đổi symlink Nginx và kiểm tra asset. Rollback: đổi lại release trước (giữ 5 release gần nhất trên EC2).
+- **Frontend**: GitHub Actions dùng OIDC assume role frontend; chỉ workflow có claim name `Deploy frontend`, repository/branch trong `sub` và `ref` `main` được deploy → build → đóng gói release → upload S3 → gọi SSM để EC2 giải nén, đổi symlink Nginx và kiểm tra asset. Rollback: đổi lại release trước (giữ 5 release gần nhất trên EC2).
 - **Backend**: build/publish (`linux-arm64`) → đẩy artifact lên S3/SSM → trên EC2 giải nén vào thư mục theo phiên bản (`/opt/exammaker/releases/<id>`), đổi symlink `current`, restart service systemd (API + Worker). **Giữ N bản gần nhất** để rollback bằng cách đổi lại symlink. Kiểm tra health endpoint sau deploy.
 - **Migration**: dùng EF Core migration bundle chạy **trước** khi chuyển phiên bản mới; thay đổi schema theo kiểu **tương thích ngược** (thêm cột/bảng trước, xóa sau), để rollback code không vỡ DB. **Chụp snapshot RDS thủ công** trước migration lớn.
 - Môi trường: tối thiểu `local` + `demo/prod` (không dựng môi trường staging đầy đủ vì ngân sách); nêu rõ nếu dùng chung.

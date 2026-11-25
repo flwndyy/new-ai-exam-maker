@@ -37,7 +37,7 @@ Trong IAM → **Roles → Create role → Web identity**:
 workflow O7 phải dùng **Repository Variables/Secrets**, không được khai báo
 `environment:` trong job deploy, phải có tên workflow là **`Deploy frontend`** và
 phải dùng file `.github/workflows/deploy-frontend.yml` theo quy ước O7. Trust
-policy mẫu khóa thêm claim `workflow_ref` vào đúng file
+policy mẫu khóa thêm claim `workflow` với tên `Deploy frontend` và nhánh `main`
 `.github/workflows/deploy-frontend.yml` trên `main`. Nếu sau này O7 chuyển sang
 reusable workflow, phải thay đổi trust policy sau khi xác minh claim trong token
 thực tế. Nếu dùng GitHub Environment, phải đổi trust policy
@@ -79,8 +79,7 @@ repo.
 
 - [ ] Provider URL và audience đúng.
 - [ ] `sub` chỉ cho phép `repo:flwndyy/new-ai-exam-maker:ref:refs/heads/main`.
-- [ ] Claim `workflow` là `Deploy frontend`, `workflow_ref` đúng file O7 và claim
-  `ref` là `refs/heads/main`.
+- [ ] Claim `workflow` là `Deploy frontend` và `ref` là `refs/heads/main`.
 - [ ] Không workflow nào khác trong repository được đặt tên `Deploy frontend`.
 - [ ] Workflow O7 dùng Repository Variables/Secrets và không đặt `environment:`.
 - [ ] Role không có `AdministratorAccess`.

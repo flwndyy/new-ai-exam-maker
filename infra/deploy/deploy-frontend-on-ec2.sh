@@ -54,6 +54,11 @@ elif [[ -e "$CURRENT_LINK" ]]; then
   exit 1
 fi
 
+if [[ -n "$PREVIOUS_RELEASE" && "$RELEASE_DIR" == "$PREVIOUS_RELEASE" ]]; then
+  echo "ERROR: refusing to replace the release currently served by $CURRENT_LINK: $RELEASE_ID" >&2
+  exit 1
+fi
+
 rollback() {
   local rc=$?
   if ((rc != 0)) && [[ -n "$PREVIOUS_RELEASE" && -d "$PREVIOUS_RELEASE" ]]; then

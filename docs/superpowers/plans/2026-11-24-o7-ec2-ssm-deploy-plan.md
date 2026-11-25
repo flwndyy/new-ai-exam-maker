@@ -50,7 +50,7 @@
 - [ ] Validate `AWS_ROLE_ARN`, `FRONTEND_BUCKET_NAME`, `EC2_INSTANCE_ID`, and Cognito variables.
 - [ ] Build the static export and retain the GitHub artifact.
 - [ ] Create a versioned tarball and checksum from `frontend/out` plus the deploy script.
-- [ ] Upload the tarball, checksum, and script under `frontend/releases/<github.sha>/`.
+- [ ] Upload the tarball, checksum, and script under `frontend/releases/<github.sha>-<github.run_id>-<run_attempt>/`.
 - [ ] Call `ssm:SendCommand` with `AWS-RunShellScript` on the configured EC2 instance.
 - [ ] Poll `GetCommandInvocation` until the command succeeds or fails, then print command output on failure.
 
