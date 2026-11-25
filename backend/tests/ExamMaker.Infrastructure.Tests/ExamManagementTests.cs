@@ -264,6 +264,67 @@ public sealed class ExamManagementTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    // List and detail must expose the newest version the actor may read plus the published number, without leaking private versions.
+    public async Task List_and_detail_report_latest_visible_version_and_published_number()
+    {
+        await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var v1 = exam.Versions[0].Id;
+        async Task<ExamView> ListedAsync(Guid actor)
+        {
+            await using var db = fixture.CreateContext(); return Assert.Single((await Service(db).ListAsync(actor, new(), default)).Items);
+        }
+        async Task<ExamDetail> DetailAsync(Guid actor)
+        {
+            await using var db = fixture.CreateContext(); return await Service(db).GetAsync(actor, exam.Id, default);
+        }
+        var owned = await ListedAsync(owner);
+        Assert.Equal(v1, owned.LatestVersionId); Assert.Equal("Draft", owned.LatestVersionStatus); Assert.Null(owned.PublishedVersionNo);
+
+        await ComposeAsync(v1, new ExamItemInput(q.Id, 1));
+        await ActAsync(owner, v1, ExamAction.Submit); await ActAsync(head, v1, ExamAction.Approve); await ActAsync(admin, v1, ExamAction.Publish);
+        ExamVersionView next;
+        await using (var db = fixture.CreateContext()) next = await Service(db).CreateVersionAsync(owner, exam.Id, new(), default);
+        var v2 = next.Id; Assert.Equal(2, next.VersionNo);
+        await ComposeAsync(v2, new ExamItemInput(q.Id, 1));
+        await ActAsync(owner, v2, ExamAction.Submit); await ActAsync(head, v2, ExamAction.Reject, "Needs work");
+
+        foreach (var actor in new[] { owner, head, admin })
+        {
+            var listed = await ListedAsync(actor); var detail = await DetailAsync(actor);
+            Assert.Equal((v2, "Rejected", 1), (listed.LatestVersionId, listed.LatestVersionStatus, listed.PublishedVersionNo));
+            Assert.Equal((v2, "Rejected", 1), (detail.LatestVersionId, detail.LatestVersionStatus, detail.PublishedVersionNo));
+        }
+        var p = await ListedAsync(peer); var pd = await DetailAsync(peer);
+        Assert.Equal((v1, "Published", 1, 1), (p.LatestVersionId, p.LatestVersionStatus, p.PublishedVersionNo, p.LatestVersionNo));
+        Assert.Equal((v1, "Published", 1, 1), (pd.LatestVersionId, pd.LatestVersionStatus, pd.PublishedVersionNo, pd.LatestVersionNo));
+
+        await ActAsync(admin, v1, ExamAction.Unpublish);
+        var after = await ListedAsync(owner);
+        Assert.Equal((v2, "Rejected"), (after.LatestVersionId, after.LatestVersionStatus)); Assert.Null(after.PublishedVersionNo);
+        Assert.Null((await DetailAsync(owner)).PublishedVersionNo);
+        await using var hidden = fixture.CreateContext();
+        Assert.Empty((await Service(hidden).ListAsync(peer, new(), default)).Items);
+    }
+
+    [PostgresFact]
+    public async Task Unpublish_returns_latest_status_to_approved_and_clears_published_number()
+    {
+        await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(); var v1 = exam.Versions[0].Id;
+        await ComposeAsync(v1, new ExamItemInput(q.Id, 1));
+        await ActAsync(owner, v1, ExamAction.Submit); await ActAsync(head, v1, ExamAction.Approve); await ActAsync(admin, v1, ExamAction.Publish);
+        async Task AssertOwnerSeesAsync(string status, int? publishedNo)
+        {
+            await using var db = fixture.CreateContext();
+            var listed = Assert.Single((await Service(db).ListAsync(owner, new(), default)).Items);
+            var detail = await Service(db).GetAsync(owner, exam.Id, default);
+            Assert.Equal((v1, status, publishedNo), (listed.LatestVersionId, listed.LatestVersionStatus, listed.PublishedVersionNo));
+            Assert.Equal((v1, status, publishedNo), (detail.LatestVersionId, detail.LatestVersionStatus, detail.PublishedVersionNo));
+        }
+        await AssertOwnerSeesAsync("Published", 1);
+        await ActAsync(admin, v1, ExamAction.Unpublish);
+        await AssertOwnerSeesAsync("Approved", null);
+    }
+
+    [PostgresFact]
     public async Task Review_rechecks_live_actor_self_review_notes_states_and_stale_round_tokens()
     {
         await SeedAsync(); var q = await SourceAsync(); var exam = await CreateAsync(head); var id = exam.Versions[0].Id;

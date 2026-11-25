@@ -46,7 +46,10 @@ const exam = {
   departmentId: DEPT,
   createdBy: { id: "u2", fullName: "Giáo viên B" },
   latestVersionNo: 2,
+  latestVersionId: "V2",
+  latestVersionStatus: "Draft",
   publishedVersionId: "V1",
+  publishedVersionNo: 1,
   createdAt: "2026-11-23T01:00:00Z",
   updatedAt: "2026-11-23T02:00:00Z",
 };

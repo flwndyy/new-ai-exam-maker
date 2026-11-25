@@ -369,8 +369,11 @@ public sealed class ExamManagement(ExamMakerDbContext database, ILogger<ExamMana
     private static ExamView ExamView(Exam e, AuthenticatedUser actor)
     {
         var visible = e.Versions.Where(v => ExamRules.CanRead(actor, e, v.Status)).ToArray();
+        // VisibleExams mirrors ExamRules.CanRead and every exam keeps v1, so `visible` is never empty.
+        var latest = visible.MaxBy(v => v.VersionNo)!;
+        var published = visible.SingleOrDefault(v => v.Status == "Published");
         return new(e.Id, e.Title, e.SubjectId, e.Grade, e.DepartmentId, new(e.CreatedBy, e.Creator!.FullName),
-            visible.Max(v => v.VersionNo), visible.Where(v => v.Status == "Published").Select(v => (Guid?)v.Id).SingleOrDefault(), e.CreatedAt, e.UpdatedAt);
+            latest.VersionNo, published?.Id, latest.Id, latest.Status, published?.VersionNo, e.CreatedAt, e.UpdatedAt);
     }
     private static ExamVersion NewVersion(Guid examId, int number, int duration, DateTime now) => new()
     { Id = Guid.NewGuid(), ExamId = examId, VersionNo = number, DurationMinutes = duration, CreatedAt = now, UpdatedAt = now };

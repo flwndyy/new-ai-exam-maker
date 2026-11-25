@@ -14,7 +14,8 @@ public sealed record ExamQuery(int Page = 1, int PageSize = 20, Guid? SubjectId 
 public sealed record ExamReviewQuery(int Page = 1, int PageSize = 20, Guid? SubjectId = null);
 public sealed record ExamPage(int Page, int PageSize, int TotalItems, int TotalPages, IReadOnlyList<ExamView> Items);
 public record ExamView(Guid Id, string Title, Guid SubjectId, int Grade, Guid DepartmentId,
-    QuestionUser CreatedBy, int LatestVersionNo, Guid? PublishedVersionId, DateTime CreatedAt, DateTime UpdatedAt);
+    QuestionUser CreatedBy, int LatestVersionNo, Guid? PublishedVersionId, Guid LatestVersionId, string LatestVersionStatus,
+    int? PublishedVersionNo, DateTime CreatedAt, DateTime UpdatedAt);
 public sealed record ExamDetail : ExamView
 {
     public ExamDetail(ExamView exam, IReadOnlyList<ExamVersionSummary> versions) : base(exam) => Versions = versions;

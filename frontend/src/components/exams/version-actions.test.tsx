@@ -135,6 +135,38 @@ describe("VersionActions", () => {
     expect(versionsAtNavigation).toEqual(["V3", "V2"]);
   });
 
+  it("creating a version updates latest version id and status in the exam cache", async () => {
+    mocks.apiPost.mockReturnValue(ok({ ...version("Draft"), id: "V2", versionNo: 2 }, 201));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cachedExam = {
+      ...exam([{ id: "V1", status: "Published" }]),
+      latestVersionNo: 1,
+      latestVersionId: "V1",
+      latestVersionStatus: "Published",
+    } as unknown as ExamDetail;
+    client.setQueryData(["exam", "E1"], cachedExam);
+    const onVersionCreated = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <VersionActions
+          exam={cachedExam}
+          version={{ ...version("Published"), id: "V1" }}
+          role="teacher"
+          meId={ME}
+          dirty={false}
+          onNotApproved={vi.fn()}
+          onVersionCreated={onVersionCreated}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(button(messages.exams.createVersion)!);
+    await waitFor(() => expect(onVersionCreated).toHaveBeenCalledWith("V2"));
+    const cached = client.getQueryData(["exam", "E1"]) as ExamDetail;
+    expect(cached.latestVersionNo).toBe(2);
+    expect(cached.latestVersionId).toBe("V2");
+    expect(cached.latestVersionStatus).toBe("Draft");
+  });
+
   it("archive asks for confirmation first", async () => {
     confirm.mockReturnValue(false);
     renderActions(version("Approved"));

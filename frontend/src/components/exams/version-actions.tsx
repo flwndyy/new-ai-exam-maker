@@ -69,7 +69,9 @@ export function VersionActions({
           old
             ? {
                 ...old,
-                latestVersionNo: Math.max(old.latestVersionNo, data.versionNo),
+                ...(data.versionNo >= old.latestVersionNo
+                  ? { latestVersionNo: data.versionNo, latestVersionId: data.id, latestVersionStatus: data.status }
+                  : {}),
                 versions: [data, ...old.versions.filter((v) => v.id !== data.id)],
               }
             : old,

@@ -1,6 +1,6 @@
 # AI Exam Maker — Project Context
 
-> **Phiên bản 0.24** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
+> **Phiên bản 0.25** — làm rõ state machine, phân quyền, API, dữ liệu và xác thực CI/CD (xem "Lịch sử thay đổi" cuối file). File này là ngữ cảnh chung của dự án (cho cả team và các AI coding agent). Khi đổi quyết định kiến trúc/nghiệp vụ, **sửa file này trước rồi mới code**.
 > Mục đánh dấu **[GIẢ ĐỊNH]** là chỗ đang tạm chốt, cần team xác nhận (xem mục 14). Các quyết định đã chốt nằm ở cuối mục 14.
 
 ---
@@ -292,6 +292,7 @@ Draft ──submit──→ Submitted ──approve──→ Approved ──publ
 - Đọc/ghi kiểm visibility trước khóa rồi kiểm lại sau khóa. Admin thấy tất cả; head thấy đề cùng tổ hoặc của mình; teacher thấy đề của mình và metadata phiên bản Published cùng tổ. Chi tiết chứa đáp án chỉ tác giả/head cùng tổ/admin; teacher đọc phiên bản Published của người khác nhận 403, không lộ phiên bản riêng tư qua list/detail. Xuất đề thuộc B10.
 - Quyền/trạng thái được kiểm trước token duyệt, kể cả body rỗng; submittedAt bắt buộc trong service, so UTC mili giây và mỗi lượt submit tăng tối thiểu 1ms. UpdatedAt tăng theo micro giây; mọi thay đổi và audit nằm trong cùng transaction. Approve/reject cấm tự duyệt, reject cần note. Withdraw xóa snapshot/hash/quyết định sau khi mở Draft; Rejected dùng nội dung nguồn hiện tại trong phạm vi quyền xem và chụp lại ở lần submit sau. Archive Rejected giữ dữ liệu hiện có theo A2 và khóa nội dung như các bản Archived khác.
 - Publish/unpublish chỉ admin; từ Approved/Published tương ứng, giữ snapshot/hash và metadata lịch sử publish; bản Published khác trong cùng đề gây 409 PublishedVersionExists. Archive chỉ Approved/Rejected, tác giả/head cùng tổ/admin, không khôi phục. Không thay đổi schema A2.
+- Danh sách và chi tiết đề (`Exam`) trả thêm `latestVersionId`, `latestVersionStatus` (phiên bản có `versionNo` lớn nhất trong số phiên bản người xem đọc được) và `publishedVersionNo` (số của phiên bản `Published` người xem đọc được, `null` nếu không có). Các trường này tính trên cùng tập phiên bản với `latestVersionNo` và `publishedVersionId` nên không lộ phiên bản riêng tư; chỉ thêm trường đọc, không đổi schema DB hay quyền.
 
 ### 4.4 Xuất đề
 
@@ -698,6 +699,9 @@ Tất cả các điểm nghiệp vụ và điểm AWS đã chốt (xem bên dư�
 ---
 
 ## Lịch sử thay đổi
+
+**0.25 — 25/11/2026**
+- Thêm `latestVersionId`, `latestVersionStatus`, `publishedVersionNo` vào schema `Exam` (danh sách và chi tiết đề) để màn danh sách đề và trang chủ của đợt làm mới giao diện hiển thị trạng thái phiên bản mới nhất và số phiên bản đang xuất bản mà không phải tải từng phiên bản. Cập nhật "Chi tiết triển khai A7" ở 4.3 và `docs/api/openapi.yaml`.
 
 **0.24 — 24/11/2026**
 - Triển khai xuất đề B10: `student-sheet`/`answer-key` đọc từ snapshot, whitelist payload đề học sinh, mã lỗi `ExportUnavailable`; trang in `/exams/print/` (CSS in + KaTeX, PDF qua trình duyệt) và link từ trang xem đề. Mở rộng quyền xuất đề học sinh của Head ra mọi đề trong tổ; chỉ xuất `Submitted`/`Approved`/`Published`. Cập nhật mục 3.2, 4.4, 9.2, 14.

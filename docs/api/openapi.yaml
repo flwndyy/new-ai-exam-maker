@@ -2080,7 +2080,7 @@ components:
         title: { type: string, minLength: 1, maxLength: 300 }
     Exam:
       type: object
-      required: [id, title, subjectId, grade, departmentId, createdBy, latestVersionNo, createdAt, updatedAt]
+      required: [id, title, subjectId, grade, departmentId, createdBy, latestVersionNo, latestVersionId, latestVersionStatus, publishedVersionNo, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
@@ -2089,6 +2089,15 @@ components:
         departmentId: { type: string, format: uuid }
         createdBy: { $ref: '#/components/schemas/UserRef' }
         latestVersionNo: { type: integer, minimum: 1 }
+        latestVersionId:
+          type: string
+          format: uuid
+          description: Phiên bản có `versionNo` lớn nhất trong số phiên bản người xem đọc được.
+        latestVersionStatus: { $ref: '#/components/schemas/ExamVersionStatus' }
+        publishedVersionNo:
+          type: [integer, 'null']
+          minimum: 1
+          description: Số của phiên bản `Published` người xem đọc được; `null` nếu không có.
         publishedVersionId:
           type: [string, 'null']
           format: uuid
