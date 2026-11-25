@@ -9,8 +9,11 @@ import {
   questionKey,
   QuestionUnavailableError,
 } from "@/components/ai/generated-question-card";
-import { STATUS_BADGE } from "@/components/ai/job-list";
 import { JobStatusPanel } from "@/components/ai/job-status-panel";
+import { PageHeader } from "@/components/shell/page-header";
+import { Button, ButtonLink } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Notice } from "@/components/ui/notice";
 import { nextPollDelay } from "@/lib/ai/polling";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
@@ -19,6 +22,15 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
 
 class JobNotFoundError extends Error {}
+
+const dateFormat = new Intl.DateTimeFormat("vi-VN", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "Asia/Ho_Chi_Minh",
+});
+
+const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+const CRUMB = { href: "/ai/", label: vi.nav.ai };
 
 function JobPageInner() {
   const id = useSearchParams().get("id");
@@ -71,18 +83,29 @@ function JobPageInner() {
   });
 
   if (!id || (jobQuery.error instanceof JobNotFoundError && !job)) {
-    return <p className="text-sm text-slate-600">{vi.ai.jobNotFound}</p>;
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.ai.jobTitle} />
+        <div className={BODY}>
+          <EmptyState title={vi.ai.jobNotFound} />
+        </div>
+      </>
+    );
   }
   if (!job) {
-    return jobQuery.isError ? (
-      <p className="text-sm text-red-700">{vi.ai.reconnecting}</p>
-    ) : (
-      <p className="text-sm text-slate-500">{vi.common.loading}</p>
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.ai.jobTitle} />
+        <div className={BODY}>
+          {jobQuery.isError ? <Notice tone="error">{vi.ai.reconnecting}</Notice> : <EmptyState busy title={vi.common.loading} />}
+        </div>
+      </>
     );
   }
 
-  const subjectName = subjectsQuery.data?.find((s) => s.id === job.params.subjectId)?.name ?? "—";
-  const topicName = topicsQuery.data?.find((t) => t.id === job.params.topicId)?.name ?? "—";
+  const subjectName = subjectsQuery.data?.find((s) => s.id === job.params.subjectId)?.name;
+  const topicName = topicsQuery.data?.find((t) => t.id === job.params.topicId)?.name;
+  const heading = [subjectName, `${vi.common.gradePrefix} ${job.params.grade}`, topicName].filter(Boolean).join(", ");
   // A question deleted after it was cached keeps stale `data`; count only ones still readable.
   const available = questionQueries
     .filter((q) => !(q.error instanceof QuestionUnavailableError))
@@ -91,78 +114,93 @@ function JobPageInner() {
   const reviewed = available.filter((q) => q.aiReviewedByAuthor).length;
 
   return (
-    <section className="space-y-6">
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold text-slate-900">{vi.ai.jobTitle}</h1>
-          <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[job.status]}`}>
-            {vi.ai.jobStatuses[job.status]}
-          </span>
-        </div>
-        <p className="text-sm text-slate-600">
-          {vi.ai.params}: {subjectName} · {vi.common.gradePrefix} {job.params.grade} · {topicName} ·{" "}
-          {vi.questions.types[job.params.type]} · {vi.questions.difficulties[job.params.difficulty]} · {vi.ai.count}{" "}
-          {job.params.count}
-        </p>
+    <>
+      <PageHeader
+        crumb={CRUMB}
+        title={heading}
+        description={vi.ai.jobMeta(
+          vi.questions.types[job.params.type],
+          vi.questions.difficulties[job.params.difficulty],
+          job.params.count,
+          dateFormat.format(new Date(job.createdAt)),
+        )}
+        actions={
+          <ButtonLink href={`/ai/?from=${job.id}`} variant="boardSecondary">
+            {vi.ai.regenerate}
+          </ButtonLink>
+        }
+      />
+      <div className={`${BODY} space-y-4`}>
+        {jobQuery.isError && <Notice tone="warn">{vi.ai.reconnecting}</Notice>}
+
         {job.params.note && (
-          <div className="text-sm text-slate-600">
-            <span className="font-medium">{vi.ai.noteLabel}:</span>
+          <div className="text-[13.5px]">
+            <p className="font-semibold text-ink-soft">{vi.ai.noteLabel}</p>
             {/* Teacher input is untrusted: plain text only, never Markdown. */}
             <p className="whitespace-pre-wrap">{job.params.note}</p>
           </div>
         )}
-        {jobQuery.isError && <p className="text-sm text-amber-800">{vi.ai.reconnecting}</p>}
-      </header>
 
-      {/* dataUpdatedAt changes on every poll even when the job JSON is identical (structural sharing keeps
-          `data`), so reading it re-renders the page and lets a waiting job turn "stale" while it stays open. */}
-      <JobStatusPanel job={job} now={new Date(jobQuery.dataUpdatedAt)} />
+        {/* dataUpdatedAt changes on every poll even when the job JSON is identical (structural sharing keeps
+            `data`), so reading it re-renders the page and lets a waiting job turn "stale" while it stays open. */}
+        <JobStatusPanel job={job} now={new Date(jobQuery.dataUpdatedAt)} />
 
-      {questionIds.length > 0 && (
-        <>
-          <p className="text-sm font-medium text-slate-700">
-            {vi.ai.summary(available.length, job.duplicatesDropped, reviewed)}
-          </p>
-          <div className="space-y-4">
-            {questionQueries.map((q, i) =>
-              q.isPending ? (
-                <p key={questionIds[i]} className="text-sm text-slate-500">
-                  {vi.common.loading}
-                </p>
-              ) : q.error instanceof QuestionUnavailableError ? (
-                <GeneratedQuestionCard key={questionIds[i]} question={null} index={i + 1} meId={me?.id ?? ""} />
-              ) : q.isError && !q.data ? (
-                // Transient failure (network/5xx): offer a retry instead of claiming the question is gone.
-                <div key={questionIds[i]} className="flex items-center gap-3 rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-                  <span className="font-semibold">{vi.ai.questionLabel(i + 1)}</span>
-                  <span>{vi.ai.questionLoadFailed}</span>
-                  <button type="button" onClick={() => void q.refetch()} className="underline">
-                    {vi.ai.retry}
-                  </button>
-                </div>
-              ) : (
-                // A failed reload keeps the cached copy visible but flagged, with review blocked until a reload succeeds.
-                <GeneratedQuestionCard
-                  key={questionIds[i]}
-                  question={q.data ?? null}
-                  index={i + 1}
-                  meId={me?.id ?? ""}
-                  refreshFailed={q.isError}
-                  refreshing={q.isFetching}
-                  onRetry={() => void q.refetch()}
-                />
-              ),
-            )}
-          </div>
-        </>
-      )}
-    </section>
+        {questionIds.length > 0 && (
+          <>
+            <Notice
+              tone="success"
+              title={vi.ai.jobStatuses.Succeeded}
+              action={<span className="font-semibold tabular-nums">{vi.ai.reviewProgress(reviewed, available.length)}</span>}
+            >
+              {vi.ai.summary(available.length, job.duplicatesDropped)}
+            </Notice>
+            <div className="space-y-3">
+              {questionQueries.map((q, i) =>
+                q.isPending ? (
+                  <p key={questionIds[i]} className="text-[13.5px] text-muted">
+                    {vi.common.loading}
+                  </p>
+                ) : q.error instanceof QuestionUnavailableError ? (
+                  <GeneratedQuestionCard key={questionIds[i]} question={null} index={i + 1} meId={me?.id ?? ""} />
+                ) : q.isError && !q.data ? (
+                  // Transient failure (network/5xx): offer a retry instead of claiming the question is gone.
+                  <div key={questionIds[i]} className="space-y-2 rounded-lg border border-line bg-surface p-4">
+                    <h3 className="text-[15px] font-semibold">{vi.ai.questionLabel(i + 1)}</h3>
+                    <Notice
+                      tone="error"
+                      action={
+                        <Button variant="secondary" size="sm" onClick={() => void q.refetch()}>
+                          {vi.ai.retry}
+                        </Button>
+                      }
+                    >
+                      {vi.ai.questionLoadFailed}
+                    </Notice>
+                  </div>
+                ) : (
+                  // A failed reload keeps the cached copy visible but flagged, with review blocked until a reload succeeds.
+                  <GeneratedQuestionCard
+                    key={questionIds[i]}
+                    question={q.data ?? null}
+                    index={i + 1}
+                    meId={me?.id ?? ""}
+                    refreshFailed={q.isError}
+                    refreshing={q.isFetching}
+                    onRetry={() => void q.refetch()}
+                  />
+                ),
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
 export default function AiJobPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense fallback={<EmptyState busy title={vi.common.loading} />}>
       <JobPageInner />
     </Suspense>
   );

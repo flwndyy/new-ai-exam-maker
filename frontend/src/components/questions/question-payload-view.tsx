@@ -1,6 +1,7 @@
 "use client";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { Tag } from "@/components/ui/tag";
 import type { components } from "@/lib/api/schema";
 import { formatDecimalForInput } from "@/lib/format/decimal";
 import { vi } from "@/messages/vi";
@@ -18,11 +19,12 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
           return (
             <li
               key={opt.label}
-              className={`rounded border px-3 py-2 text-sm ${
-                isCorrect ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white"
+              className={`rounded-md border px-3 py-2 text-[13.5px] text-ink ${
+                isCorrect ? "border-ok bg-ok-bg" : "border-line bg-surface"
               }`}
             >
               <span className="mr-2 font-semibold">{opt.label}.</span>
+              {isCorrect && <span className="sr-only">{vi.questions.correctOption}: </span>}
               <span className="inline-block align-top">
                 <MathMarkdown>{opt.text}</MathMarkdown>
               </span>
@@ -37,16 +39,16 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
     return (
       <ul className="space-y-2">
         {payload.statements.map((stmt) => (
-          <li key={stmt.label} className="flex items-start justify-between gap-4 rounded border border-slate-200 bg-white px-3 py-2 text-sm">
+          <li key={stmt.label} className="flex items-start justify-between gap-4 rounded-md border border-line bg-surface px-3 py-2 text-[13.5px]">
             <div>
               <span className="mr-2 font-semibold">{stmt.label})</span>
               <span className="inline-block align-top">
                 <MathMarkdown>{stmt.text}</MathMarkdown>
               </span>
             </div>
-            <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium ${stmt.isTrue ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"}`}>
+            <Tag tone={stmt.isTrue ? "ok" : "rej"} className="shrink-0">
               {stmt.isTrue ? vi.questions.trueLabel : vi.questions.falseLabel}
-            </span>
+            </Tag>
           </li>
         ))}
       </ul>
@@ -55,14 +57,14 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
 
   if (type === "ShortAnswer" && "acceptedAnswers" in payload) {
     return (
-      <div className="rounded border border-slate-200 bg-white p-3 text-sm">
-        <p className="font-medium text-slate-700">{vi.questions.shortAnswerValue}:</p>
-        <p className="mt-1 font-mono text-emerald-700">
+      <div className="rounded-md border border-line bg-surface p-3 text-[13.5px]">
+        <p className="font-semibold text-ink-soft">{vi.questions.shortAnswerValue}:</p>
+        <p className="mt-1 font-mono text-ok">
           {payload.acceptedAnswers.join(" | ")}
           {payload.unit ? ` (${payload.unit})` : ""}
         </p>
         {payload.tolerance != null && (
-          <p className="mt-1 text-xs text-slate-600">
+          <p className="mt-1 text-xs text-muted">
             {vi.questions.shortTolerance}: ±{formatDecimalForInput(payload.tolerance)}
           </p>
         )}
@@ -72,16 +74,16 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
 
   if (type === "Essay" && "rubric" in payload) {
     return (
-      <div className="space-y-2 rounded border border-slate-200 bg-white p-3 text-sm">
+      <div className="space-y-2 rounded-md border border-line bg-surface p-3 text-[13.5px]">
         <div>
-          <p className="font-medium text-slate-700">{vi.questions.modelAnswer}:</p>
-          <div className="mt-1 text-slate-800">
+          <p className="font-semibold text-ink-soft">{vi.questions.modelAnswer}:</p>
+          <div className="mt-1 text-ink">
             <MathMarkdown>{payload.modelAnswer}</MathMarkdown>
           </div>
         </div>
-        <div className="border-t border-slate-100 pt-2">
-          <p className="font-medium text-slate-700">{vi.questions.essayRubric}:</p>
-          <ul className="mt-1 divide-y divide-slate-100">
+        <div className="border-t border-line pt-2">
+          <p className="font-semibold text-ink-soft">{vi.questions.essayRubric}:</p>
+          <ul className="mt-1 divide-y divide-line">
             {payload.rubric.map((item, idx) => (
               <li key={idx} className="flex justify-between gap-4 py-1">
                 <span>{item.criterion}</span>

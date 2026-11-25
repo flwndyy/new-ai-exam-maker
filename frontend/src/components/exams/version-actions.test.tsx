@@ -75,7 +75,24 @@ describe("VersionActions", () => {
   it("disables submit with unsaved changes and explains why", () => {
     renderActions(version("Draft"), { dirty: true });
     expect(button(messages.exams.submit)?.disabled).toBe(true);
-    expect(screen.getByText(messages.exams.saveBeforeSubmit)).toBeTruthy();
+    const reason = screen.getByText(messages.exams.saveBeforeSubmit);
+    expect(reason.classList.contains("sr-only")).toBe(false);
+    expect(button(messages.exams.submit)?.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(screen.getAllByText(messages.exams.saveBeforeSubmit)).toHaveLength(1);
+  });
+
+  it("shows a visible reason when the draft has no questions", () => {
+    renderActions(version("Draft", 0));
+    const reason = screen.getByText(messages.exams.addBeforeSubmit);
+    expect(reason.classList.contains("sr-only")).toBe(false);
+    expect(button(messages.exams.submit)?.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("shows no reason when submit is enabled", () => {
+    renderActions(version("Draft"));
+    expect(screen.queryByText(messages.exams.saveBeforeSubmit)).toBeNull();
+    expect(screen.queryByText(messages.exams.addBeforeSubmit)).toBeNull();
+    expect(button(messages.exams.submit)?.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("reports unapproved questions returned by submit", async () => {

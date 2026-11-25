@@ -1,16 +1,19 @@
 "use client";
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 import { useState } from "react";
 
+import { RunningDot } from "@/components/ai/job-status-panel";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ListRow } from "@/components/ui/list-row";
+import { Notice } from "@/components/ui/notice";
+import { Pager } from "@/components/ui/pager";
+import { StatusText } from "@/components/ui/status-text";
 import { isJobFinished } from "@/lib/ai/polling";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
-import type { components } from "@/lib/api/schema";
+import { aiJobTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
-
-type AiJobStatus = components["schemas"]["AiJobStatus"];
 
 /** Refetch interval of the job list while any listed job is still Queued/Running. */
 export const JOB_LIST_REFRESH_MS = 15000;
@@ -20,13 +23,6 @@ const dateFormat = new Intl.DateTimeFormat("vi-VN", {
   timeStyle: "short",
   timeZone: "Asia/Ho_Chi_Minh",
 });
-
-export const STATUS_BADGE: Record<AiJobStatus, string> = {
-  Queued: "bg-slate-100 text-slate-700",
-  Running: "bg-blue-100 text-blue-800",
-  Succeeded: "bg-emerald-100 text-emerald-800",
-  Failed: "bg-red-100 text-red-800",
-};
 
 /** "Job của tôi": the requester's AI jobs, newest first (server data, so it survives leaving the page). */
 export function JobList({ subjectNames }: { subjectNames: Map<string, string> }) {
@@ -44,65 +40,47 @@ export function JobList({ subjectNames }: { subjectNames: Map<string, string> })
   });
 
   const data = jobsQuery.data;
+  const hasUnfinished = data?.items.some((job) => !isJobFinished(job.status)) ?? false;
   return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold text-slate-900">{vi.ai.myJobs}</h2>
-      {jobsQuery.isLoading && <p className="text-sm text-slate-500">{vi.common.loading}</p>}
-      {jobsQuery.isError && <p className="text-sm text-red-700">{getUiErrorMessage(jobsQuery.error)}</p>}
-      {data && data.items.length === 0 && <p className="text-sm text-slate-500">{vi.ai.noJobs}</p>}
+    <section>
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h2 className="text-[15px] font-semibold">{vi.ai.myJobs}</h2>
+        {hasUnfinished && <span className="text-[12.5px] text-muted">{vi.ai.jobsAutoRefresh}</span>}
+      </div>
+      {jobsQuery.isLoading && <p className="text-[13.5px] text-muted">{vi.common.loading}</p>}
+      {jobsQuery.isError && <Notice tone="error">{getUiErrorMessage(jobsQuery.error)}</Notice>}
+      {data && data.items.length === 0 && <EmptyState title={vi.ai.noJobs} className="min-h-[120px]" />}
       {data && data.items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-slate-500">
-              <tr>
-                <th className="px-2 py-2">{vi.ai.createdAt}</th>
-                <th className="px-2 py-2">{vi.ai.request}</th>
-                <th className="px-2 py-2">{vi.common.status}</th>
-                <th className="px-2 py-2">{vi.common.actions}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((job) => (
-                <tr key={job.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2 whitespace-nowrap">{dateFormat.format(new Date(job.createdAt))}</td>
-                  <td className="px-2 py-2">
-                    {subjectNames.get(job.params.subjectId) ?? "—"} · {vi.common.gradePrefix} {job.params.grade} ·{" "}
-                    {vi.questions.types[job.params.type]} · {job.params.count}
-                  </td>
-                  <td className="px-2 py-2">
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[job.status]}`}>
-                      {vi.ai.jobStatuses[job.status]}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2">
-                    <Link href={`/ai/job/?id=${job.id}`} className="text-blue-700 hover:underline">
-                      {vi.common.view}
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div>
+          {data.items.map((job) => {
+            const tone = aiJobTone(job.status);
+            const subject = subjectNames.get(job.params.subjectId);
+            const gradeLabel = `${vi.common.gradePrefix} ${job.params.grade}`;
+            return (
+              <ListRow
+                key={job.id}
+                tone={tone}
+                href={`/ai/job/?id=${job.id}`}
+                title={subject ? `${subject}, ${gradeLabel}` : gradeLabel}
+                meta={vi.ai.jobMeta(
+                  vi.questions.types[job.params.type],
+                  vi.questions.difficulties[job.params.difficulty],
+                  job.params.count,
+                  dateFormat.format(new Date(job.createdAt)),
+                )}
+                reason={job.status === "Failed" ? job.errorMessage : undefined}
+                end={
+                  <StatusText tone={tone} className="inline-flex items-center gap-1.5">
+                    {job.status === "Running" && <RunningDot />}
+                    {vi.ai.jobStatuses[job.status]}
+                  </StatusText>
+                }
+              />
+            );
+          })}
         </div>
       )}
-      {data && data.totalPages > 1 && (
-        <div className="flex items-center gap-3 text-sm">
-          <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="disabled:opacity-50">
-            {vi.common.previousPage}
-          </button>
-          <span>
-            {vi.common.pageLabel} {page}/{data.totalPages}
-          </span>
-          <button
-            type="button"
-            disabled={page >= data.totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="disabled:opacity-50"
-          >
-            {vi.common.nextPage}
-          </button>
-        </div>
-      )}
+      {data && data.totalPages > 1 && <Pager page={page} totalPages={data.totalPages} onPage={setPage} />}
     </section>
   );
 }

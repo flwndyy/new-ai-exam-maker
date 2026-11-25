@@ -6,22 +6,35 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { PageHeader } from "@/components/shell/page-header";
+import { ButtonLink } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Checkbox } from "@/components/ui/field";
+import { FilterBar, FilterSelect } from "@/components/ui/filter-bar";
+import { ListRow } from "@/components/ui/list-row";
+import { Notice } from "@/components/ui/notice";
+import { Pager } from "@/components/ui/pager";
+import { StatusText } from "@/components/ui/status-text";
+import { Tag, type TagTone } from "@/components/ui/tag";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
+import { questionTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
 
 type QuestionStatus = components["schemas"]["QuestionStatus"];
 type QuestionType = components["schemas"]["QuestionType"];
 type Difficulty = components["schemas"]["Difficulty"];
 type Grade = components["schemas"]["Grade"];
+type AiVerification = components["schemas"]["AiVerification"];
 
 const STATUSES: QuestionStatus[] = ["Draft", "Submitted", "Approved", "Rejected", "Archived"];
 const TYPES: QuestionType[] = ["MultipleChoice", "TrueFalse", "ShortAnswer", "Essay"];
 const DIFFICULTIES: Difficulty[] = ["Recognition", "Understanding", "Application", "HighApplication"];
 const GRADES: Grade[] = [10, 11, 12];
+const AI_FLAG_TONE: Record<AiVerification, TagTone> = { NotChecked: "neutral", Agree: "ok", Disagree: "rej" };
 
 function QuestionsPageInner() {
   const { me } = useAuth();
@@ -83,220 +96,218 @@ function QuestionsPageInner() {
     },
   });
 
+  // Chapter names are only known once a subject is chosen; without one the meta line omits the chapter.
+  const topicNames = new Map((topicsQuery.data ?? []).map((t) => [t.id, t.name] as const));
+
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-slate-900">{vi.questions.title}</h1>
-        {canCreate && (
-          <Link
-            href="/questions/detail/"
-            className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+    <>
+      <PageHeader
+        title={vi.questions.title}
+        actions={
+          canCreate ? (
+            <ButtonLink href="/questions/detail/" variant="boardPrimary">
+              {vi.questions.createButton}
+            </ButtonLink>
+          ) : null
+        }
+      />
+      <div className="px-4 py-5 sm:px-7 sm:py-6">
+        {showDeletedNotice && (
+          <Notice
+            tone="success"
+            className="mb-3.5"
+            action={
+              <button
+                type="button"
+                aria-label={vi.common.cancel}
+                onClick={() => setShowDeletedNotice(false)}
+                className="px-1 text-base leading-none font-semibold underline"
+              >
+                ×
+              </button>
+            }
           >
-            {vi.questions.createButton}
-          </Link>
+            {vi.questions.deletedSuccess}
+          </Notice>
         )}
-      </div>
 
-      {showDeletedNotice && (
-        <div className="flex items-center justify-between gap-3 rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">
-          <span>{vi.questions.deletedSuccess}</span>
-          <button
-            type="button"
-            aria-label={vi.common.cancel}
-            onClick={() => setShowDeletedNotice(false)}
-            className="text-xs font-medium underline hover:text-emerald-950"
+        <FilterBar>
+          <FilterSelect
+            label={vi.common.status}
+            value={status}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(1);
+            }}
           >
-            ×
-          </button>
-        </div>
-      )}
+            <option value="">{vi.common.status}: {vi.common.all}</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>{vi.questions.statuses[s]}</option>
+            ))}
+          </FilterSelect>
 
-      <div className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3 lg:grid-cols-6">
-        <select
-          aria-label={vi.common.status}
-          value={status}
-          onChange={(e) => {
-            setStatus(e.target.value);
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-        >
-          <option value="">{vi.common.status}: {vi.common.all}</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>{vi.questions.statuses[s]}</option>
-          ))}
-        </select>
+          <FilterSelect
+            label={vi.questions.subject}
+            value={subjectId}
+            onChange={(e) => {
+              setSubjectId(e.target.value);
+              setTopicId("");
+              setPage(1);
+            }}
+          >
+            <option value="">{vi.questions.subject}: {vi.common.all}</option>
+            {subjectsQuery.data?.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </FilterSelect>
 
-        <select
-          aria-label={vi.questions.subject}
-          value={subjectId}
-          onChange={(e) => {
-            setSubjectId(e.target.value);
-            setTopicId("");
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-        >
-          <option value="">{vi.questions.subject}: {vi.common.all}</option>
-          {subjectsQuery.data?.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
+          <FilterSelect
+            label={vi.questions.topic}
+            disabled={!subjectId}
+            value={topicId}
+            onChange={(e) => {
+              setTopicId(e.target.value);
+              setPage(1);
+            }}
+            className="disabled:opacity-60"
+          >
+            <option value="">{vi.questions.topic}: {vi.common.all}</option>
+            {topicsQuery.data?.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </FilterSelect>
 
-        <select
-          aria-label={vi.questions.topic}
-          disabled={!subjectId}
-          value={topicId}
-          onChange={(e) => {
-            setTopicId(e.target.value);
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:bg-slate-100"
-        >
-          <option value="">{vi.questions.topic}: {vi.common.all}</option>
-          {topicsQuery.data?.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
+          <FilterSelect
+            label={vi.questions.grade}
+            value={grade}
+            onChange={(e) => {
+              setGrade(e.target.value);
+              setTopicId("");
+              setPage(1);
+            }}
+          >
+            <option value="">{vi.questions.grade}: {vi.common.all}</option>
+            {GRADES.map((g) => (
+              <option key={g} value={g}>{vi.common.gradePrefix} {g}</option>
+            ))}
+          </FilterSelect>
 
-        <select
-          aria-label={vi.questions.grade}
-          value={grade}
-          onChange={(e) => {
-            setGrade(e.target.value);
-            setTopicId("");
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-        >
-          <option value="">{vi.questions.grade}: {vi.common.all}</option>
-          {GRADES.map((g) => (
-            <option key={g} value={g}>{vi.common.gradePrefix} {g}</option>
-          ))}
-        </select>
+          <FilterSelect
+            label={vi.questions.type}
+            value={type}
+            onChange={(e) => {
+              setType(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">{vi.questions.type}: {vi.common.all}</option>
+            {TYPES.map((t) => (
+              <option key={t} value={t}>{vi.questions.types[t]}</option>
+            ))}
+          </FilterSelect>
 
-        <select
-          aria-label={vi.questions.type}
-          value={type}
-          onChange={(e) => {
-            setType(e.target.value);
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-        >
-          <option value="">{vi.questions.type}: {vi.common.all}</option>
-          {TYPES.map((t) => (
-            <option key={t} value={t}>{vi.questions.types[t]}</option>
-          ))}
-        </select>
+          <FilterSelect
+            label={vi.questions.difficulty}
+            value={difficulty}
+            onChange={(e) => {
+              setDifficulty(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">{vi.questions.difficulty}: {vi.common.all}</option>
+            {DIFFICULTIES.map((d) => (
+              <option key={d} value={d}>{vi.questions.difficulties[d]}</option>
+            ))}
+          </FilterSelect>
 
-        <select
-          aria-label={vi.questions.difficulty}
-          value={difficulty}
-          onChange={(e) => {
-            setDifficulty(e.target.value);
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-        >
-          <option value="">{vi.questions.difficulty}: {vi.common.all}</option>
-          {DIFFICULTIES.map((d) => (
-            <option key={d} value={d}>{vi.questions.difficulties[d]}</option>
-          ))}
-        </select>
-
-        <label className="flex items-center gap-2 text-sm text-slate-700 sm:col-span-3 lg:col-span-6">
-          <input
-            type="checkbox"
+          <Checkbox
+            label={vi.questions.mineOnly}
             checked={mine}
             onChange={(e) => {
               setMine(e.target.checked);
               setPage(1);
             }}
           />
-          {vi.questions.mineOnly}
-        </label>
+        </FilterBar>
+
+        {questionsQuery.isLoading && <EmptyState busy title={vi.common.loading} />}
+        {questionsQuery.isError && <Notice tone="error">{getUiErrorMessage(questionsQuery.error)}</Notice>}
+
+        {questionsQuery.data && questionsQuery.data.items.length === 0 && (
+          <EmptyState title={vi.questions.emptyTitle} description={vi.common.empty} />
+        )}
+
+        {questionsQuery.data && questionsQuery.data.items.length > 0 && (
+          <div>
+            {questionsQuery.data.items.map((item) => {
+              const isItemEditable =
+                canCreate &&
+                item.createdBy.id === me?.id &&
+                (item.status === "Draft" || item.status === "Rejected" || item.status === "Approved");
+              const isAi = item.source === "AI";
+              const needsReview =
+                isAi && !item.aiReviewedByAuthor && (item.status === "Draft" || item.status === "Rejected");
+              const tone = questionTone(item.status);
+              return (
+                <ListRow
+                  key={item.id}
+                  tone={tone}
+                  href={`/questions/detail/?id=${item.id}`}
+                  title={
+                    <div className="line-clamp-2 font-normal">
+                      <MathMarkdown links={false}>{item.stem}</MathMarkdown>
+                    </div>
+                  }
+                  meta={
+                    <>
+                      {isAi && (
+                        <span className="mr-2 inline-flex flex-wrap gap-1.5 align-middle">
+                          <Tag tone="ai">{vi.questions.aiSource}</Tag>
+                          <Tag tone={AI_FLAG_TONE[item.aiVerification]}>{vi.questions.aiFlags[item.aiVerification]}</Tag>
+                        </span>
+                      )}
+                      {vi.questions.metaLine(
+                        vi.questions.types[item.type],
+                        vi.questions.difficulties[item.difficulty],
+                        item.grade,
+                        topicNames.get(item.topicId),
+                      )}
+                    </>
+                  }
+                  reason={
+                    item.status === "Rejected" && item.reviewNote
+                      ? `${vi.questions.rejectedReason}: ${item.reviewNote}`
+                      : undefined
+                  }
+                  end={
+                    <>
+                      <StatusText tone={tone}>{vi.questions.statuses[item.status]}</StatusText>
+                      {needsReview && <span className="text-xs text-muted">{vi.questions.aiNotReviewed}</span>}
+                      <Link
+                        href={`/questions/detail/?id=${item.id}`}
+                        className="text-[12.5px] font-semibold text-accent-strong underline underline-offset-2"
+                      >
+                        {isItemEditable ? vi.common.edit : vi.common.view}
+                      </Link>
+                    </>
+                  }
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {questionsQuery.data && (questionsQuery.data.items.length > 0 || page > 1) && (
+          <Pager page={page} totalPages={Math.max(1, questionsQuery.data.totalPages)} onPage={setPage} />
+        )}
       </div>
-
-      {questionsQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {questionsQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(questionsQuery.error)}</p>}
-
-      {questionsQuery.data && questionsQuery.data.items.length === 0 && (
-        <p className="rounded border border-slate-200 p-6 text-center text-sm text-slate-500">{vi.common.empty}</p>
-      )}
-
-      {questionsQuery.data && questionsQuery.data.items.length > 0 && (
-        <div className="space-y-3">
-          {questionsQuery.data.items.map((item) => {
-            const isItemEditable =
-              canCreate &&
-              item.createdBy.id === me?.id &&
-              (item.status === "Draft" || item.status === "Rejected" || item.status === "Approved");
-            return (
-              <article key={item.id} className="rounded border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-800">
-                      {vi.questions.statuses[item.status]}
-                    </span>
-                    <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-800">
-                      {vi.questions.types[item.type]}
-                    </span>
-                    <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
-                      {vi.common.gradePrefix} {item.grade} · {vi.questions.difficulties[item.difficulty]}
-                    </span>
-                    {item.source === "AI" && (
-                      <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-800">
-                        {vi.questions.aiFlags[item.aiVerification]}
-                      </span>
-                    )}
-                  </div>
-                  <Link
-                    href={`/questions/detail/?id=${item.id}`}
-                    className="text-sm font-medium text-slate-900 underline hover:text-slate-700"
-                  >
-                    {isItemEditable ? vi.common.edit : vi.common.view}
-                  </Link>
-                </div>
-                <div className="mt-2 line-clamp-3 text-sm text-slate-800">
-                  <MathMarkdown>{item.stem}</MathMarkdown>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      {questionsQuery.data && (questionsQuery.data.items.length > 0 || page > 1) && (
-        <div className="flex items-center justify-between pt-2 text-sm">
-          <button
-            type="button"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-          >
-            {vi.common.previousPage}
-          </button>
-          <span className="text-slate-600">
-            {vi.common.pageLabel} {questionsQuery.data.page} / {Math.max(1, questionsQuery.data.totalPages)}
-          </span>
-          <button
-            type="button"
-            disabled={page >= questionsQuery.data.totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-          >
-            {vi.common.nextPage}
-          </button>
-        </div>
-      )}
-    </section>
+    </>
   );
 }
 
 export default function QuestionsPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense fallback={<EmptyState busy title={vi.common.loading} />}>
       <QuestionsPageInner />
     </Suspense>
   );

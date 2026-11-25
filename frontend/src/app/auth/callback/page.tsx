@@ -1,12 +1,18 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { completeLogin, LoginCallbackError, startLogin } from "@/lib/auth/login";
 import { vi } from "@/messages/vi";
 
 const CALLBACK_PATH = "/auth/callback/";
+
+function Centered({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-lg px-4 py-12">{children}</div>;
+}
 
 function CallbackContent() {
   const router = useRouter();
@@ -32,24 +38,34 @@ function CallbackContent() {
 
   if (retryTo !== null) {
     return (
-      <div className="py-12 text-center text-slate-600">
-        <p>{vi.auth.callbackFailed}</p>
-        <button
-          type="button"
-          className="mt-4 rounded border border-slate-300 px-3 py-1 hover:bg-slate-100"
-          onClick={() => void startLogin(retryTo).catch(() => undefined)}
-        >
-          {vi.auth.retry}
-        </button>
-      </div>
+      <Centered>
+        <EmptyState headingLevel={1}
+          title={vi.auth.callbackFailed}
+          action={
+            <Button variant="secondary" onClick={() => void startLogin(retryTo).catch(() => undefined)}>
+              {vi.auth.retry}
+            </Button>
+          }
+        />
+      </Centered>
     );
   }
-  return <div className="py-12 text-center text-slate-600">{vi.auth.completing}</div>;
+  return (
+    <Centered>
+      <EmptyState headingLevel={1} busy title={vi.auth.completing} />
+    </Centered>
+  );
 }
 
 export default function CallbackPage() {
   return (
-    <Suspense fallback={<div className="py-12 text-center text-slate-600">{vi.auth.completing}</div>}>
+    <Suspense
+      fallback={
+        <Centered>
+          <EmptyState headingLevel={1} busy title={vi.auth.completing} />
+        </Centered>
+      }
+    >
       <CallbackContent />
     </Suspense>
   );

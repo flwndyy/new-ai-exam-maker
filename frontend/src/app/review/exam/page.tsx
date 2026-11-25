@@ -1,216 +1,127 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useId, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
+import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Checkbox, Field, Textarea } from "@/components/ui/field";
+import { MetaBar } from "@/components/ui/meta-bar";
+import { Notice } from "@/components/ui/notice";
+import { Panel } from "@/components/ui/panel";
+import { StatusText } from "@/components/ui/status-text";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { formatDecimalForInput } from "@/lib/format/decimal";
+import { examVersionTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
 
 type ExamVersion = components["schemas"]["ExamVersion"];
+type ExamAction = "approve" | "reject" | "publish" | "unpublish" | "archive";
+
+const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+const CRUMB = { href: "/review/", label: vi.review.title };
 
 /** Bind checklist and note state to one submission round via parent key (`id + submittedAt + status`). */
-function ExamDecisionForm({
-  version,
-  isAdmin,
+function ExamDecisionPanel({
   isSelfAuthor,
-  onSuccess,
+  pending,
+  onDecide,
   onError,
 }: {
-  version: ExamVersion;
-  isAdmin: boolean;
   isSelfAuthor: boolean;
-  onSuccess: (message: string) => void;
+  pending: boolean;
+  onDecide: (action: "approve" | "reject", note: string) => void;
   onError: (message: string) => void;
 }) {
-  const queryClient = useQueryClient();
   const [checks, setChecks] = useState<boolean[]>(vi.review.checklistItems.map(() => false));
   const [note, setNote] = useState("");
+  const noteId = useId();
+  const hintId = useId();
 
-  const actionMutation = useMutation({
-    mutationFn: async (action: "approve" | "reject" | "publish" | "unpublish" | "archive") => {
-      if (action === "approve") {
-        const { error } = await api.POST("/exam-versions/{vid}/approve", {
-          params: { path: { vid: version.id } },
-          body: { submittedAt: version.submittedAt!, note: note.trim() || null },
-        });
-        if (error) throw new Error(getApiErrorMessage(error));
-        return action;
-      }
-      if (action === "reject") {
-        const { error } = await api.POST("/exam-versions/{vid}/reject", {
-          params: { path: { vid: version.id } },
-          body: { submittedAt: version.submittedAt!, note: note.trim() },
-        });
-        if (error) throw new Error(getApiErrorMessage(error));
-        return action;
-      }
-      const pathMap = {
-        publish: "/exam-versions/{vid}/publish",
-        unpublish: "/exam-versions/{vid}/unpublish",
-        archive: "/exam-versions/{vid}/archive",
-      } as const;
-      const { error } = await api.POST(pathMap[action], { params: { path: { vid: version.id } } });
-      if (error) throw new Error(getApiErrorMessage(error));
-      return action;
-    },
-    onSuccess: (action) => {
-      const messageMap = {
-        approve: vi.review.approvedSuccess,
-        reject: vi.review.rejectedSuccess,
-        publish: vi.review.publishedSuccess,
-        unpublish: vi.review.unpublishedSuccess,
-        archive: vi.review.archivedSuccess,
-      } as const;
-      onSuccess(messageMap[action]);
-      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
-      void queryClient.invalidateQueries({ queryKey: ["exams"] });
-      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
-      void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
-    },
-    onError: (err: unknown) => {
-      onError(getUiErrorMessage(err));
-      // Re-read the exam version and review queue after a stale-round Conflict or concurrent state transition.
-      void queryClient.invalidateQueries({ queryKey: ["exam-version", version.id] });
-      void queryClient.invalidateQueries({ queryKey: ["exams"] });
-      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
-      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
-    },
-  });
+  if (isSelfAuthor) {
+    return <Notice tone="warn">{vi.review.selfReviewNotice}</Notice>;
+  }
 
   const allChecked = checks.every(Boolean);
 
   return (
-    <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
-      {version.status === "Submitted" && isSelfAuthor && (
-        <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          {vi.review.selfReviewNotice}
+    <Panel title={vi.review.checklistTitle}>
+      <div className="space-y-2.5">
+        {vi.review.checklistItems.map((label, idx) => (
+          <div key={idx}>
+            <Checkbox
+              className="flex! items-start!"
+              label={label}
+              checked={checks[idx]}
+              onChange={(e) =>
+                setChecks((prev) => prev.map((val, i) => (i === idx ? e.target.checked : val)))
+              }
+            />
+          </div>
+        ))}
+      </div>
+
+      <hr className="my-3.5 border-line" />
+
+      <Field label={vi.review.noteLabel} htmlFor={noteId}>
+        <Textarea
+          id={noteId}
+          rows={3}
+          placeholder={vi.review.notePlaceholder}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </Field>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="approve"
+          disabled={pending || !allChecked}
+          aria-describedby={allChecked ? undefined : hintId}
+          onClick={() => {
+            if (!allChecked) {
+              onError(vi.review.checklistRequired);
+              return;
+            }
+            onDecide("approve", note);
+          }}
+        >
+          {vi.review.approve}
+        </Button>
+        <Button
+          variant="danger"
+          disabled={pending}
+          onClick={() => {
+            if (!note.trim()) {
+              onError(vi.review.rejectNeedsNote);
+              return;
+            }
+            onDecide("reject", note);
+          }}
+        >
+          {vi.review.reject}
+        </Button>
+      </div>
+      {!allChecked && (
+        <p id={hintId} className="mt-2.5 text-xs text-muted">
+          {vi.review.checklistRequired}
         </p>
       )}
-      {version.status === "Submitted" && !isSelfAuthor && (
-        <>
-          <h2 className="text-sm font-semibold text-slate-900">{vi.review.checklistTitle}</h2>
-          <div className="space-y-2">
-            {vi.review.checklistItems.map((label, idx) => (
-              <label key={idx} className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={checks[idx]}
-                  onChange={(e) =>
-                    setChecks((prev) => prev.map((val, i) => (i === idx ? e.target.checked : val)))
-                  }
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-
-          <label className="block text-sm">
-            <span className="font-medium text-slate-700">{vi.review.noteLabel}</span>
-            <textarea
-              rows={3}
-              placeholder={vi.review.notePlaceholder}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 p-2.5 text-sm"
-            />
-          </label>
-        </>
-      )}
-
-      <div className="flex flex-wrap gap-3">
-        {version.status === "Submitted" && !isSelfAuthor && (
-          <>
-            <button
-              type="button"
-              disabled={actionMutation.isPending}
-              onClick={() => {
-                if (!allChecked) {
-                  onError(vi.review.checklistRequired);
-                  return;
-                }
-                actionMutation.mutate("approve");
-              }}
-              className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {vi.review.approve}
-            </button>
-            <button
-              type="button"
-              disabled={actionMutation.isPending}
-              onClick={() => {
-                if (!note.trim()) {
-                  onError(vi.review.rejectNeedsNote);
-                  return;
-                }
-                actionMutation.mutate("reject");
-              }}
-              className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-            >
-              {vi.review.reject}
-            </button>
-          </>
-        )}
-
-        {isAdmin && version.status === "Approved" && (
-          <button
-            type="button"
-            disabled={actionMutation.isPending}
-            onClick={() => {
-              if (window.confirm(vi.review.confirmPublishExam)) {
-                actionMutation.mutate("publish");
-              }
-            }}
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {vi.review.publish}
-          </button>
-        )}
-
-        {isAdmin && version.status === "Published" && (
-          <button
-            type="button"
-            disabled={actionMutation.isPending}
-            onClick={() => {
-              if (window.confirm(vi.review.confirmUnpublishExam)) {
-                actionMutation.mutate("unpublish");
-              }
-            }}
-            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
-            {vi.review.unpublish}
-          </button>
-        )}
-
-        {(version.status === "Approved" || version.status === "Rejected") && (
-          <button
-            type="button"
-            disabled={actionMutation.isPending}
-            onClick={() => {
-              if (window.confirm(vi.review.confirmArchiveExam)) {
-                actionMutation.mutate("archive");
-              }
-            }}
-            className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
-            {vi.review.archive}
-          </button>
-        )}
-      </div>
-    </div>
+    </Panel>
   );
 }
 
 function ReviewExamInner() {
   const vid = useSearchParams().get("id");
   const { me } = useAuth();
+  const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -226,104 +137,258 @@ function ReviewExamInner() {
     },
   });
 
-  if (!canReview) {
-    return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
-  }
-  if (!vid) return <p className="text-sm text-rose-600">{vi.review.missingId}</p>;
+  const v: ExamVersion | undefined = versionQuery.data;
 
-  const v = versionQuery.data;
+  const actionMutation = useMutation({
+    mutationFn: async ({ action, note }: { action: ExamAction; note?: string }) => {
+      if (!v) throw new Error(vi.common.requestFailed);
+      if (action === "approve") {
+        const { error } = await api.POST("/exam-versions/{vid}/approve", {
+          params: { path: { vid: v.id } },
+          body: { submittedAt: v.submittedAt!, note: note?.trim() || null },
+        });
+        if (error) throw new Error(getApiErrorMessage(error));
+        return action;
+      }
+      if (action === "reject") {
+        const { error } = await api.POST("/exam-versions/{vid}/reject", {
+          params: { path: { vid: v.id } },
+          body: { submittedAt: v.submittedAt!, note: (note ?? "").trim() },
+        });
+        if (error) throw new Error(getApiErrorMessage(error));
+        return action;
+      }
+      const pathMap = {
+        publish: "/exam-versions/{vid}/publish",
+        unpublish: "/exam-versions/{vid}/unpublish",
+        archive: "/exam-versions/{vid}/archive",
+      } as const;
+      const { error } = await api.POST(pathMap[action], { params: { path: { vid: v.id } } });
+      if (error) throw new Error(getApiErrorMessage(error));
+      return action;
+    },
+    onSuccess: (action) => {
+      const messageMap = {
+        approve: vi.review.approvedSuccess,
+        reject: vi.review.rejectedSuccess,
+        publish: vi.review.publishedSuccess,
+        unpublish: vi.review.unpublishedSuccess,
+        archive: vi.review.archivedSuccess,
+      } as const;
+      setErrorMsg(null);
+      setFeedback(messageMap[action]);
+      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-version", vid] });
+    },
+    onError: (err: unknown) => {
+      setFeedback(null);
+      setErrorMsg(getUiErrorMessage(err));
+      // Re-read the exam version and review queue after a stale-round Conflict or concurrent state transition.
+      void queryClient.invalidateQueries({ queryKey: ["exam-version", vid] });
+      void queryClient.invalidateQueries({ queryKey: ["exams"] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-versions"] });
+      void queryClient.invalidateQueries({ queryKey: ["review", "exams"] });
+    },
+  });
+
+  if (!canReview) {
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.review.examTitle} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.common.forbidden}</Notice>
+        </div>
+      </>
+    );
+  }
+  if (!vid) {
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.review.examTitle} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.review.missingId}</Notice>
+        </div>
+      </>
+    );
+  }
+
+  const isAdmin = me?.role === "admin";
+  const busy = actionMutation.isPending;
+  const canArchive = v?.status === "Approved" || v?.status === "Rejected";
+  const canPublish = isAdmin && v?.status === "Approved";
+  const canUnpublish = isAdmin && v?.status === "Published";
+  const warnings = v?.warnings ?? [];
+
+  const boardActions =
+    v && (canArchive || canPublish || canUnpublish) ? (
+      <>
+        {canArchive && (
+          <Button
+            variant="boardSecondary"
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(vi.review.confirmArchiveExam)) {
+                actionMutation.mutate({ action: "archive" });
+              }
+            }}
+          >
+            {vi.review.archive}
+          </Button>
+        )}
+        {canUnpublish && (
+          <Button
+            variant="boardSecondary"
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(vi.review.confirmUnpublishExam)) {
+                actionMutation.mutate({ action: "unpublish" });
+              }
+            }}
+          >
+            {vi.review.unpublish}
+          </Button>
+        )}
+        {canPublish && (
+          <Button
+            variant="boardPrimary"
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(vi.review.confirmPublishExam)) {
+                actionMutation.mutate({ action: "publish" });
+              }
+            }}
+          >
+            {vi.review.publish}
+          </Button>
+        )}
+      </>
+    ) : undefined;
 
   return (
-    <section className="space-y-6">
-      <div>
-        <Link href="/review/" className="text-sm text-slate-600 hover:underline">
-          ← {vi.common.back}
-        </Link>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">{vi.review.examTitle}</h1>
-      </div>
+    <>
+      <PageHeader
+        crumb={CRUMB}
+        title={v ? v.examTitle : vi.review.examTitle}
+        description={v ? vi.review.examSubtitle(v.versionNo, v.createdBy.fullName) : undefined}
+        actions={boardActions}
+      />
+      <div className={BODY}>
+        {versionQuery.isLoading && <EmptyState busy title={vi.common.loading} />}
+        {versionQuery.isError && <Notice tone="error">{getUiErrorMessage(versionQuery.error)}</Notice>}
+        {feedback && (
+          <Notice tone="success" className="mb-4">
+            {feedback}
+          </Notice>
+        )}
+        {errorMsg && (
+          <Notice tone="error" className="mb-4">
+            {errorMsg}
+          </Notice>
+        )}
 
-      {versionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {versionQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(versionQuery.error)}</p>}
-      {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
-      {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
+        {v && (
+          <>
+            <MetaBar
+              items={[
+                {
+                  label: vi.common.status,
+                  value: (
+                    <StatusText tone={examVersionTone(v.status)} className="text-[17px]!">
+                      {vi.review.examStatuses[v.status]}
+                    </StatusText>
+                  ),
+                },
+                { label: vi.common.gradePrefix, value: v.grade },
+                { label: vi.review.examDuration, value: v.durationMinutes },
+                { label: vi.review.examQuestionCount, value: v.questionCount },
+                { label: vi.review.examTotalPoints, value: formatDecimalForInput(v.totalPoints) },
+              ]}
+            />
 
-      {v && (
-        <div className="space-y-5">
-          <div className="rounded border border-slate-200 bg-white p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-slate-900">
-                {v.examTitle} (v{v.versionNo})
-              </h2>
-              <span className="rounded bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-800">
-                {vi.review.examStatuses[v.status]}
-              </span>
-            </div>
-            <p className="mt-2 text-sm text-slate-600">
-              {vi.common.gradePrefix} {v.grade} · {vi.review.examDuration}: {v.durationMinutes} · {vi.review.examQuestionCount}: {v.questionCount} · {vi.review.examTotalPoints}: {formatDecimalForInput(v.totalPoints)}
-            </p>
-            {(v.warnings ?? []).length > 0 && (
-              <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-                <p className="font-semibold">{vi.review.warningsTitle}:</p>
+            {warnings.length > 0 && (
+              <Notice tone="warn" title={vi.review.warningsTitle} className="mb-4">
                 <ul className="mt-1 list-disc pl-4">
-                  {(v.warnings ?? []).map((w, idx) => (
+                  {warnings.map((w, idx) => (
                     <li key={idx}>{w.message}</li>
                   ))}
                 </ul>
-              </div>
+              </Notice>
             )}
-          </div>
 
-          <div className="space-y-3">
-            {v.items.map((item) => (
-              <article key={item.sourceQuestionId} className="space-y-2 rounded border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>
-                    {vi.review.questionItemPrefix} {item.sortOrder}
-                    {item.difficulty ? ` · ${vi.questions.difficulties[item.difficulty]}` : ""}
-                  </span>
-                  <span className="font-medium text-slate-700">{formatDecimalForInput(item.points)} {vi.review.points}</span>
-                </div>
-                {item.stem && (
-                  <div className="text-sm text-slate-900">
-                    <MathMarkdown>{item.stem}</MathMarkdown>
-                  </div>
-                )}
-                {item.type && item.payload && <QuestionPayloadView type={item.type} payload={item.payload} />}
-                {item.explanation && (
-                  <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
-                    <p className="font-medium text-slate-700">{vi.questions.explanation}:</p>
-                    <div className="mt-1">
-                      <MathMarkdown>{item.explanation}</MathMarkdown>
+            <div className={v.status === "Submitted" ? "grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]" : ""}>
+              <ol className="min-w-0">
+                {v.items.map((item) => (
+                  <li
+                    key={item.sourceQuestionId}
+                    className="mb-2 min-w-0 rounded-md bg-white px-4 py-3.5 ring-1 ring-line"
+                  >
+                    <div className="mb-2 flex items-baseline justify-between gap-3 text-[12.5px] text-muted">
+                      <span className="font-semibold text-ink-soft">
+                        {vi.review.questionItemPrefix} {item.sortOrder}
+                        {item.difficulty ? `, ${vi.questions.difficulties[item.difficulty]}` : ""}
+                      </span>
+                      <span className="font-semibold whitespace-nowrap text-ink-soft tabular-nums">
+                        {formatDecimalForInput(item.points)} {vi.review.points}
+                      </span>
                     </div>
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
+                    {item.stem && (
+                      <div className="text-[14.5px] break-words [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
+                        <MathMarkdown>{item.stem}</MathMarkdown>
+                      </div>
+                    )}
+                    {item.type && item.payload && (
+                      <div className="mt-2.5">
+                        <QuestionPayloadView type={item.type} payload={item.payload} />
+                      </div>
+                    )}
+                    {item.explanation && (
+                      <div className="mt-2.5 rounded-md bg-tint px-3 py-2.5 text-[13.5px]">
+                        <p className="font-semibold text-ink-soft">{vi.questions.explanation}</p>
+                        <div className="mt-1">
+                          <MathMarkdown>{item.explanation}</MathMarkdown>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
 
-          <ExamDecisionForm
-            key={`${v.id}-${v.submittedAt ?? ""}-${v.status}`}
-            version={v}
-            isAdmin={me?.role === "admin"}
-            isSelfAuthor={me?.id === v.createdBy.id}
-            onSuccess={(msg) => {
-              setErrorMsg(null);
-              setFeedback(msg);
-            }}
-            onError={(msg) => {
-              setFeedback(null);
-              setErrorMsg(msg);
-            }}
-          />
-        </div>
-      )}
-    </section>
+              {v.status === "Submitted" && (
+                <aside className="min-w-0 lg:sticky lg:top-4 lg:self-start">
+                  <ExamDecisionPanel
+                    key={`${v.id}-${v.submittedAt ?? ""}-${v.status}`}
+                    isSelfAuthor={me?.id === v.createdBy.id}
+                    pending={busy}
+                    onDecide={(action, note) => actionMutation.mutate({ action, note })}
+                    onError={(msg) => {
+                      setFeedback(null);
+                      setErrorMsg(msg);
+                    }}
+                  />
+                </aside>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
 export default function ReviewExamPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense
+      fallback={
+        <>
+          <PageHeader crumb={CRUMB} title={vi.review.examTitle} />
+          <div className={BODY}>
+            <EmptyState busy title={vi.common.loading} />
+          </div>
+        </>
+      }
+    >
       <ReviewExamInner />
     </Suspense>
   );

@@ -2,10 +2,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { Button } from "@/components/ui/button";
+import { Field, Input, Select } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
@@ -76,7 +79,7 @@ export function CreateExamForm({
     },
   });
 
-  const inputClass = "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm";
+  const ids = { title: useId(), subject: useId(), grade: useId() };
 
   return (
     <form
@@ -86,50 +89,45 @@ export function CreateExamForm({
         setFormError(null);
         mutation.mutate(body);
       })}
-      className="grid grid-cols-1 gap-3 rounded border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3"
+      className="mb-5 grid grid-cols-1 gap-x-3.5 rounded-lg border border-line bg-white p-[18px] pb-1.5 sm:grid-cols-3"
     >
-      <label className="space-y-1 text-sm sm:col-span-3">
-        <span className="font-medium text-slate-700">{vi.exams.titleLabel}</span>
-        <input {...register("title")} className={inputClass} maxLength={300} />
-        {errors.title && <span className="block text-xs text-rose-600">{errors.title.message}</span>}
-      </label>
-      <label className="space-y-1 text-sm">
-        <span className="font-medium text-slate-700">{vi.exams.subject}</span>
-        <select {...register("subjectId")} className={inputClass}>
+      <h2 className="mb-3 text-[15px] font-semibold sm:col-span-3">{vi.exams.createTitle}</h2>
+      <Field label={vi.exams.titleLabel} htmlFor={ids.title} error={errors.title?.message} className="sm:col-span-3">
+        <Input id={ids.title} {...register("title")} maxLength={300} />
+      </Field>
+      <Field label={vi.exams.subject} htmlFor={ids.subject} error={errors.subjectId?.message}>
+        <Select id={ids.subject} {...register("subjectId")}>
           <option value="">{vi.exams.chooseSubject}</option>
           {subjectsQuery.data?.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>
           ))}
-        </select>
-        {errors.subjectId && <span className="block text-xs text-rose-600">{errors.subjectId.message}</span>}
-      </label>
-      <label className="space-y-1 text-sm">
-        <span className="font-medium text-slate-700">{vi.exams.grade}</span>
-        <select {...register("grade")} className={inputClass}>
+        </Select>
+      </Field>
+      <Field label={vi.exams.grade} htmlFor={ids.grade} error={errors.grade?.message}>
+        <Select id={ids.grade} {...register("grade")}>
           <option value="">{vi.exams.chooseGrade}</option>
           {["10", "11", "12"].map((g) => (
             <option key={g} value={g}>
               {g}
             </option>
           ))}
-        </select>
-        {errors.grade && <span className="block text-xs text-rose-600">{errors.grade.message}</span>}
-      </label>
-      <div className="flex items-end gap-2">
-        <button
-          type="submit"
-          disabled={mutation.isPending}
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
+        </Select>
+      </Field>
+      <div className="mb-3.5 flex items-end gap-2">
+        <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? vi.common.saving : vi.exams.createTitle}
-        </button>
-        <button type="button" onClick={onCancel} className="rounded border border-slate-300 px-4 py-2 text-sm">
+        </Button>
+        <Button variant="secondary" onClick={onCancel}>
           {vi.exams.cancel}
-        </button>
+        </Button>
       </div>
-      {formError && <p className="text-sm text-rose-600 sm:col-span-3">{formError}</p>}
+      {formError && (
+        <Notice tone="error" className="mb-3.5 sm:col-span-3">
+          {formError}
+        </Notice>
+      )}
     </form>
   );
 }

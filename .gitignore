@@ -458,3 +458,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# ---- Superpowers (agent working files) ----
+.superpowers/

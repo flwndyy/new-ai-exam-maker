@@ -4,8 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 
-import { GenerateForm } from "@/components/ai/generate-form";
+import { formatQuotaLine, GenerateForm } from "@/components/ai/generate-form";
 import { JobList } from "@/components/ai/job-list";
+import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Notice } from "@/components/ui/notice";
 import { quotaRefreshDelay } from "@/lib/ai/quota-refresh";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
@@ -56,31 +59,48 @@ function AiPageInner() {
 
   if (!me) return null;
   if (me.role !== "teacher" && me.role !== "head") {
-    return <p className="text-sm text-slate-600">{vi.ai.forbidden}</p>;
+    return <Blocked message={vi.ai.forbidden} />;
   }
   if (!departmentId) {
-    return <p className="text-sm text-slate-600">{vi.ai.noDepartment}</p>;
+    return <Blocked message={vi.ai.noDepartment} />;
   }
 
   // Mount the form once its limits and any prefill are known, so defaults and the count limit are fixed at mount.
   const ready = !quotaQuery.isPending && !(fromJobId && fromJobQuery.isPending);
 
   return (
-    <section className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">{vi.ai.title}</h1>
-      {ready ? (
-        <GenerateForm departmentId={departmentId} quota={quotaQuery.data} initial={fromJobQuery.data?.params} />
-      ) : (
-        <p className="text-sm text-slate-500">{vi.common.loading}</p>
-      )}
-      <JobList subjectNames={subjectNames} />
-    </section>
+    <>
+      <PageHeader title={vi.ai.title} description={quotaQuery.data ? formatQuotaLine(quotaQuery.data) : undefined} />
+      <div className="grid items-start gap-6 px-4 py-5 sm:px-7 sm:py-6 lg:grid-cols-2">
+        <div className="min-w-0">
+          {ready ? (
+            <GenerateForm departmentId={departmentId} quota={quotaQuery.data} initial={fromJobQuery.data?.params} />
+          ) : (
+            <EmptyState busy title={vi.common.loading} />
+          )}
+        </div>
+        <div className="min-w-0">
+          <JobList subjectNames={subjectNames} />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Blocked({ message }: { message: string }) {
+  return (
+    <>
+      <PageHeader title={vi.ai.title} />
+      <div className="px-4 py-5 sm:px-7 sm:py-6">
+        <Notice tone="warn">{message}</Notice>
+      </div>
+    </>
   );
 }
 
 export default function AiPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense fallback={<EmptyState busy title={vi.common.loading} />}>
       <AiPageInner />
     </Suspense>
   );

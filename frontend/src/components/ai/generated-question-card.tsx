@@ -1,12 +1,16 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { Button, ButtonLink } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
+import { StatusText } from "@/components/ui/status-text";
+import { Tag, type TagTone } from "@/components/ui/tag";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
 import { api } from "@/lib/api/client";
 import type { components } from "@/lib/api/schema";
+import { aiVerificationTone, questionTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
 
 type Question = components["schemas"]["Question"];
@@ -27,10 +31,10 @@ export const questionKey = (id: string) => ["question", id] as const;
 /** The question was deleted or is no longer visible (404/403); not retried. */
 export class QuestionUnavailableError extends Error {}
 
-const FLAG_CLASS: Record<Question["aiVerification"], string> = {
-  Agree: "bg-emerald-100 text-emerald-800",
-  Disagree: "bg-red-100 text-red-800",
-  NotChecked: "bg-slate-100 text-slate-700",
+const FLAG_TONE: Record<Question["aiVerification"], TagTone> = {
+  Agree: aiVerificationTone("Agree"),
+  Disagree: aiVerificationTone("Disagree"),
+  NotChecked: aiVerificationTone("NotChecked"),
 };
 
 /** One generated question on the job page; AI content is rendered only through sanitized MathMarkdown. */
@@ -66,76 +70,82 @@ export function GeneratedQuestionCard({
   const label = vi.ai.questionLabel(index);
   if (!question) {
     return (
-      <article className="rounded border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        <h3 className="font-semibold text-slate-900">{label}</h3>
-        <p>{vi.ai.questionUnavailable}</p>
+      <article className="rounded-lg border border-line bg-tint p-4 text-[13.5px] text-ink-soft">
+        <h3 className="font-semibold text-ink">{label}</h3>
+        <p className="mt-1">{vi.ai.questionUnavailable}</p>
       </article>
     );
   }
 
   const flag = question.aiVerification;
+  const disagree = flag === "Disagree";
   return (
-    <article className="space-y-3 rounded border border-slate-200 bg-white p-4">
-      <header className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold text-slate-900">{label}</h3>
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ${FLAG_CLASS[flag]}`}>
-          {flag === "Disagree"
-            ? `⚠ ${vi.questions.aiFlags.Disagree} — ${vi.ai.disagreeWarning}`
-            : vi.questions.aiFlags[flag]}
-        </span>
-        <span className="text-xs text-slate-500">
-          {vi.common.status}: {vi.questions.statuses[question.status]}
-        </span>
+    <article
+      className={[
+        "space-y-3 rounded-lg border bg-surface p-4",
+        disagree ? "border-rej border-l-4" : "border-line",
+      ].join(" ")}
+    >
+      <header className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        <h3 className="text-[15px] font-semibold">{label}</h3>
+        <Tag tone={FLAG_TONE[flag]}>
+          {disagree ? `${vi.questions.aiFlags.Disagree}, ${vi.ai.disagreeWarning}` : vi.questions.aiFlags[flag]}
+        </Tag>
+        <StatusText tone={questionTone(question.status)} className="ml-auto">
+          {vi.questions.statuses[question.status]}
+        </StatusText>
       </header>
 
       {refreshFailed && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          <span>{vi.ai.questionRefreshFailed}</span>
-          {onRetry && (
-            <button type="button" disabled={refreshing} onClick={onRetry} className="underline disabled:opacity-50">
-              {vi.ai.retry}
-            </button>
-          )}
-        </div>
+        <Notice
+          tone="error"
+          action={
+            onRetry && (
+              <Button variant="secondary" size="sm" disabled={refreshing} onClick={onRetry}>
+                {vi.ai.retry}
+              </Button>
+            )
+          }
+        >
+          {vi.ai.questionRefreshFailed}
+        </Notice>
       )}
 
-      <div className="text-sm text-slate-900">
+      <div className="text-[14px] text-ink">
         <MathMarkdown>{question.stem}</MathMarkdown>
       </div>
       <QuestionPayloadView type={question.type} payload={question.payload} />
 
       {question.explanation && (
-        <div className="text-sm text-slate-700">
-          <p className="font-medium">{vi.ai.explanation}:</p>
+        <div className="rounded-md bg-tint px-3 py-2.5 text-[13.5px] text-ink">
+          <p className="font-semibold text-ink-soft">{vi.ai.explanation}</p>
           <MathMarkdown>{question.explanation}</MathMarkdown>
         </div>
       )}
       {question.aiVerificationNote && (
-        <p className="text-sm text-slate-600">
-          <span className="font-medium">{vi.ai.verificationNote}:</span> <span>{question.aiVerificationNote}</span>
+        <p className="text-[13px] text-ink-soft">
+          <span className="font-semibold">{vi.ai.verificationNote}:</span> <span>{question.aiVerificationNote}</span>
         </p>
       )}
 
       <footer className="flex flex-wrap items-center justify-end gap-2">
-        {markReviewed.isError && <span className="text-sm text-red-700">{vi.ai.reviewFailed}</span>}
+        {markReviewed.isError && <span className="text-[13px] text-rej">{vi.ai.reviewFailed}</span>}
         {question.source === "AI" && question.aiReviewedByAuthor && (
-          <span className="text-sm text-emerald-700">{vi.ai.reviewed}</span>
+          <StatusText tone="ok" className="mr-auto">
+            {vi.ai.reviewed}
+          </StatusText>
         )}
-        <Link
-          href={`/questions/detail/?id=${question.id}`}
-          className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-        >
+        <ButtonLink href={`/questions/detail/?id=${question.id}`} variant="secondary" size="sm">
           {vi.common.edit}
-        </Link>
+        </ButtonLink>
         {!refreshFailed && canMarkReviewed(question, meId) && (
-          <button
-            type="button"
+          <Button
+            size="sm"
             disabled={markReviewed.isPending || refreshing}
             onClick={() => markReviewed.mutate(question.id)}
-            className="rounded border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm text-amber-900 hover:bg-amber-100 disabled:opacity-50"
           >
             {vi.questions.markReviewed}
-          </button>
+          </Button>
         )}
       </footer>
     </article>

@@ -1,20 +1,46 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useId, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { QuestionPayloadView } from "@/components/questions/question-payload-view";
+import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Checkbox, Field, Textarea } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
+import { Panel } from "@/components/ui/panel";
+import { StatusText } from "@/components/ui/status-text";
+import { Tag, type TagTone } from "@/components/ui/tag";
 import { fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
+import { questionTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
 
 type Question = components["schemas"]["Question"];
+type AiVerification = components["schemas"]["AiVerification"];
+
+const AI_FLAG_TONE: Record<AiVerification, TagTone> = { NotChecked: "neutral", Agree: "ok", Disagree: "rej" };
+
+const dateFormat = new Intl.DateTimeFormat("vi-VN", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "Asia/Ho_Chi_Minh",
+});
+
+const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+const CRUMB = { href: "/review/", label: vi.review.title };
+
+function formatSentAt(value?: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : dateFormat.format(date);
+}
 
 /** Bind checklist and note state to one submission round via parent key (`id + submittedAt + status`). */
 function QuestionDecisionForm({
@@ -29,6 +55,8 @@ function QuestionDecisionForm({
   const queryClient = useQueryClient();
   const [checks, setChecks] = useState<boolean[]>(vi.review.checklistItems.map(() => false));
   const [note, setNote] = useState("");
+  const noteId = useId();
+  const hintId = useId();
 
   const decisionMutation = useMutation({
     mutationFn: async (action: "approve" | "reject") => {
@@ -66,38 +94,39 @@ function QuestionDecisionForm({
   const allChecked = checks.every(Boolean);
 
   return (
-    <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
-      <h2 className="text-sm font-semibold text-slate-900">{vi.review.checklistTitle}</h2>
-      <div className="space-y-2">
+    <Panel title={vi.review.checklistTitle}>
+      <div className="space-y-2.5">
         {vi.review.checklistItems.map((label, idx) => (
-          <label key={idx} className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
+          <div key={idx}>
+            <Checkbox
+              className="flex! items-start!"
+              label={label}
               checked={checks[idx]}
               onChange={(e) =>
                 setChecks((prev) => prev.map((v, i) => (i === idx ? e.target.checked : v)))
               }
             />
-            {label}
-          </label>
+          </div>
         ))}
       </div>
 
-      <label className="block text-sm">
-        <span className="font-medium text-slate-700">{vi.review.noteLabel}</span>
-        <textarea
+      <hr className="my-3.5 border-line" />
+
+      <Field label={vi.review.noteLabel} htmlFor={noteId}>
+        <Textarea
+          id={noteId}
           rows={3}
           placeholder={vi.review.notePlaceholder}
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="mt-1 w-full rounded border border-slate-300 p-2.5 text-sm"
         />
-      </label>
+      </Field>
 
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          disabled={decisionMutation.isPending}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="approve"
+          disabled={decisionMutation.isPending || !allChecked}
+          aria-describedby={allChecked ? undefined : hintId}
           onClick={() => {
             if (!allChecked) {
               onError(vi.review.checklistRequired);
@@ -105,12 +134,11 @@ function QuestionDecisionForm({
             }
             decisionMutation.mutate("approve");
           }}
-          className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
         >
           {vi.review.approve}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="danger"
           disabled={decisionMutation.isPending}
           onClick={() => {
             if (!note.trim()) {
@@ -119,12 +147,16 @@ function QuestionDecisionForm({
             }
             decisionMutation.mutate("reject");
           }}
-          className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
         >
           {vi.review.reject}
-        </button>
+        </Button>
       </div>
-    </div>
+      {!allChecked && (
+        <p id={hintId} className="mt-2.5 text-xs text-muted">
+          {vi.review.checklistRequired}
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -155,100 +187,134 @@ function ReviewQuestionInner() {
   });
 
   if (!canReview) {
-    return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.review.questionTitle} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.common.forbidden}</Notice>
+        </div>
+      </>
+    );
   }
-  if (!id) return <p className="text-sm text-rose-600">{vi.review.missingId}</p>;
+  if (!id) {
+    return (
+      <>
+        <PageHeader crumb={CRUMB} title={vi.review.questionTitle} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.review.missingId}</Notice>
+        </div>
+      </>
+    );
+  }
 
   const topicName = q ? topicsQuery.data?.find((t) => t.id === q.topicId)?.name : undefined;
   const isSelfAuthor = Boolean(q && me?.id === q.createdBy.id);
+  const doubtful = q?.source === "AI" && q.aiVerification === "Disagree";
 
   return (
-    <section className="space-y-6">
-      <div>
-        <Link href="/review/" className="text-sm text-slate-600 hover:underline">
-          ← {vi.common.back}
-        </Link>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">{vi.review.questionTitle}</h1>
-      </div>
+    <>
+      <PageHeader
+        crumb={CRUMB}
+        title={vi.review.questionTitle}
+        description={q ? vi.review.sentBy(q.createdBy.fullName, formatSentAt(q.submittedAt)) : undefined}
+      />
+      <div className={BODY}>
+        {questionQuery.isLoading && <EmptyState busy title={vi.common.loading} />}
+        {questionQuery.isError && <Notice tone="error">{getUiErrorMessage(questionQuery.error)}</Notice>}
+        {feedback && (
+          <Notice tone="success" className="mb-4">
+            {feedback}
+          </Notice>
+        )}
+        {errorMsg && (
+          <Notice tone="error" className="mb-4">
+            {errorMsg}
+          </Notice>
+        )}
 
-      {questionQuery.isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {questionQuery.isError && <p className="text-sm text-rose-600">{getUiErrorMessage(questionQuery.error)}</p>}
-      {feedback && <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{feedback}</p>}
-      {errorMsg && <p className="rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">{errorMsg}</p>}
-
-      {q && (
-        <div className="space-y-5">
-          <div className="space-y-4 rounded border border-slate-200 bg-white p-5">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded bg-slate-100 px-2.5 py-1 font-medium">
-                {vi.questions.statuses[q.status]}
-              </span>
-              <span className="rounded bg-blue-50 px-2.5 py-1 text-blue-800">
-                {vi.questions.types[q.type]} · {vi.common.gradePrefix} {q.grade} · {vi.questions.difficulties[q.difficulty]}
-              </span>
-              {topicName && (
-                <span className="rounded bg-slate-100 px-2.5 py-1 text-slate-700">
-                  {vi.questions.topic}: {topicName}
-                </span>
-              )}
-              {q.source === "AI" && (
-                <span className="rounded bg-amber-50 px-2.5 py-1 text-amber-800">
-                  {vi.questions.aiFlags[q.aiVerification]} · {q.aiReviewedByAuthor ? vi.questions.aiReviewed : vi.questions.aiNotReviewed}
-                </span>
-              )}
-            </div>
-
-            {q.aiVerificationNote && (
-              <p className="rounded border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
-                <strong>{vi.questions.aiVerification}:</strong> {q.aiVerificationNote}
-              </p>
-            )}
-
-            <div className="prose prose-sm max-w-none text-slate-900">
-              <MathMarkdown>{q.stem}</MathMarkdown>
-            </div>
-
-            <QuestionPayloadView type={q.type} payload={q.payload} />
-
-            {q.explanation && (
-              <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
-                <p className="font-medium text-slate-700">{vi.questions.explanation}:</p>
-                <div className="mt-1">
-                  <MathMarkdown>{q.explanation}</MathMarkdown>
-                </div>
+        {q && (
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+            <Panel className={doubtful ? "min-w-0 border-l-4 border-l-rej" : "min-w-0"}>
+              <div className="mb-3.5 flex flex-wrap items-center gap-1.5">
+                <StatusText tone={questionTone(q.status)} className="mr-1.5">
+                  {vi.questions.statuses[q.status]}
+                </StatusText>
+                <Tag>{vi.questions.types[q.type]}</Tag>
+                <Tag>{vi.questions.difficulties[q.difficulty]}</Tag>
+                <Tag>{`${vi.common.gradePrefix} ${q.grade}`}</Tag>
+                {topicName && <Tag>{`${vi.questions.topic}: ${topicName}`}</Tag>}
+                {q.source === "AI" && (
+                  <>
+                    <Tag tone="ai">{vi.questions.aiSource}</Tag>
+                    <Tag tone={AI_FLAG_TONE[q.aiVerification]}>{vi.questions.aiFlags[q.aiVerification]}</Tag>
+                    <Tag>{q.aiReviewedByAuthor ? vi.questions.aiReviewed : vi.questions.aiNotReviewed}</Tag>
+                  </>
+                )}
               </div>
+
+              {q.aiVerificationNote && (
+                <Notice tone="warn" title={vi.questions.aiVerification} className="mb-3.5">
+                  {q.aiVerificationNote}
+                </Notice>
+              )}
+
+              <div className="text-[14.5px] break-words [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
+                <MathMarkdown>{q.stem}</MathMarkdown>
+              </div>
+
+              <div className="mt-3.5">
+                <QuestionPayloadView type={q.type} payload={q.payload} />
+              </div>
+
+              {q.explanation && (
+                <div className="mt-3.5 rounded-md bg-tint px-3 py-2.5 text-[13.5px]">
+                  <p className="font-semibold text-ink-soft">{vi.questions.explanation}</p>
+                  <div className="mt-1">
+                    <MathMarkdown>{q.explanation}</MathMarkdown>
+                  </div>
+                </div>
+              )}
+            </Panel>
+
+            {q.status === "Submitted" && (
+              <aside className="min-w-0 lg:sticky lg:top-4 lg:self-start">
+                {isSelfAuthor ? (
+                  <Notice tone="warn">{vi.review.selfReviewNotice}</Notice>
+                ) : (
+                  <QuestionDecisionForm
+                    key={`${q.id}-${q.submittedAt ?? ""}-${q.status}`}
+                    question={q}
+                    onSuccess={(msg) => {
+                      setErrorMsg(null);
+                      setFeedback(msg);
+                    }}
+                    onError={(msg) => {
+                      setFeedback(null);
+                      setErrorMsg(msg);
+                    }}
+                  />
+                )}
+              </aside>
             )}
           </div>
-
-          {q.status === "Submitted" && (
-            isSelfAuthor ? (
-              <p className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-                {vi.review.selfReviewNotice}
-              </p>
-            ) : (
-              <QuestionDecisionForm
-                key={`${q.id}-${q.submittedAt ?? ""}-${q.status}`}
-                question={q}
-                onSuccess={(msg) => {
-                  setErrorMsg(null);
-                  setFeedback(msg);
-                }}
-                onError={(msg) => {
-                  setFeedback(null);
-                  setErrorMsg(msg);
-                }}
-              />
-            )
-          )}
-        </div>
-      )}
-    </section>
+        )}
+      </div>
+    </>
   );
 }
 
 export default function ReviewQuestionPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense
+      fallback={
+        <>
+          <PageHeader crumb={CRUMB} title={vi.review.questionTitle} />
+          <div className={BODY}>
+            <EmptyState busy title={vi.common.loading} />
+          </div>
+        </>
+      }
+    >
       <ReviewQuestionInner />
     </Suspense>
   );

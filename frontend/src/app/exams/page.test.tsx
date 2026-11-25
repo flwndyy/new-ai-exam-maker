@@ -45,11 +45,11 @@ const exam = {
   grade: 10,
   departmentId: DEPT,
   createdBy: { id: "u2", fullName: "Giáo viên B" },
-  latestVersionNo: 2,
-  latestVersionId: "V2",
-  latestVersionStatus: "Draft",
-  publishedVersionId: "V1",
-  publishedVersionNo: 1,
+  latestVersionNo: 3,
+  latestVersionId: "V3",
+  latestVersionStatus: "Rejected",
+  publishedVersionId: "V2",
+  publishedVersionNo: 2,
   createdAt: "2026-11-23T01:00:00Z",
   updatedAt: "2026-11-23T02:00:00Z",
 };
@@ -92,14 +92,41 @@ describe("ExamsPage", () => {
     vi.clearAllMocks();
   });
 
-  it("lists exams with subject name, author, version and published badge", async () => {
+  it("lists exams as rows with subject, author, latest version status and published version", async () => {
     renderPage();
     const link = await screen.findByRole("link", { name: exam.title });
     expect(link.getAttribute("href")).toMatch(/^\/exams\/view\/?\?id=E1$/);
-    expect(await screen.findByRole("cell", { name: "Hóa học" })).toBeTruthy();
-    expect(screen.getByText("Giáo viên B")).toBeTruthy();
-    expect(screen.getByText("v2")).toBeTruthy();
-    expect(screen.getByText(messages.exams.published)).toBeTruthy();
+    const row = link.closest("[data-tone]") as HTMLElement;
+    expect(row.getAttribute("data-tone")).toBe("rej");
+    expect(within(row).getByText(messages.exams.latestVersion(3, messages.review.examStatuses.Rejected))).toBeTruthy();
+    expect(within(row).getByText(messages.exams.publishedVersion(2))).toBeTruthy();
+    await waitFor(() =>
+      expect(within(row).getByText(/^Hóa học, khối 10\. Người tạo Giáo viên B\. Cập nhật/)).toBeTruthy(),
+    );
+  });
+
+  it("shows no published line when no version is published", async () => {
+    mocks.apiGet.mockImplementation((path: string) =>
+      path === "/exams"
+        ? ok({
+            items: [{ ...exam, latestVersionStatus: "Approved", publishedVersionId: null, publishedVersionNo: null }],
+            page: 1,
+            pageSize: 20,
+            totalItems: 1,
+            totalPages: 1,
+          })
+        : ok({ items: [], page: 1, pageSize: 100, totalItems: 0, totalPages: 0 }),
+    );
+    renderPage();
+    const row = (await screen.findByRole("link", { name: exam.title })).closest("[data-tone]") as HTMLElement;
+    expect(row.getAttribute("data-tone")).toBe("ok");
+    expect(screen.queryByText(/Đang xuất bản/)).toBeNull();
+  });
+
+  it("renders the page title on the board", async () => {
+    renderPage();
+    await screen.findByRole("link", { name: exam.title });
+    expect(screen.getByRole("heading", { level: 1, name: messages.exams.listTitle })).toBeTruthy();
   });
 
   it("admin has no create button", async () => {

@@ -6,11 +6,15 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect } from "react";
+import { type ReactNode, Suspense, useEffect } from "react";
 
 import { AnswerKeyItemView } from "@/components/exams/print/answer-key-item";
 import { SheetHeaderView } from "@/components/exams/print/sheet-header";
 import { StudentSheetItemView } from "@/components/exams/print/student-sheet-item";
+import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Notice } from "@/components/ui/notice";
 import { api } from "@/lib/api/client";
 import type { components } from "@/lib/api/schema";
 import { getUiErrorMessage } from "@/lib/api/error";
@@ -42,6 +46,43 @@ function errorMessage(error: unknown): string {
   return getUiErrorMessage((error as Partial<HttpFailure>)?.error ?? error);
 }
 
+/** Compact board with a way back to the exam, then the content area on a grey desk. */
+function Frame({ examId, vid, children }: { examId: string | null; vid: string | null; children: ReactNode }) {
+  const backHref = examId && vid ? `/exams/view/?id=${encodeURIComponent(examId)}&vid=${encodeURIComponent(vid)}` : "/exams/";
+  return (
+    <>
+      <PageHeader title={vi.exams.print.pageTitle} crumb={{ href: backHref, label: vi.exams.print.back }} />
+      {children}
+    </>
+  );
+}
+
+function ModeSwitch({ examId, vid, mode }: { examId: string; vid: string; mode: PrintMode }) {
+  const t = vi.exams.print;
+  const items: { mode: PrintMode; label: string }[] = [
+    { mode: "student", label: t.docStudent },
+    { mode: "answer", label: t.docAnswer },
+  ];
+  return (
+    <nav aria-label={t.modeSwitch} className="inline-flex overflow-hidden rounded-md border border-[#CDD1D6]">
+      {items.map((item) => (
+        <Link
+          key={item.mode}
+          href={printUrl(examId, vid, item.mode)}
+          aria-current={item.mode === mode ? "page" : undefined}
+          className={
+            item.mode === mode
+              ? "bg-accent px-3 py-1.5 text-[13px] font-semibold text-white"
+              : "px-3 py-1.5 text-[13px] text-ink transition-colors duration-150 hover:bg-tint"
+          }
+        >
+          {item.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
 function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId: string | null }) {
   const t = vi.exams.print;
   // A version can be withdrawn and resubmitted under the same vid with a new snapshot, so an export is never
@@ -55,7 +96,6 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
     refetchOnWindowFocus: false,
     queryFn: () => fetchSheet(vid, mode),
   });
-  const other: PrintMode = mode === "student" ? "answer" : "student";
   // Only print what the server currently allows: data must come from a fetch made by this page instance
   // (never a leftover cache entry), and once a refetch is refused (403/404/409) the old data is hidden.
   const sheet = query.isError || !query.isFetchedAfterMount ? undefined : query.data;
@@ -74,46 +114,60 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
   }, [docTitle]);
 
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3 print:hidden">
+    <Frame examId={examId} vid={vid}>
+      <div data-testid="print-toolbar" className="flex flex-wrap items-center gap-2.5 border-b border-line bg-white px-4 py-3 sm:px-7 print:hidden">
+        {examId && <ModeSwitch examId={examId} vid={vid} mode={mode} />}
         {sheet && (
-          <button type="button" onClick={() => window.print()} className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white">
+          <Button className="ml-auto" onClick={() => window.print()}>
             {t.printButton}
-          </button>
+          </Button>
         )}
-        {examId && (
-          <Link href={printUrl(examId, vid, other)} className="text-sm text-blue-700 hover:underline">
-            {other === "answer" ? t.toAnswer : t.toStudent}
-          </Link>
-        )}
-        <Link href={examId ? `/exams/view/?id=${encodeURIComponent(examId)}&vid=${encodeURIComponent(vid)}` : "/exams/"} className="text-sm text-slate-600 hover:underline">
-          {t.back}
-        </Link>
       </div>
 
-      {!sheet && !query.isError && <p>{vi.common.loading}</p>}
-      {query.isError && <p className="text-rose-600">{errorMessage(query.error)}</p>}
-      {sheet && (
-        <div className="space-y-5">
-          <SheetHeaderView header={sheet.data.header} mode={sheet.mode} schoolName={schoolName()} />
-          {sheet.mode === "student"
-            ? sheet.data.items.map((item) => <StudentSheetItemView key={item.number} item={item} />)
-            : sheet.data.items.map((item) => <AnswerKeyItemView key={item.number} item={item} />)}
-        </div>
-      )}
-    </section>
+      <div className="bg-[#E6E8EB] p-3 sm:p-7 print:bg-white print:p-0">
+        {!sheet && !query.isError && <EmptyState busy title={vi.common.loading} />}
+        {query.isError && <Notice tone="error">{errorMessage(query.error)}</Notice>}
+        {sheet && (
+          <div
+            data-testid="print-sheet"
+            className="print-sheet mx-auto w-full max-w-[700px] bg-white px-5 py-6 font-serif text-[14px] leading-[1.5] text-black shadow-[0_2px_10px_rgba(0,0,0,0.12)] sm:px-[52px] sm:py-11 print:max-w-none print:p-0 print:shadow-none"
+          >
+            <SheetHeaderView header={sheet.data.header} mode={sheet.mode} schoolName={schoolName()} />
+            {sheet.mode === "student"
+              ? sheet.data.items.map((item) => <StudentSheetItemView key={item.number} item={item} />)
+              : sheet.data.items.map((item) => <AnswerKeyItemView key={item.number} item={item} />)}
+          </div>
+        )}
+      </div>
+    </Frame>
   );
 }
 
 function PrintRoute() {
   const parsed = parsePrintParams(useSearchParams());
-  if (!parsed.ok) return <p className="text-rose-600">{vi.exams.print.invalidLink}</p>;
+  if (!parsed.ok) {
+    return (
+      <Frame examId={null} vid={null}>
+        <div className="px-4 py-5 sm:px-7 sm:py-6">
+          <Notice tone="error">{vi.exams.print.invalidLink}</Notice>
+        </div>
+      </Frame>
+    );
+  }
   return <PrintView vid={parsed.vid} mode={parsed.mode} examId={parsed.examId} />;
 }
 
 export default function ExamPrintPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense
+      fallback={
+        <Frame examId={null} vid={null}>
+          <div className="px-4 py-5 sm:px-7 sm:py-6">
+            <EmptyState busy title={vi.common.loading} />
+          </div>
+        </Frame>
+      }
+    >
       <PrintRoute />
     </Suspense>
   );

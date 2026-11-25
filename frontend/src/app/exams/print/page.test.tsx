@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ExamPrintPage from "@/app/exams/print/page";
@@ -154,6 +154,31 @@ describe("ExamPrintPage", () => {
     expect(screen.queryByText(messages.questions.difficulties.Recognition)).toBeNull();
   });
 
+  it("student sheet root is a black-on-white serif sheet that holds no app menu and prints without chrome", async () => {
+    mocks.apiGet.mockImplementation(() => ok(leakyStudentSheet));
+    renderPage("id=E1&vid=V1&mode=student");
+    const sheet = await screen.findByTestId("print-sheet");
+    expect(sheet.classList.contains("font-serif")).toBe(true);
+    expect(sheet.classList.contains("text-black")).toBe(true);
+    expect(sheet.classList.contains("bg-white")).toBe(true);
+    expect(sheet.querySelector("nav#app-sidebar")).toBeNull();
+    expect(within(sheet).getByText("Câu trắc nghiệm")).toBeTruthy();
+    // Board header and toolbar are screen-only chrome.
+    expect(screen.getByTestId("print-toolbar").classList.contains("print:hidden")).toBe(true);
+    expect(document.querySelector("[data-surface='board']")?.classList.contains("print:hidden")).toBe(true);
+  });
+
+  it("toolbar switches between student sheet and answer key", async () => {
+    mocks.apiGet.mockImplementation(() => ok(leakyStudentSheet));
+    renderPage("id=E1&vid=V1&mode=student");
+    await screen.findByTestId("print-sheet");
+    const student = screen.getByRole("link", { name: messages.exams.print.docStudent });
+    expect(student.getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: messages.exams.print.docAnswer }).getAttribute("href")).toMatch(
+      /^\/exams\/print\/?\?id=E1&vid=V1&mode=answer$/,
+    );
+  });
+
   it("answer mode calls only answer-key and shows correct label, true/false values, accepted answers, rubric and explanation", async () => {
     mocks.apiGet.mockImplementation((path: string) => (path === "/exam-versions/{vid}/answer-key" ? ok(answerKey) : fail(500)));
     renderPage("id=E1&vid=V1&mode=answer");
@@ -166,6 +191,9 @@ describe("ExamPrintPage", () => {
     expect(screen.getByText("Tiêu chí 1")).toBeTruthy();
     expect(screen.getByText("Lời giải mẫu")).toBeTruthy();
     expect(screen.getByText(messages.questions.difficulties.Recognition)).toBeTruthy();
+    expect(
+      screen.getByText(new RegExp(`${messages.exams.print.duration}: 15 ${messages.exams.print.minutes}`)),
+    ).toBeTruthy();
   });
 
   // The browser uses document.title as the default PDF name: the two files must never share a name.
@@ -239,7 +267,7 @@ describe("ExamPrintPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: messages.exams.print.printButton }));
     expect(print).toHaveBeenCalledOnce();
     // next/link drops the trailing slash in tests; the build adds it back via trailingSlash: true.
-    expect(screen.getByRole("link", { name: messages.exams.print.toAnswer }).getAttribute("href")).toMatch(/^\/exams\/print\/?\?id=E1&vid=V1&mode=answer$/);
+    expect(screen.getByRole("link", { name: messages.exams.print.docAnswer }).getAttribute("href")).toMatch(/^\/exams\/print\/?\?id=E1&vid=V1&mode=answer$/);
     expect(screen.getByRole("link", { name: messages.exams.print.back }).getAttribute("href")).toMatch(/^\/exams\/view\/?\?id=E1&vid=V1$/);
     print.mockRestore();
   });

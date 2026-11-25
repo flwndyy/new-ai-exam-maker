@@ -3,11 +3,13 @@
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { isPublicPath, useAuth } from "@/lib/auth/auth-context";
 import { vi } from "@/messages/vi";
 
-function Notice({ children }: { children: ReactNode }) {
-  return <div className="py-12 text-center text-slate-600">{children}</div>;
+function Centered({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-lg px-4 py-12">{children}</div>;
 }
 
 /**
@@ -46,53 +48,68 @@ export function AuthGate({ children }: { children: ReactNode }) {
     case "signedOut":
       if (loginFailed) {
         return (
-          <Notice>
-            <p>{vi.auth.callbackFailed}</p>
-            <button
-              type="button"
-              className="mt-4 rounded border border-slate-300 px-3 py-1 hover:bg-slate-100"
-              onClick={() => {
-                setLoginFailed(false);
-                beginLogin();
-              }}
-            >
-              {vi.auth.retry}
-            </button>
-          </Notice>
+          <Centered>
+            <EmptyState headingLevel={1}
+              title={vi.auth.callbackFailed}
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setLoginFailed(false);
+                    beginLogin();
+                  }}
+                >
+                  {vi.auth.retry}
+                </Button>
+              }
+            />
+          </Centered>
         );
       }
-      return <Notice>{vi.auth.redirecting}</Notice>;
+      return (
+        <Centered>
+          <EmptyState headingLevel={1} busy title={vi.auth.redirecting} />
+        </Centered>
+      );
     case "denied":
       return (
-        <Notice>
-          <h1 className="text-lg font-semibold text-slate-900">{vi.auth.deniedTitle}</h1>
-          <p className="mt-2">{vi.auth.deniedBody}</p>
-          <button
-            type="button"
-            className="mt-4 rounded border border-slate-300 px-3 py-1 hover:bg-slate-100"
-            onClick={() => void logout()}
-          >
-            {vi.auth.logout}
-          </button>
-        </Notice>
+        <Centered>
+          <EmptyState headingLevel={1}
+            title={vi.auth.deniedTitle}
+            description={vi.auth.deniedBody}
+            action={
+              <Button variant="secondary" onClick={() => void logout()}>
+                {vi.auth.logout}
+              </Button>
+            }
+          />
+        </Centered>
       );
     case "misconfigured":
-      return <Notice>{vi.auth.misconfigured}</Notice>;
+      return (
+        <Centered>
+          <EmptyState headingLevel={1} title={vi.auth.misconfigured} />
+        </Centered>
+      );
     case "error":
       return (
-        <Notice>
-          <p>{vi.auth.networkError}</p>
-          <button
-            type="button"
-            className="mt-4 rounded border border-slate-300 px-3 py-1 hover:bg-slate-100"
-            onClick={retry}
-          >
-            {vi.auth.retry}
-          </button>
-        </Notice>
+        <Centered>
+          <EmptyState headingLevel={1}
+            title={vi.auth.networkError}
+            action={
+              <Button variant="secondary" onClick={retry}>
+                {vi.auth.retry}
+              </Button>
+            }
+          />
+        </Centered>
       );
     case "loading":
     case "loggingOut":
-      return <Notice>{vi.common.loading}</Notice>;
+      return (
+        <Centered>
+          <EmptyState headingLevel={1} busy title={vi.common.loading} />
+        </Centered>
+      );
   }
 }
