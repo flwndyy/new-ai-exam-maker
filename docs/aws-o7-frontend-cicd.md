@@ -1,54 +1,59 @@
-# O7 — CI/CD frontend
+# O7 — Frontend CI/CD qua S3 + SSM + EC2
 
-Workflow `.github/workflows/deploy-frontend.yml` build frontend static export,
-đồng bộ lên S3 rồi invalidate CloudFront bằng role OIDC của O6.
+## Mục tiêu
 
-## Điều kiện trước khi chạy
+Mỗi lần push vào `main`, GitHub Actions build frontend tĩnh, lưu một release có mã commit vào S3, rồi gọi AWS Systems Manager để EC2 tải và triển khai release đó cho Nginx.
 
-- O5 đã có S3 bucket private và CloudFront distribution.
-- O6 đã có role `aem-github-frontend-deploy-role`.
-- Role đã được gắn policy mẫu `infra/iam/github-actions-frontend-deploy-policy.example.json`
-  với ARN thật của bucket và distribution.
-- Trust policy O6 vẫn khớp `workflow: Deploy frontend`, `ref: refs/heads/main` và
-  `sub` của repository. Không đặt `environment:` trong job này.
+Luồng này không phụ thuộc CloudFront, không cần SSH và không lưu AWS access key dài hạn trong GitHub.
 
-## Repository Variables
+Workflow backend không theo dõi toàn bộ `infra/deploy/**`; nó chỉ chạy khi backend hoặc các script deploy backend thay đổi. Vì vậy release frontend không vô tình kích hoạt migration/deploy backend khi được đưa lên `main`.
 
-Tạo các **Repository Variables** trong GitHub (Settings → Secrets and variables →
-Actions → Variables), không tạo GitHub Environment:
+```text
+GitHub Actions -> build frontend/out -> tar.gz + SHA-256
+  -> S3 frontend/releases/<commit>-<attempt>/
+  -> SSM AWS-RunShellScript -> EC2 tải/kiểm checksum/giải nén
+  -> cập nhật symlink current -> test/reload Nginx -> kiểm tra asset
+```
+
+## File triển khai
+
+- Workflow: `.github/workflows/deploy-frontend.yml`
+- Script chạy trên EC2: `infra/deploy/deploy-frontend-on-ec2.sh`
+- Mẫu policy GitHub role: `infra/iam/github-actions-frontend-deploy-policy.example.json`
+- Mẫu trust policy OIDC: `infra/iam/github-actions-oidc-trust-policy.example.json`
+
+## GitHub Repository Variables
+
+Tạo tại **Settings → Secrets and variables → Actions → Variables → New repository variable**:
 
 | Tên | Giá trị |
 |---|---|
-| `AWS_ROLE_ARN` | ARN role O6, dạng `arn:aws:iam::<account-id>:role/aem-github-frontend-deploy-role` |
-| `FRONTEND_BUCKET_NAME` | Tên bucket S3 frontend, không có `s3://` |
-| `CLOUDFRONT_DISTRIBUTION_ID` | Distribution ID, không phải ARN |
-| `NEXT_PUBLIC_COGNITO_DOMAIN` | Cognito domain dạng `https://<prefix>.auth.<region>.amazoncognito.com` |
+| `AWS_ROLE_ARN` | ARN của `aem-github-frontend-deploy-role` |
+| `FRONTEND_BUCKET_NAME` | Tên bucket S3 frontend |
+| `EC2_INSTANCE_ID` | Instance ID EC2 đích |
+| `FRONTEND_PUBLIC_URL` | URL HTTPS public của app |
+| `NEXT_PUBLIC_COGNITO_DOMAIN` | Cognito Hosted UI domain |
 | `NEXT_PUBLIC_COGNITO_CLIENT_ID` | Cognito app client ID |
+| `NEXT_PUBLIC_SCHOOL_NAME` | Tùy chọn |
 
-Không commit các giá trị trên vào repository. `AWS_ROLE_ARN` và các biến
-`NEXT_PUBLIC_*` không phải access key; workflow vẫn xác thực AWS bằng OIDC.
+Giá trị thật chỉ nằm trong GitHub Variables/AWS, không ghi vào repository.
 
-## Cách chạy
+## IAM cần có
 
-- Push vào `main` khi có thay đổi trong `frontend/`, OpenAPI hoặc chính workflow
-  sẽ tự deploy. Thay đổi CloudFront Function không được workflow này publish.
-- Có thể chạy thủ công bằng **Actions → Deploy frontend → Run workflow**, chọn
-  branch `main`. Job deploy chỉ chạy khi ref là `main`.
-- Workflow chỉ cấp `contents: read` và `id-token: write`, build bằng Node.js 22,
-  upload artifact `frontend-out-<commit-sha>` trong 90 ngày để tải xuống khi cần
-  rollback. Rerun cùng một workflow run ghi đè artifact cùng tên.
+GitHub role cần quyền giới hạn cho `s3:PutObject` trên `frontend/releases/*`, `ssm:SendCommand` với document `AWS-RunShellScript` và đúng EC2 instance, cùng `ssm:GetCommandInvocation` để workflow chờ trạng thái lệnh.
 
-## Cache và rollback
+EC2 instance role cần `s3:GetObject` trên `frontend/releases/*`.
 
-HTML/non-fingerprinted assets dùng cache tối đa 60 giây; `_next/static/*` và
-`assets/*` dùng cache immutable 1 năm. Sau mỗi lần upload workflow tạo invalidation
-`/*`.
+Trust policy OIDC phải khóa repository `flwndyy/new-ai-exam-maker`, workflow `Deploy frontend` và branch `main`.
 
-Các file fingerprinted trong `_next/static/*` và `assets/*` được giữ lại có chủ
-đích: HTML cũ còn cache hoặc artifact rollback vẫn có thể tham chiếu đến chúng.
-Nếu cần kiểm soát dung lượng bucket, hãy thêm S3 Lifecycle Rule riêng sau khi
-chốt thời gian rollback; không dùng `--delete` cho hai prefix này trong workflow.
+## Rollback
 
-Để rollback: tải artifact `frontend-out-<commit-sha>` từ workflow run cần khôi
-phục, giải nén thành `frontend/out/`, rồi chạy lại hai lệnh `aws s3 sync` và
-`aws s3 cp` trong `docs/aws-o5-s3-cloudfront.md`, tiếp theo tạo invalidation.
+Mỗi release được đặt tại `/var/www/exammaker-frontend/releases/<release-id>` và Nginx phục vụ qua symlink `/var/www/exammaker-frontend/current`. Script giữ tối đa 5 release gần nhất. Nếu tải, kiểm checksum, Nginx hoặc kiểm tra asset thất bại, symlink được trả về release trước đó và Nginx được reload lại.
+
+## Chạy thử
+
+1. Tạo/cập nhật các GitHub Variables.
+2. Push workflow lên `main` hoặc chọn **Actions → Deploy frontend → Run workflow**.
+3. Kiểm tra job `Deploy frontend` và log SSM.
+4. Xác minh URL public trả HTTP 200 và `/_next/static/...` không trả 404.
+5. Sau khi chạy ổn, tạo PR O7 để nhóm review workflow, script và policy mẫu.
