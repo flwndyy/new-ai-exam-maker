@@ -6,7 +6,7 @@ import { Suspense, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
 import { PageHeader } from "@/components/shell/page-header";
-import { BoardTabs } from "@/components/ui/board-tabs";
+import { BoardTabs, boardTabPanelProps } from "@/components/ui/board-tabs";
 import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FilterBar, FilterSelect } from "@/components/ui/filter-bar";
@@ -35,6 +35,7 @@ const dateFormat = new Intl.DateTimeFormat("vi-VN", {
 });
 
 const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+const TABS_ID = "review-tabs";
 
 function formatSentAt(value?: string | null): string | null {
   if (!value) return null;
@@ -134,6 +135,7 @@ function ReviewQueueContent() {
         description={vi.review.queueDescription}
         tabs={
           <BoardTabs
+            id={TABS_ID}
             className="px-0! sm:px-0!"
             active={tab}
             onSelect={(key) => {
@@ -153,7 +155,7 @@ function ReviewQueueContent() {
           />
         }
       />
-      <div className={BODY}>
+      <div {...boardTabPanelProps(TABS_ID, tab)} className={BODY}>
         <FilterBar>
           <FilterSelect
             label={vi.questions.subject}

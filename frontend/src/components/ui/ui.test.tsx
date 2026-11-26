@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { vi as messages } from "@/messages/vi";
-import { BoardTabs } from "./board-tabs";
+import { BoardTabs, boardTabPanelProps } from "./board-tabs";
 import { Button } from "./button";
 import { DataTable } from "./data-table";
 import { EmptyState } from "./empty-state";
@@ -139,22 +140,83 @@ describe("Notice", () => {
 });
 
 describe("BoardTabs", () => {
+  const ITEMS = [
+    { key: "a", label: "Câu hỏi" },
+    { key: "b", label: "Đề thi" },
+    { key: "c", label: "Chương" },
+  ];
+
+  function Harness({ initial = "a", onSelect }: { initial?: string; onSelect?: (key: string) => void }) {
+    const [active, setActive] = useState(initial);
+    return (
+      <>
+        <BoardTabs
+          id="t"
+          items={ITEMS}
+          active={active}
+          onSelect={(key) => {
+            onSelect?.(key);
+            setActive(key);
+          }}
+        />
+        <div {...boardTabPanelProps("t", active)}>Nội dung {active}</div>
+      </>
+    );
+  }
+
   it("marks the active tab and reports selection", () => {
     const onSelect = vi.fn();
-    render(
-      <BoardTabs
-        items={[
-          { key: "a", label: "Câu hỏi" },
-          { key: "b", label: "Đề thi" },
-        ]}
-        active="a"
-        onSelect={onSelect}
-      />,
-    );
+    render(<Harness onSelect={onSelect} />);
     expect(screen.getByRole("tab", { name: "Câu hỏi" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Đề thi" }).getAttribute("aria-selected")).toBe("false");
     fireEvent.click(screen.getByRole("tab", { name: "Đề thi" }));
     expect(onSelect).toHaveBeenCalledWith("b");
+  });
+
+  it("links the selected tab and its panel both ways", () => {
+    render(<Harness />);
+    const tab = screen.getByRole("tab", { name: "Câu hỏi" });
+    const panel = screen.getByRole("tabpanel");
+    expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+    expect(screen.getByRole("tabpanel", { name: "Câu hỏi" })).toBe(panel);
+    // Only the rendered panel is referenced.
+    expect(screen.getByRole("tab", { name: "Đề thi" }).hasAttribute("aria-controls")).toBe(false);
+  });
+
+  it("keeps only the selected tab in the Tab order", () => {
+    render(<Harness initial="b" />);
+    expect(screen.getAllByRole("tab").map((t) => t.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]);
+  });
+
+  it("moves focus and selection with arrow keys, wrapping at both ends, and with Home/End", () => {
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
+    const tab = (name: string) => screen.getByRole("tab", { name });
+
+    tab("Câu hỏi").focus();
+    fireEvent.keyDown(tab("Câu hỏi"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Đề thi"));
+    expect(tab("Đề thi").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").textContent).toBe("Nội dung b");
+
+    fireEvent.keyDown(tab("Đề thi"), { key: "End" });
+    expect(document.activeElement).toBe(tab("Chương"));
+    fireEvent.keyDown(tab("Chương"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Câu hỏi"));
+    fireEvent.keyDown(tab("Câu hỏi"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tab("Chương"));
+    fireEvent.keyDown(tab("Chương"), { key: "Home" });
+    expect(document.activeElement).toBe(tab("Câu hỏi"));
+    expect(onSelect.mock.calls.map(([key]) => key)).toEqual(["b", "c", "a", "c", "a"]);
+  });
+
+  it("ignores other keys", () => {
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Câu hỏi" }), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Câu hỏi" }), { key: "a" });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 
@@ -199,7 +261,7 @@ describe("scroll containers", () => {
             </tbody>
           </table>
         </DataTable>
-        <BoardTabs items={[{ key: "a", label: "A" }]} active="a" onSelect={() => {}} />
+        <BoardTabs id="s" items={[{ key: "a", label: "A" }]} active="a" onSelect={() => {}} />
       </>,
     );
     const table = container.querySelector("table")!.parentElement!;

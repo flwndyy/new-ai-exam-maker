@@ -154,6 +154,10 @@ describe("A10 admin, review, and role navigation screens", () => {
     await waitFor(() => expect(screen.getByText(messages.admin.totalItems(4))).toBeTruthy());
     expect(screen.getByRole("tab", { name: messages.admin.departmentsTab }).getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByText(messages.admin.totalItems(48))).toBeNull();
+    // The tab content is the labelled tabpanel the selected tab controls.
+    const panel = screen.getByRole("tabpanel", { name: messages.admin.departmentsTab });
+    expect(screen.getByRole("tab", { name: messages.admin.departmentsTab }).getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.textContent).toContain("Tổ Toán");
   });
 
   it("enforces review checklist, rejection note, and sends submittedAt when approving", async () => {
@@ -1106,6 +1110,7 @@ describe("A10 admin, review, and role navigation screens", () => {
     renderWithQuery(<ReviewQueuePage />);
     const tab = await screen.findByRole("tab", { name: messages.review.examsTab });
     expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(tab.getAttribute("aria-controls")).toBe(screen.getByRole("tabpanel", { name: messages.review.examsTab }).id);
     await waitFor(() => expect(mocks.apiGet.mock.calls.map(([p]) => p)).toContain("/review/exam-versions"));
     expect(mocks.apiGet.mock.calls.map(([p]) => p)).not.toContain("/review/questions");
   });

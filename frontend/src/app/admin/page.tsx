@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { PageHeader } from "@/components/shell/page-header";
-import { BoardTabs } from "@/components/ui/board-tabs";
+import { BoardTabs, boardTabPanelProps } from "@/components/ui/board-tabs";
 import { Button } from "@/components/ui/button";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -414,6 +414,7 @@ export default function AdminPage() {
         }
         tabs={
           <BoardTabs
+            id="admin-tabs"
             className="px-0! sm:px-0!"
             active={tab}
             items={tabs.map((item) => ({ key: item.key, label: item.label }))}
@@ -425,7 +426,7 @@ export default function AdminPage() {
           />
         }
       />
-      <div className={`${BODY} space-y-4`}>
+      <div {...boardTabPanelProps("admin-tabs", tab)} className={`${BODY} space-y-4`}>
         {feedback && <Notice tone="success">{feedback}</Notice>}
         {errorMsg && <Notice tone="error">{errorMsg}</Notice>}
 
