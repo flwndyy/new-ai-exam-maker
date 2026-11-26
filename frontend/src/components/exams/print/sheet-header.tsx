@@ -15,7 +15,7 @@ export function SheetHeaderView({ header, mode, schoolName }: { header: SheetHea
           {schoolName && <p>{schoolName}</p>}
           {header.departmentName && (
             <p>
-              <span className="inline-block border-b border-black pb-0.5">{`${t.department} ${header.departmentName}`}</span>
+              <span className="inline-block border-b border-black pb-0.5">{t.departmentLine(header.departmentName)}</span>
             </p>
           )}
         </div>

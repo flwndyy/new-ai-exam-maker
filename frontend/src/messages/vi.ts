@@ -2,6 +2,12 @@
 
 const roleLabels = { teacher: "Giáo viên", head: "Tổ trưởng", admin: "Quản trị" } as const;
 
+// Seeded department names already start with "Tổ" ("Tổ Toán"); strip it before adding our own
+// prefix so the UI never shows "tổ Tổ Toán".
+function withoutDepartmentPrefix(name: string): string {
+  return name.replace(/^tổ\s+/i, "").trim();
+}
+
 export const vi = {
   app: {
     name: "AI Exam Maker",
@@ -120,7 +126,7 @@ export const vi = {
     print: {
       studentTitle: "ĐỀ KIỂM TRA",
       answerTitle: "ĐÁP ÁN VÀ HƯỚNG DẪN CHẤM",
-      department: "Tổ",
+      departmentLine: (name: string) => `Tổ ${withoutDepartmentPrefix(name)}`,
       subject: "Môn",
       grade: "Khối",
       duration: "Thời gian làm bài",
@@ -193,8 +199,7 @@ export const vi = {
     logout: "Đăng xuất",
     roles: roleLabels,
     roleLine: (role: keyof typeof roleLabels, department: string | null) => {
-      // Seeded department names already start with "Tổ"; avoid "tổ Tổ Toán".
-      const name = department?.replace(/^tổ\s+/i, "").trim();
+      const name = department ? withoutDepartmentPrefix(department) : "";
       return name ? `${roleLabels[role]}, tổ ${name}` : roleLabels[role];
     },
   },

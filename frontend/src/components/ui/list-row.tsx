@@ -28,7 +28,7 @@ export function ListRow({
       className={[
         "relative mb-2 flex min-w-0 max-w-full flex-col gap-2 rounded-r-md border-l-4 bg-white px-3.5 py-3 ring-1 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-accent sm:flex-row sm:items-start sm:gap-4",
         toneClass[tone].stroke,
-        highlight === "error" ? "ring-rej" : "ring-line hover:ring-[#C9CED4]",
+        highlight === "error" ? "ring-rej" : "ring-line hover:ring-line-strong",
         className,
       ]
         .filter(Boolean)

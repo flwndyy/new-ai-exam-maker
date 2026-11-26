@@ -144,6 +144,8 @@ describe("ExamPrintPage", () => {
     expect(await screen.findByText("Kiểm tra 15 phút")).toBeTruthy();
     expect(mocks.apiGet.mock.calls.map((c) => c[0])).toEqual(["/exam-versions/{vid}/student-sheet"]);
     expect(screen.getByText(messages.exams.print.studentTitle)).toBeTruthy();
+    expect(screen.getByText("Tổ Toán")).toBeTruthy();
+    expect(screen.queryByText(/Tổ Tổ/)).toBeNull();
     expect(screen.getByText(new RegExp(messages.exams.print.studentName))).toBeTruthy();
     expect(screen.getByText(/Câu 1/)).toBeTruthy();
     expect(screen.getByText("Hai")).toBeTruthy();
@@ -161,7 +163,7 @@ describe("ExamPrintPage", () => {
     expect(sheet.classList.contains("font-serif")).toBe(true);
     expect(sheet.classList.contains("text-black")).toBe(true);
     expect(sheet.classList.contains("bg-white")).toBe(true);
-    expect(sheet.querySelector("nav#app-sidebar")).toBeNull();
+    expect(sheet.querySelector("#app-sidebar")).toBeNull();
     expect(within(sheet).getByText("Câu trắc nghiệm")).toBeTruthy();
     // Board header and toolbar are screen-only chrome.
     expect(screen.getByTestId("print-toolbar").classList.contains("print:hidden")).toBe(true);

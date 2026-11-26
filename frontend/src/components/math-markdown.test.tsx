@@ -18,3 +18,14 @@ describe("MathMarkdown links", () => {
     expect(container.textContent).not.toContain("example.com");
   });
 });
+
+describe("MathMarkdown layout", () => {
+  it("lets long words wrap and wide display formulas scroll inside the content, not the page", () => {
+    const { container } = render(<MathMarkdown>{"$$x^2$$\n\nMộtchuỗirấtdàikhôngcókhoảngtrắng"}</MathMarkdown>);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("wrap-anywhere");
+    expect(root.className).toContain("min-w-0");
+    expect(root.className).toContain("[&_.katex-display]:overflow-x-auto");
+    expect(root.textContent).toContain("Mộtchuỗirấtdàikhôngcókhoảngtrắng");
+  });
+});

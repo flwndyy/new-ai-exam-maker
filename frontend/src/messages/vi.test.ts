@@ -4,6 +4,7 @@ import { vi as messages } from "./vi";
 // Per-key sample arguments for functions whose parameters are not plain numbers.
 const SAMPLE_ARGS: Record<string, unknown[]> = {
   "auth.roleLine": ["teacher", "Tổ Toán"],
+  "exams.print.departmentLine": ["Tổ Toán"],
   "ai.quota": [7, 10, "64.200", "100.000", "07:00"],
   "aiUsage.totals": ["12", "96.400", "$0,2810"],
   "exams.versionOption": [1, "Nháp"],

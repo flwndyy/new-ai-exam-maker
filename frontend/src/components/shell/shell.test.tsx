@@ -42,11 +42,11 @@ function setWide(wide: boolean) {
   });
 }
 
-function Tree({ children }: { children?: ReactNode }) {
+function Tree({ children, headerKey = "h" }: { children?: ReactNode; headerKey?: string }) {
   return (
     <SidebarProvider>
       <SideNav />
-      <PageHeader title="Tiêu đề" />
+      <PageHeader key={headerKey} title="Tiêu đề" />
       {children}
     </SidebarProvider>
   );
@@ -223,6 +223,55 @@ describe("side navigation on a narrow screen", () => {
     expect(nav()).toBeNull();
   });
 
+  it("marks the overlay as a modal dialog that holds the navigation landmark", () => {
+    render(<Tree />);
+    fireEvent.click(toggle());
+    const dialog = screen.getByRole("dialog", { name: messages.shell.navLabel });
+    expect(dialog.id).toBe("app-sidebar");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.querySelector("nav")?.getAttribute("aria-label")).toBe(messages.shell.navLabel);
+  });
+
+  it("drops the dialog semantics without moving focus when the window grows past 1024px", () => {
+    render(<Tree />);
+    fireEvent.click(toggle());
+    const focused = document.activeElement;
+    setWide(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(nav()!.getAttribute("aria-modal")).toBeNull();
+    expect(screen.getByRole("navigation", { name: messages.shell.navLabel })).toBeTruthy();
+    expect(document.activeElement).toBe(focused);
+  });
+
+  it("returns focus to the toggle when the overlay closes because the pathname changes", () => {
+    const { rerender } = render(<Tree />);
+    fireEvent.click(toggle());
+    expect(nav()!.contains(document.activeElement)).toBe(true);
+    mocks.pathname = "/questions/";
+    rerender(<Tree />);
+    expect(nav()).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+  });
+
+  it("falls back to the new page's toggle when the one that opened the menu is gone", () => {
+    const { rerender } = render(<Tree headerKey="a" />);
+    fireEvent.click(toggle());
+    mocks.pathname = "/questions/";
+    rerender(<Tree headerKey="b" />);
+    expect(nav()).toBeNull();
+    expect(document.activeElement).toBe(toggle());
+  });
+
+  it("moves focus to the new page's toggle after navigating from an overlay entry", () => {
+    const { rerender } = render(<Tree headerKey="a" />);
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole("link", { name: messages.nav.exams }));
+    expect(nav()).toBeNull();
+    mocks.pathname = "/exams/";
+    rerender(<Tree headerKey="b" />);
+    expect(document.activeElement).toBe(toggle());
+  });
+
   it("returns the saved value when the window grows to a wide screen", () => {
     window.localStorage.setItem(STORAGE_KEY, "closed");
     render(<Tree />);
@@ -276,7 +325,7 @@ describe("menu entries", () => {
 
   it("labels the nav and shows the user block with a logout button", () => {
     render(<Tree />);
-    expect(nav()!.getAttribute("aria-label")).toBe(messages.shell.navLabel);
+    expect(screen.getByRole("navigation", { name: messages.shell.navLabel })).toBeTruthy();
     expect(screen.getByText("Trần Thu Hà")).toBeTruthy();
     const line = screen.getByText("Giáo viên, tổ Toán");
     expect(line.textContent).not.toContain(" · ");

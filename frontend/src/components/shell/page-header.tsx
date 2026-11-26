@@ -36,7 +36,7 @@ export function PageHeader({
         </div>
         {actions ? <div className="flex flex-wrap gap-2 max-sm:w-full">{actions}</div> : null}
       </div>
-      {tabs ? <div className="-mt-2 overflow-x-auto px-4 sm:px-7">{tabs}</div> : null}
+      {tabs ? <div className="relative -mt-2 overflow-x-auto px-4 sm:px-7">{tabs}</div> : null}
     </header>
   );
 }

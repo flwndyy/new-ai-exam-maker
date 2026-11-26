@@ -16,8 +16,8 @@ const base =
 
 const variantClass: Record<ButtonVariant, string> = {
   primary: "border-transparent bg-accent text-white hover:bg-accent-strong",
-  secondary: "border-[#CDD1D6] bg-transparent text-ink hover:bg-tint",
-  danger: "border-[#EBB3BD] bg-transparent text-rej hover:bg-rej-bg",
+  secondary: "border-line-strong bg-transparent text-ink hover:bg-tint",
+  danger: "border-rej-line bg-transparent text-rej hover:bg-rej-bg",
   approve: "border-transparent bg-ok text-white hover:bg-ok-strong",
   boardPrimary: "border-transparent bg-white text-accent-strong hover:bg-on-board-muted",
   boardSecondary: "border-white/50 bg-transparent text-white hover:bg-white/15",

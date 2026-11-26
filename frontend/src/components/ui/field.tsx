@@ -7,7 +7,7 @@ import type {
 } from "react";
 
 const controlBase =
-  "w-full rounded-md border border-[#CDD1D6] bg-white px-[11px] py-2 text-[13.5px] text-ink placeholder:text-[#9AA0A8] disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-md border border-control bg-white px-[11px] py-2 text-[13.5px] text-ink placeholder:text-muted disabled:cursor-not-allowed disabled:opacity-60";
 
 function join(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(" ");

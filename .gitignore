@@ -462,5 +462,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# ---- Superpowers (agent working files) ----
-.superpowers/
+# ---- Agent skills installed per developer (not project source) ----
+.agents/skills/
+.claude/skills/
+skills-lock.json

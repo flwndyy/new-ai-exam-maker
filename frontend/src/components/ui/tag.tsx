@@ -4,7 +4,7 @@ export type TagTone = "neutral" | "ai" | "ok" | "rej";
 
 const toneClass: Record<TagTone, string> = {
   neutral: "bg-tint text-ink-soft",
-  ai: "bg-[#E7ECF1] text-ink",
+  ai: "bg-ai-bg text-ink",
   ok: "bg-ok-bg text-ok-strong",
   rej: "bg-rej-bg text-rej",
 };

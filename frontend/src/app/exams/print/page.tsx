@@ -64,7 +64,7 @@ function ModeSwitch({ examId, vid, mode }: { examId: string; vid: string; mode: 
     { mode: "answer", label: t.docAnswer },
   ];
   return (
-    <nav aria-label={t.modeSwitch} className="inline-flex overflow-hidden rounded-md border border-[#CDD1D6]">
+    <nav aria-label={t.modeSwitch} className="inline-flex overflow-hidden rounded-md border border-line-strong">
       {items.map((item) => (
         <Link
           key={item.mode}
@@ -124,13 +124,13 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
         )}
       </div>
 
-      <div className="bg-[#E6E8EB] p-3 sm:p-7 print:bg-white print:p-0">
+      <div className="bg-desk p-3 sm:p-7 print:bg-white print:p-0">
         {!sheet && !query.isError && <EmptyState busy title={vi.common.loading} />}
         {query.isError && <Notice tone="error">{errorMessage(query.error)}</Notice>}
         {sheet && (
           <div
             data-testid="print-sheet"
-            className="print-sheet mx-auto w-full max-w-[700px] bg-white px-5 py-6 font-serif text-[14px] leading-[1.5] text-black shadow-[0_2px_10px_rgba(0,0,0,0.12)] sm:px-[52px] sm:py-11 print:max-w-none print:p-0 print:shadow-none"
+            className="print-sheet mx-auto w-full max-w-[700px] bg-white px-5 py-6 font-serif text-[14px] leading-[1.5] text-black shadow-sheet sm:px-[52px] sm:py-11 print:max-w-none print:p-0 print:shadow-none"
           >
             <SheetHeaderView header={sheet.data.header} mode={sheet.mode} schoolName={schoolName()} />
             {sheet.mode === "student"

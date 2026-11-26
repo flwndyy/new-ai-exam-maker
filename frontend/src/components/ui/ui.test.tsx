@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { vi as messages } from "@/messages/vi";
 import { BoardTabs } from "./board-tabs";
 import { Button } from "./button";
+import { DataTable } from "./data-table";
 import { EmptyState } from "./empty-state";
 import { Radio } from "./field";
 import { MathMarkdown } from "../math-markdown";
@@ -180,5 +181,30 @@ describe("Radio", () => {
     const input = screen.getByRole("radio", { name: "A." }) as HTMLInputElement;
     expect(ref.current).toBe(input);
     expect(input.type).toBe("radio");
+  });
+});
+
+describe("scroll containers", () => {
+  // An absolutely positioned descendant (e.g. a sr-only label) of an unpositioned scroll box is
+  // laid out against an outer ancestor and widens the page on a 390px screen.
+  it("positions DataTable and BoardTabs so absolute children stay inside the scroll box", () => {
+    const { container } = render(
+      <>
+        <DataTable>
+          <table>
+            <tbody>
+              <tr>
+                <td>x</td>
+              </tr>
+            </tbody>
+          </table>
+        </DataTable>
+        <BoardTabs items={[{ key: "a", label: "A" }]} active="a" onSelect={() => {}} />
+      </>,
+    );
+    const table = container.querySelector("table")!.parentElement!;
+    expect(table.classList.contains("relative")).toBe(true);
+    expect(table.classList.contains("overflow-x-auto")).toBe(true);
+    expect(screen.getByRole("tablist").className).toContain("relative");
   });
 });

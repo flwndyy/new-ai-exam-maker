@@ -14,7 +14,7 @@ export function BoardTabs({
   return (
     <div
       role="tablist"
-      className={["flex gap-1 overflow-x-auto px-4 sm:px-7", className].filter(Boolean).join(" ")}
+      className={["relative flex gap-1 overflow-x-auto px-4 sm:px-7", className].filter(Boolean).join(" ")}
     >
       {items.map((item) => {
         const selected = item.key === active;

@@ -20,6 +20,14 @@
   --color-muted: #6b6f78;
   --color-line: #e4e7eb;
   --color-tint: #eef1f4;
+  --color-line-strong: #cdd1d6;
+  /* Form control borders: at least 3:1 against white, paper and tint (WCAG 1.4.11). */
+  --color-control: #858b93;
+  --color-sidebar-hover: #e7eaec;
+  --color-table-head: #f6f7f8;
+  --color-ai-bg: #e7ecf1;
+  /* Print preview backdrop behind the A4 sheet. */
+  --color-desk: #e6e8eb;
 
   /* Status: bar / text / light background */
   --color-ok: #2f7d56;
@@ -31,6 +39,7 @@
   --color-rej: #c8102e;
   --color-rej-text: #c8102e;
   --color-rej-bg: #fcebee;
+  --color-rej-line: #ebb3bd;
   --color-draft: #c5c7cd;
   --color-draft-text: #6b6f78;
   --color-pub: #2457a6;
@@ -38,6 +47,9 @@
   --color-pub-bg: #eaf0fa;
   --color-arch: #8e9199;
   --color-arch-text: #73767e;
+
+  --shadow-overlay: 8px 0 30px rgb(20 25 30 / 0.25);
+  --shadow-sheet: 0 2px 10px rgb(0 0 0 / 0.12);
 }
 
 @theme inline {
