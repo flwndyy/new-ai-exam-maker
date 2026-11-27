@@ -6,9 +6,10 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { type ReactNode, Suspense, useEffect } from "react";
+import { type ReactNode, Suspense, useEffect, useRef } from "react";
 
 import { AnswerKeyItemView } from "@/components/exams/print/answer-key-item";
+import { useFitMathForPrint } from "@/components/exams/print/fit-math";
 import { SheetHeaderView } from "@/components/exams/print/sheet-header";
 import { StudentSheetItemView } from "@/components/exams/print/student-sheet-item";
 import { PageHeader } from "@/components/shell/page-header";
@@ -99,6 +100,8 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
   // Only print what the server currently allows: data must come from a fetch made by this page instance
   // (never a leftover cache entry), and once a refetch is refused (403/404/409) the old data is hidden.
   const sheet = query.isError || !query.isFetchedAfterMount ? undefined : query.data;
+  const sheetRef = useRef<HTMLDivElement>(null);
+  useFitMathForPrint(sheetRef, sheet);
 
   // "Lưu PDF" uses document.title as the file name: distinct names keep the student sheet and the answer key apart.
   const docTitle = sheet
@@ -129,6 +132,7 @@ function PrintView({ vid, mode, examId }: { vid: string; mode: PrintMode; examId
         {query.isError && <Notice tone="error">{errorMessage(query.error)}</Notice>}
         {sheet && (
           <div
+            ref={sheetRef}
             data-testid="print-sheet"
             className="print-sheet mx-auto w-full max-w-[700px] bg-white px-5 py-6 font-serif text-[14px] leading-[1.5] text-black shadow-sheet sm:px-[52px] sm:py-11 print:max-w-none print:p-0 print:shadow-none"
           >

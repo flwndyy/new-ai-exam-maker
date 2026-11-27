@@ -103,4 +103,25 @@ body {
   .print-sheet header {
     break-inside: avoid;
   }
+
+  /* A display formula scrolls sideways on screen, but paper cannot scroll: on the sheet it is
+     never clipped, breaks after top-level relations and operators like inline math does, and a
+     chunk wider than its column (a long fraction) is scaled down to fit. `--math-fit-em` is the
+     widest chunk in em of the formula's font size, set by useFitMathForPrint; without it the
+     formula keeps KaTeX's 1.21em. */
+  .print-sheet .math-markdown {
+    container-type: inline-size;
+  }
+
+  .print-sheet .math-markdown .katex-display {
+    overflow: visible;
+  }
+
+  .print-sheet .math-markdown .katex-display > .katex {
+    white-space: normal;
+  }
+
+  .print-sheet .math-markdown .katex {
+    font-size: min(1.21em, calc(99cqi / var(--math-fit-em, 0.001)));
+  }
 }

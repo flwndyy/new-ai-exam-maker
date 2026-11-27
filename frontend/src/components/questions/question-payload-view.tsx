@@ -19,15 +19,16 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
           return (
             <li
               key={opt.label}
-              className={`rounded-md border px-3 py-2 text-[13.5px] text-ink ${
+              className={`flex gap-2 rounded-md border px-3 py-2 text-[13.5px] text-ink ${
                 isCorrect ? "border-ok bg-ok-bg" : "border-line bg-surface"
               }`}
             >
-              <span className="mr-2 font-semibold">{opt.label}.</span>
-              {isCorrect && <span className="sr-only">{vi.questions.correctOption}: </span>}
-              <span className="inline-block align-top">
+              <span className="shrink-0 font-semibold">{opt.label}.</span>
+              {/* min-w-0 bounds the option so a wide display formula scrolls inside it, not the page. */}
+              <div className="min-w-0 flex-1">
+                {isCorrect && <span className="sr-only">{vi.questions.correctOption}: </span>}
                 <MathMarkdown>{opt.text}</MathMarkdown>
-              </span>
+              </div>
             </li>
           );
         })}
@@ -40,11 +41,11 @@ export function QuestionPayloadView({ type, payload }: { type: QuestionType; pay
       <ul className="space-y-2">
         {payload.statements.map((stmt) => (
           <li key={stmt.label} className="flex items-start justify-between gap-4 rounded-md border border-line bg-surface px-3 py-2 text-[13.5px]">
-            <div>
-              <span className="mr-2 font-semibold">{stmt.label})</span>
-              <span className="inline-block align-top">
+            <div className="flex min-w-0 flex-1 gap-2">
+              <span className="shrink-0 font-semibold">{stmt.label})</span>
+              <div className="min-w-0 flex-1">
                 <MathMarkdown>{stmt.text}</MathMarkdown>
-              </span>
+              </div>
             </div>
             <Tag tone={stmt.isTrue ? "ok" : "rej"} className="shrink-0">
               {stmt.isTrue ? vi.questions.trueLabel : vi.questions.falseLabel}
