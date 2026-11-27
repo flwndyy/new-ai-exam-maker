@@ -461,3 +461,8 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# ---- Agent skills installed per developer (not project source) ----
+.agents/skills/
+.claude/skills/
+skills-lock.json

@@ -1,20 +1,53 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { MathMarkdown } from "@/components/math-markdown";
+import { PageHeader } from "@/components/shell/page-header";
+import { BoardTabs, boardTabPanelProps } from "@/components/ui/board-tabs";
+import { ButtonLink } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { FilterBar, FilterSelect } from "@/components/ui/filter-bar";
+import { ListRow } from "@/components/ui/list-row";
+import { Notice } from "@/components/ui/notice";
+import { Pager } from "@/components/ui/pager";
+import { StatusText } from "@/components/ui/status-text";
+import { Tag, type TagTone } from "@/components/ui/tag";
 import { fetchAllSubjects, fetchAllTopics } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
+import type { components } from "@/lib/api/schema";
 import { useAuth } from "@/lib/auth/auth-context";
 import { formatDecimalForInput } from "@/lib/format/decimal";
+import { examVersionTone, questionTone } from "@/lib/ui/status";
 import { vi } from "@/messages/vi";
 
-export default function ReviewQueuePage() {
+type AiVerification = components["schemas"]["AiVerification"];
+
+const AI_FLAG_TONE: Record<AiVerification, TagTone> = { NotChecked: "neutral", Agree: "ok", Disagree: "rej" };
+
+const dateFormat = new Intl.DateTimeFormat("vi-VN", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "Asia/Ho_Chi_Minh",
+});
+
+const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+const TABS_ID = "review-tabs";
+
+function formatSentAt(value?: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : dateFormat.format(date);
+}
+
+function ReviewQueueContent() {
   const { me } = useAuth();
-  const [tab, setTab] = useState<"questions" | "exams">("questions");
+  const searchParams = useSearchParams();
+  // `?tab=exams` only picks the initial tab (e.g. the home page link); clicking tabs works as before.
+  const [tab, setTab] = useState<"questions" | "exams">(searchParams.get("tab") === "exams" ? "exams" : "questions");
   const [page, setPage] = useState(1);
   const [subjectId, setSubjectId] = useState("");
   const [topicId, setTopicId] = useState("");
@@ -77,165 +110,182 @@ export default function ReviewQueuePage() {
   });
 
   if (!canReview) {
-    return <p className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{vi.common.forbidden}</p>;
+    return (
+      <>
+        <PageHeader title={vi.review.title} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.common.forbidden}</Notice>
+        </div>
+      </>
+    );
   }
 
   const activeData = tab === "questions" ? questionsQuery.data : examsQuery.data;
   const isLoading = tab === "questions" ? questionsQuery.isLoading : examsQuery.isLoading;
   const error = tab === "questions" ? questionsQuery.error : examsQuery.error;
 
+  // Only tabs whose list was loaded show a count; the other tab keeps its plain label until it is opened.
+  const tabLabel = (label: string, totalItems?: number) =>
+    totalItems === undefined ? label : vi.review.tabWithCount(label, totalItems);
+
   return (
-    <section className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">{vi.review.title}</h1>
-
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
-        <button
-          type="button"
-          onClick={() => {
-            setTab("questions");
-            setPage(1);
-          }}
-          className={`rounded px-3 py-1.5 text-sm font-medium ${
-            tab === "questions" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-          }`}
-        >
-          {vi.review.questionsTab}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setTab("exams");
-            setTopicId("");
-            setPage(1);
-          }}
-          className={`rounded px-3 py-1.5 text-sm font-medium ${
-            tab === "exams" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-          }`}
-        >
-          {vi.review.examsTab}
-        </button>
-      </div>
-
-      <div className="flex flex-wrap gap-3">
-        <select
-          aria-label={vi.questions.subject}
-          value={subjectId}
-          onChange={(e) => {
-            setSubjectId(e.target.value);
-            setTopicId("");
-            setPage(1);
-          }}
-          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
-        >
-          <option value="">{vi.questions.subject}: {vi.common.all}</option>
-          {subjectsQuery.data?.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
-
-        {tab === "questions" && (
-          <select
-            aria-label={vi.questions.topic}
-            disabled={!subjectId}
-            value={topicId}
+    <>
+      <PageHeader
+        title={vi.review.title}
+        description={vi.review.queueDescription}
+        tabs={
+          <BoardTabs
+            id={TABS_ID}
+            className="px-0! sm:px-0!"
+            active={tab}
+            onSelect={(key) => {
+              if (key === "questions") {
+                setTab("questions");
+                setPage(1);
+              } else {
+                setTab("exams");
+                setTopicId("");
+                setPage(1);
+              }
+            }}
+            items={[
+              { key: "questions", label: tabLabel(vi.review.questionsTab, questionsQuery.data?.totalItems) },
+              { key: "exams", label: tabLabel(vi.review.examsTab, examsQuery.data?.totalItems) },
+            ]}
+          />
+        }
+      />
+      <div {...boardTabPanelProps(TABS_ID, tab)} className={BODY}>
+        <FilterBar>
+          <FilterSelect
+            label={vi.questions.subject}
+            value={subjectId}
             onChange={(e) => {
-              setTopicId(e.target.value);
+              setSubjectId(e.target.value);
+              setTopicId("");
               setPage(1);
             }}
-            className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-sm disabled:bg-slate-100"
           >
-            <option value="">{vi.questions.topic}: {vi.common.all}</option>
-            {topicsQuery.data?.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
+            <option value="">{vi.questions.subject}: {vi.common.all}</option>
+            {subjectsQuery.data?.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
             ))}
-          </select>
+          </FilterSelect>
+
+          {tab === "questions" && (
+            <FilterSelect
+              label={vi.questions.topic}
+              disabled={!subjectId}
+              value={topicId}
+              onChange={(e) => {
+                setTopicId(e.target.value);
+                setPage(1);
+              }}
+              className="disabled:opacity-60"
+            >
+              <option value="">{vi.questions.topic}: {vi.common.all}</option>
+              {topicsQuery.data?.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </FilterSelect>
+          )}
+        </FilterBar>
+
+        {isLoading && <EmptyState busy title={vi.common.loading} />}
+        {error && <Notice tone="error">{getUiErrorMessage(error)}</Notice>}
+
+        {activeData && activeData.items.length === 0 && (
+          <EmptyState title={vi.review.emptyTitle} description={vi.common.empty} />
+        )}
+
+        {tab === "questions" && questionsQuery.data && questionsQuery.data.items.length > 0 && (
+          <div>
+            {questionsQuery.data.items.map((item) => (
+              <ListRow
+                key={item.id}
+                tone={questionTone("Submitted")}
+                href={`/review/question/?id=${item.id}`}
+                title={
+                  <div className="line-clamp-2 font-normal">
+                    <MathMarkdown links={false}>{item.stem}</MathMarkdown>
+                  </div>
+                }
+                meta={
+                  <>
+                    {item.source === "AI" && (
+                      <span className="mr-2 inline-flex flex-wrap gap-1.5 align-middle">
+                        <Tag tone="ai">{vi.questions.aiSource}</Tag>
+                        <Tag tone={AI_FLAG_TONE[item.aiVerification]}>{vi.questions.aiFlags[item.aiVerification]}</Tag>
+                      </span>
+                    )}
+                    {vi.review.queueQuestionMeta(
+                      vi.questions.types[item.type],
+                      vi.questions.difficulties[item.difficulty],
+                      vi.review.sentBy(item.createdBy.fullName, formatSentAt(item.submittedAt)),
+                    )}
+                  </>
+                }
+                end={
+                  <>
+                    <StatusText tone={questionTone("Submitted")}>{vi.questions.statuses.Submitted}</StatusText>
+                    <ButtonLink href={`/review/question/?id=${item.id}`} variant="secondary" size="sm">
+                      {vi.review.openReview}
+                    </ButtonLink>
+                  </>
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {tab === "exams" && examsQuery.data && examsQuery.data.items.length > 0 && (
+          <div>
+            {examsQuery.data.items.map((item) => (
+              <ListRow
+                key={item.id}
+                tone={examVersionTone("Submitted")}
+                href={`/review/exam/?id=${item.id}`}
+                title={`${item.examTitle} (v${item.versionNo})`}
+                meta={vi.review.queueExamMeta(
+                  item.grade,
+                  item.questionCount,
+                  formatDecimalForInput(item.totalPoints),
+                  vi.review.sentBy(item.createdBy.fullName, formatSentAt(item.submittedAt)),
+                )}
+                end={
+                  <>
+                    <StatusText tone={examVersionTone("Submitted")}>{vi.review.examStatuses.Submitted}</StatusText>
+                    <ButtonLink href={`/review/exam/?id=${item.id}`} variant="secondary" size="sm">
+                      {vi.review.openReview}
+                    </ButtonLink>
+                  </>
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {activeData && (activeData.items.length > 0 || page > 1) && (
+          <Pager page={page} totalPages={Math.max(1, activeData.totalPages)} onPage={setPage} />
         )}
       </div>
+    </>
+  );
+}
 
-      {isLoading && <p className="text-sm text-slate-600">{vi.common.loading}</p>}
-      {error && <p className="text-sm text-rose-600">{getUiErrorMessage(error)}</p>}
-
-      {activeData && activeData.items.length === 0 && (
-        <p className="rounded border border-slate-200 p-6 text-center text-sm text-slate-500">{vi.common.empty}</p>
-      )}
-
-      {tab === "questions" && questionsQuery.data && questionsQuery.data.items.length > 0 && (
-        <div className="space-y-3">
-          {questionsQuery.data.items.map((item) => (
-            <article key={item.id} className="rounded border border-slate-200 bg-white p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-800">{vi.questions.types[item.type]}</span>
-                  <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
-                    {vi.common.gradePrefix} {item.grade} · {item.createdBy.fullName}
-                  </span>
-                  {item.source === "AI" && (
-                    <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-800">
-                      {vi.questions.aiFlags[item.aiVerification]}
-                    </span>
-                  )}
-                </div>
-                <Link
-                  href={`/review/question/?id=${item.id}`}
-                  className="rounded bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
-                >
-                  {vi.review.openReview}
-                </Link>
-              </div>
-              <div className="mt-2 line-clamp-3 text-sm text-slate-800">
-                <MathMarkdown>{item.stem}</MathMarkdown>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-
-      {tab === "exams" && examsQuery.data && examsQuery.data.items.length > 0 && (
-        <div className="space-y-3">
-          {examsQuery.data.items.map((item) => (
-            <article key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-200 bg-white p-4">
-              <div>
-                <h2 className="font-semibold text-slate-900">
-                  {item.examTitle} (v{item.versionNo})
-                </h2>
-                <p className="mt-1 text-xs text-slate-600">
-                  {vi.common.gradePrefix} {item.grade} · {item.questionCount} {vi.review.questionCountSuffix} · {formatDecimalForInput(item.totalPoints)} {vi.review.points} · {item.createdBy.fullName}
-                </p>
-              </div>
-              <Link
-                href={`/review/exam/?id=${item.id}`}
-                className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
-              >
-                {vi.review.openReview}
-              </Link>
-            </article>
-          ))}
-        </div>
-      )}
-
-      {activeData && (activeData.items.length > 0 || page > 1) && (
-        <div className="flex items-center justify-between pt-2 text-sm">
-          <button
-            type="button"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-          >
-            {vi.common.previousPage}
-          </button>
-          <span className="text-slate-600">
-            {vi.common.pageLabel} {activeData.page} / {Math.max(1, activeData.totalPages)}
-          </span>
-          <button
-            type="button"
-            disabled={page >= activeData.totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
-          >
-            {vi.common.nextPage}
-          </button>
-        </div>
-      )}
-    </section>
+export default function ReviewQueuePage() {
+  return (
+    <Suspense
+      fallback={
+        <>
+          <PageHeader title={vi.review.title} />
+          <div className={BODY}>
+            <EmptyState busy title={vi.common.loading} />
+          </div>
+        </>
+      }
+    >
+      <ReviewQueueContent />
+    </Suspense>
   );
 }

@@ -237,7 +237,59 @@ describe("ExamComposer", () => {
 
   it("highlights rows the server reported as not approved", () => {
     renderComposer(version([item("q1", "A", 1), item("q3", "B", 1)]), { highlightIds: ["q1"] });
-    expect(screen.getByText("A").closest("li")?.getAttribute("data-highlighted")).toBe("true");
-    expect(screen.getByText("B").closest("li")?.getAttribute("data-highlighted")).toBeNull();
+    const flagged = screen.getByText("A").closest("li") as HTMLElement;
+    expect(flagged.getAttribute("data-invalid")).toBe("true");
+    expect(flagged.getAttribute("data-highlighted")).toBe("true");
+    expect(flagged.className).toContain("ring-rej");
+    expect(within(flagged).getByText(messages.exams.needsApproval)).toBeTruthy();
+    const fine = screen.getByText("B").closest("li") as HTMLElement;
+    expect(fine.getAttribute("data-invalid")).toBeNull();
+    expect(fine.getAttribute("data-highlighted")).toBeNull();
+  });
+
+  it("duration input belongs to the composer form so Enter there submits it", () => {
+    renderComposer(version([item("q1", "A", 1)]));
+    const form = screen.getByRole("form", { name: messages.exams.itemsTitle });
+    expect((screen.getByLabelText(messages.exams.duration) as HTMLInputElement).form).toBe(form);
+  });
+
+  it("with an external form the page-owned submit button saves and the composer renders no Save", async () => {
+    mocks.apiPut.mockImplementation((_p: string, init: { body: object }) => ok({ ...version([item("q1", "A", 2)]), ...init.body }));
+    const onSavingChange = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ExamComposer
+          exam={exam}
+          version={version([item("q1", "A", 1)])}
+          meId={ME}
+          highlightIds={new Set()}
+          onDirtyChange={vi.fn()}
+          externalForm={{ formId: "ext-form", onSavingChange }}
+        />
+        <button type="submit" form="ext-form">
+          Ngoài
+        </button>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("button", { name: messages.exams.save })).toBeNull();
+    expect((screen.getByLabelText(messages.exams.duration) as HTMLInputElement).form?.id).toBe("ext-form");
+    fireEvent.change(pointsInput(1), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ngoài" }));
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onSavingChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it("marks a source revision change with a wait-coloured line", () => {
+    const drifted = { ...item("q1", "A", 1), sourceRevision: 1, currentSourceRevision: 2 };
+    renderComposer(version([drifted]));
+    expect(screen.getByText(messages.exams.revisionDrift).closest("p")?.className).toContain("text-wait-text");
+  });
+
+  it("renders the bank in two columns from the xl breakpoint with a count and total in the meta bar", () => {
+    renderComposer(version([item("q1", "A", 1), item("q3", "B", 1)]));
+    expect(document.querySelector(".xl\\:grid-cols-2")).not.toBeNull();
+    expect(screen.getByTestId("total-points").textContent).toBe("2");
+    expect(screen.getByText(messages.exams.reorderHint)).toBeTruthy();
   });
 });

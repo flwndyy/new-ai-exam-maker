@@ -2,8 +2,11 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useState } from "react";
+import { type ReactNode, useId, useState } from "react";
+import { createPortal } from "react-dom";
 
+import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 import { api } from "@/lib/api/client";
 import { getApiErrorCode, getApiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
@@ -22,7 +25,11 @@ const TRANSITION_PATH = {
   archive: "/exam-versions/{vid}/archive",
 } as const;
 
-/** Author workflow buttons for the selected version (submit, withdraw, archive, new version). */
+/**
+ * Author workflow buttons for the selected version (submit, withdraw, archive, new version).
+ * `buttonsHost` places the buttons in the board header: undefined renders them inline, an element
+ * renders them there through a portal, and null renders none until the host exists. Messages stay inline.
+ */
 export function VersionActions({
   exam,
   version,
@@ -31,6 +38,8 @@ export function VersionActions({
   dirty,
   onNotApproved,
   onVersionCreated,
+  buttonsHost,
+  beforeSubmit,
 }: {
   exam: ExamDetail;
   version: ExamVersion;
@@ -39,8 +48,12 @@ export function VersionActions({
   dirty: boolean;
   onNotApproved: (ids: string[]) => void;
   onVersionCreated: (vid: string) => void;
+  buttonsHost?: HTMLElement | null;
+  /** Rendered right before the submit button (the page puts the composer Save here). */
+  beforeSubmit?: ReactNode;
 }) {
   const queryClient = useQueryClient();
+  const submitReasonId = useId();
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string; draftVid?: string } | null>(null);
 
   const draft = exam.versions.find((v) => v.status === "Draft");
@@ -69,7 +82,9 @@ export function VersionActions({
           old
             ? {
                 ...old,
-                latestVersionNo: Math.max(old.latestVersionNo, data.versionNo),
+                ...(data.versionNo >= old.latestVersionNo
+                  ? { latestVersionNo: data.versionNo, latestVersionId: data.id, latestVersionStatus: data.status }
+                  : {}),
                 versions: [data, ...old.versions.filter((v) => v.id !== data.id)],
               }
             : old,
@@ -107,59 +122,70 @@ export function VersionActions({
 
   if (!flags.submit && !flags.withdraw && !flags.archive && !flags.createVersion) return null;
 
-  const btn = "rounded px-4 py-2 text-sm font-medium disabled:opacity-40";
   const busy = mutation.isPending;
+  const onBoard = buttonsHost !== undefined;
+  const submitReason = dirty ? vi.exams.saveBeforeSubmit : version.questionCount === 0 ? vi.exams.addBeforeSubmit : undefined;
+
+  // DOM order is the visual and keyboard order: secondary actions, then `beforeSubmit` (the composer Save), then submit.
+  const buttons = (
+    <>
+      {flags.withdraw && (
+        <Button variant={onBoard ? "boardPrimary" : "secondary"} disabled={busy} onClick={() => run("withdraw")}>
+          {vi.exams.withdraw}
+        </Button>
+      )}
+      {flags.createVersion && (
+        <Button
+          variant={onBoard ? "boardSecondary" : "secondary"}
+         
+          disabled={busy}
+          onClick={() => run("createVersion", dirty ? vi.exams.confirmDiscard : undefined)}
+        >
+          {vi.exams.createVersion}
+        </Button>
+      )}
+      {flags.archive && (
+        <Button
+          variant={onBoard ? "boardSecondary" : "danger"}
+         
+          disabled={busy}
+          onClick={() => run("archive", vi.exams.confirmArchive)}
+        >
+          {vi.exams.archive}
+        </Button>
+      )}
+      {flags.submit && beforeSubmit}
+      {flags.submit && (
+        <Button
+          variant={onBoard ? "boardPrimary" : "approve"}
+          disabled={busy || dirty || version.questionCount === 0}
+          aria-describedby={submitReason ? submitReasonId : undefined}
+          onClick={() => run("submit", vi.exams.confirmSubmit)}
+        >
+          {vi.exams.submit}
+        </Button>
+      )}
+    </>
+  );
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {flags.submit && (
-          <button
-            type="button"
-            disabled={busy || dirty || version.questionCount === 0}
-            onClick={() => run("submit", vi.exams.confirmSubmit)}
-            className={`${btn} bg-emerald-700 text-white hover:bg-emerald-800`}
-          >
-            {vi.exams.submit}
-          </button>
-        )}
-        {flags.withdraw && (
-          <button type="button" disabled={busy} onClick={() => run("withdraw")} className={`${btn} border border-slate-300`}>
-            {vi.exams.withdraw}
-          </button>
-        )}
-        {flags.createVersion && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => run("createVersion", dirty ? vi.exams.confirmDiscard : undefined)}
-            className={`${btn} border border-slate-300`}
-          >
-            {vi.exams.createVersion}
-          </button>
-        )}
-        {flags.archive && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => run("archive", vi.exams.confirmArchive)}
-            className={`${btn} border border-rose-300 text-rose-700`}
-          >
-            {vi.exams.archive}
-          </button>
-        )}
-      </div>
-      {flags.submit && dirty && <p className="text-xs text-slate-600">{vi.exams.saveBeforeSubmit}</p>}
+    <>
+      {buttonsHost ? createPortal(buttons, buttonsHost) : onBoard ? null : <div className="mb-3.5 flex flex-wrap gap-2">{buttons}</div>}
+      {flags.submit && submitReason && (
+        <p id={submitReasonId} className="mb-3.5 text-[12.5px] text-ink-soft">
+          {submitReason}
+        </p>
+      )}
       {message && (
-        <p className={`text-sm ${message.kind === "error" ? "text-rose-700" : "text-emerald-700"}`}>
+        <Notice tone={message.kind === "error" ? "error" : "success"} className="mb-3.5">
           {message.text}{" "}
           {message.draftVid && (
             <Link href={`/exams/view/?id=${exam.id}&vid=${message.draftVid}`} className="underline">
               {vi.exams.openDraft}
             </Link>
           )}
-        </p>
+        </Notice>
       )}
-    </div>
+    </>
   );
 }

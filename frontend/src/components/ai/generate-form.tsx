@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
+import { Button } from "@/components/ui/button";
+import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
+import { Panel } from "@/components/ui/panel";
 import {
   DIFFICULTIES,
   GRADES,
@@ -37,8 +41,16 @@ const resetFormat = new Intl.DateTimeFormat("vi-VN", {
   timeZone: "Asia/Ho_Chi_Minh",
 });
 
-const inputClass = "mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm";
-const errorClass = "mt-1 text-xs text-red-600";
+/** "Hôm nay còn 7/10 lượt ..." for the page header; remaining counts are clamped at 0. */
+export function formatQuotaLine(quota: AiQuota): string {
+  return vi.ai.quota(
+    Math.max(quota.jobsLimit - quota.jobsUsed, 0),
+    quota.jobsLimit,
+    numberFormat.format(Math.max(quota.tokensLimit - quota.tokensUsed, 0)),
+    numberFormat.format(quota.tokensLimit),
+    resetFormat.format(new Date(quota.resetsAt)),
+  );
+}
 
 function toFormValues(initial?: Partial<AiGenerateRequest>): GenerateFormInput {
   return {
@@ -154,159 +166,110 @@ export function GenerateForm({
   });
 
   return (
-    <form onSubmit={onSubmit} noValidate className="space-y-4 rounded border border-slate-200 bg-white p-4">
-      <h2 className="text-lg font-semibold text-slate-900">{vi.ai.formTitle}</h2>
+    <Panel title={vi.ai.formTitle}>
+      <form onSubmit={onSubmit} noValidate>
+        <div className="grid gap-x-3.5 sm:grid-cols-2">
+          <Field label={vi.ai.subject} htmlFor="ai-subject" error={errors.subjectId?.message}>
+            <Controller
+              control={control}
+              name="subjectId"
+              render={({ field }) => (
+                <Select
+                  id="ai-subject"
+                  {...field}
+                  onChange={(e) => {
+                    field.onChange(e.target.value);
+                    setValue("topicId", "");
+                  }}
+                >
+                  <option value="">{vi.ai.choose}</option>
+                  {(subjectsQuery.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            />
+          </Field>
 
-      {quota && (
-        <p className="text-sm text-slate-600">
-          {vi.ai.quota(
-            quota.jobsUsed,
-            quota.jobsLimit,
-            numberFormat.format(quota.tokensUsed),
-            numberFormat.format(quota.tokensLimit),
-            resetFormat.format(new Date(quota.resetsAt)),
-          )}
-        </p>
-      )}
+          <Field label={vi.ai.grade} htmlFor="ai-grade" error={errors.grade?.message}>
+            <Select id="ai-grade" {...register("grade", { onChange: () => setValue("topicId", "") })}>
+              {GRADES.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <label className="block text-sm font-medium text-slate-700">
-          {vi.ai.subject}
-          <Controller
-            control={control}
-            name="subjectId"
-            render={({ field }) => (
-              <select
-                {...field}
-                className={inputClass}
-                onChange={(e) => {
-                  field.onChange(e.target.value);
-                  setValue("topicId", "");
-                }}
-              >
-                <option value="">{vi.ai.choose}</option>
-                {(subjectsQuery.data ?? []).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          />
-          {errors.subjectId && <span className={errorClass}>{errors.subjectId.message}</span>}
-        </label>
-
-        <label className="block text-sm font-medium text-slate-700">
-          {vi.ai.grade}
-          <select
-            {...register("grade", { onChange: () => setValue("topicId", "") })}
-            className={inputClass}
-          >
-            {GRADES.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-          {errors.grade && <span className={errorClass}>{errors.grade.message}</span>}
-        </label>
-
-        <label className="block text-sm font-medium text-slate-700">
-          {vi.ai.topic}
+        <Field label={vi.ai.topic} htmlFor="ai-topic" error={errors.topicId?.message}>
           <Controller
             control={control}
             name="topicId"
             render={({ field }) => (
-              <select {...field} className={inputClass} disabled={!subjectId}>
+              <Select id="ai-topic" {...field} disabled={!subjectId}>
                 <option value="">{vi.ai.choose}</option>
                 {(topicsQuery.data ?? []).map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
           />
-          {errors.topicId && <span className={errorClass}>{errors.topicId.message}</span>}
-        </label>
+        </Field>
 
-        <label className="block text-sm font-medium text-slate-700">
-          {vi.ai.type}
-          <select {...register("type")} className={inputClass}>
-            {QUESTION_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {vi.questions.types[t]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="grid gap-x-3.5 sm:grid-cols-2">
+          <Field label={vi.ai.type} htmlFor="ai-type">
+            <Select id="ai-type" {...register("type")}>
+              {QUESTION_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {vi.questions.types[t]}
+                </option>
+              ))}
+            </Select>
+          </Field>
 
-        <label className="block text-sm font-medium text-slate-700">
-          {vi.ai.difficulty}
-          <select {...register("difficulty")} className={inputClass}>
-            {DIFFICULTIES.map((d) => (
-              <option key={d} value={d}>
-                {vi.questions.difficulties[d]}
-              </option>
-            ))}
-          </select>
-        </label>
+          <Field label={vi.ai.difficulty} htmlFor="ai-difficulty">
+            <Select id="ai-difficulty" {...register("difficulty")}>
+              {DIFFICULTIES.map((d) => (
+                <option key={d} value={d}>
+                  {vi.questions.difficulties[d]}
+                </option>
+              ))}
+            </Select>
+          </Field>
 
-        <div className="text-sm">
-          <label htmlFor="ai-count" className="font-medium text-slate-700">
-            {vi.ai.count}
-          </label>{" "}
-          <span className="text-slate-500">({vi.ai.countHint(maxQuestions)})</span>
-          <input
-            id="ai-count"
-            type="number"
-            min={1}
-            max={maxQuestions}
-            step={1}
-            {...register("count")}
-            className={inputClass}
-          />
-          {errors.count && <span className={errorClass}>{errors.count.message}</span>}
+          <Field label={vi.ai.count} htmlFor="ai-count" hint={vi.ai.countHint(maxQuestions)} error={errors.count?.message}>
+            <Input id="ai-count" type="number" min={1} max={maxQuestions} step={1} {...register("count")} />
+          </Field>
         </div>
-      </div>
 
-      <div>
-        <label htmlFor="ai-note" className="block text-sm font-medium text-slate-700">
-          {vi.ai.note}
-        </label>
-        <textarea
-          id="ai-note"
-          rows={4}
-          maxLength={MAX_NOTE_LENGTH}
-          aria-describedby={`${warningId} ${counterId}`}
-          {...register("note")}
-          className={inputClass}
-        />
-        <p id={warningId} role="note" className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {vi.ai.noteWarning}
-        </p>
-        <p id={counterId} className="mt-1 text-right text-xs text-slate-500">
-          {vi.ai.noteCounter(note.length)}
-        </p>
-        {errors.note && <span className={errorClass}>{errors.note.message}</span>}
-      </div>
+        <Field label={vi.ai.note} htmlFor="ai-note" error={errors.note?.message}>
+          <Textarea
+            id="ai-note"
+            rows={4}
+            maxLength={MAX_NOTE_LENGTH}
+            aria-describedby={`${warningId} ${counterId}`}
+            {...register("note")}
+          />
+          <p id={counterId} className="mt-1 text-right text-xs text-muted">
+            {vi.ai.noteCounter(note.length)}
+          </p>
+          <Notice tone="warn" className="mt-2">
+            <p id={warningId}>{vi.ai.noteWarning}</p>
+          </Notice>
+        </Field>
 
-      {blocked && <p className="text-sm text-red-700">{blocked}</p>}
-      {formError && (
-        <p role="alert" className="text-sm text-red-700">
-          {formError}
-        </p>
-      )}
+        {blocked && <Notice tone="warn" className="mb-3.5">{blocked}</Notice>}
+        {formError && <Notice tone="error" className="mb-3.5">{formError}</Notice>}
 
-      <div className="flex justify-end">
-        <button
-          type="submit"
-          disabled={Boolean(blocked) || mutation.isPending}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
+        <Button type="submit" disabled={Boolean(blocked) || mutation.isPending}>
           {mutation.isPending ? vi.ai.submitting : vi.ai.submit}
-        </button>
-      </div>
-    </form>
+        </Button>
+      </form>
+    </Panel>
   );
 }

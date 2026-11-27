@@ -5,13 +5,17 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { type ReactNode, Suspense, useEffect, useId, useState } from "react";
 
 import { ExamComposer } from "@/components/exams/exam-composer";
 import { ExportLinks } from "@/components/exams/export-links";
 import { ExamHeader } from "@/components/exams/exam-header";
 import { VersionActions } from "@/components/exams/version-actions";
 import { VersionReadonly } from "@/components/exams/version-readonly";
+import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Notice } from "@/components/ui/notice";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { api } from "@/lib/api/client";
 import { getUiErrorMessage } from "@/lib/api/error";
@@ -23,12 +27,27 @@ type HttpFailure = { status: number; error: unknown };
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
+/** Board header plus content wrapper for states that have no exam yet (loading, error, missing id). */
+function Frame({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <PageHeader title={vi.exams.listTitle} />
+      <div className="px-4 py-5 sm:px-7 sm:py-6">{children}</div>
+    </>
+  );
+}
+
 function ExamView({ id }: { id: string }) {
   const { me } = useAuth();
   const router = useRouter();
   const requestedVid = useSearchParams().get("vid");
   const [dirty, setDirty] = useState(false);
   const [highlight, setHighlight] = useState<{ stamp: string; ids: ReadonlySet<string> }>({ stamp: "", ids: new Set() });
+  // Board action row: the version buttons and the composer's Save render into it through portals.
+  const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
+  // The composer form is submitted by the Save button in the board header, so the page owns the form id.
+  const formId = useId();
+  const [saving, setSaving] = useState(false);
 
   const examQuery = useQuery({
     queryKey: ["exam", id],
@@ -67,10 +86,20 @@ function ExamView({ id }: { id: string }) {
 
   const subjectsQuery = useQuery({ queryKey: ["catalog", "subjects", "all"], queryFn: () => fetchAllSubjects(), enabled: Boolean(exam) });
 
-  if (examQuery.isLoading) return <p>{vi.common.loading}</p>;
+  if (examQuery.isLoading) {
+    return (
+      <Frame>
+        <EmptyState busy title={vi.common.loading} />
+      </Frame>
+    );
+  }
   if (examQuery.isError || !exam) {
     const status = (examQuery.error as HttpFailure | null)?.status;
-    return <p className="text-rose-600">{status === 404 || status === 403 ? vi.exams.notFound : getUiErrorMessage(examQuery.error)}</p>;
+    return (
+      <Frame>
+        <Notice tone="error">{status === 404 || status === 403 ? vi.exams.notFound : getUiErrorMessage(examQuery.error)}</Notice>
+      </Frame>
+    );
   }
 
   const selectVersion = (next: string) => {
@@ -91,9 +120,10 @@ function ExamView({ id }: { id: string }) {
     hasDraft: exam.versions.some((v) => v.status === "Draft"),
   });
   const versionStatus = (versionQuery.error as HttpFailure | null)?.status;
+  const selected = exam.versions.find((v) => v.id === vid);
 
   return (
-    <section className="space-y-6">
+    <>
       <ExamHeader
         key={exam.title}
         exam={exam}
@@ -101,66 +131,106 @@ function ExamView({ id }: { id: string }) {
         selectedVid={vid ?? ""}
         onSelectVersion={selectVersion}
         canEditTitle={isAuthor && role !== "admin"}
+        dirty={dirty}
+        actions={<div ref={setActionsHost} className="flex flex-wrap gap-2" />}
       />
 
-      {version && me && (
-        <VersionActions
-          key={version.id}
-          exam={exam}
-          version={version}
-          role={role}
-          meId={me.id}
-          dirty={dirty}
-          onNotApproved={(ids) => setHighlight({ stamp: versionStamp, ids: new Set(ids) })}
-          onVersionCreated={(next) => {
-            setDirty(false);
-            router.replace(`/exams/view/?id=${id}&vid=${next}`);
-          }}
-        />
-      )}
+      <div className="px-4 py-5 sm:px-7 sm:py-6">
+        {selected?.status === "Rejected" && selected.reviewNote && (
+          <Notice tone="error" title={vi.exams.rejectedNote} className="mb-4">
+            {selected.reviewNote}
+          </Notice>
+        )}
 
-      {version?.warnings && version.warnings.length > 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          <p className="font-medium">{vi.exams.warningsTitle}</p>
-          <ul className="list-disc pl-5">
-            {version.warnings.map((w, i) => (
-              <li key={`${w.code}-${w.sourceQuestionId ?? i}`}>{w.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+        {version && me && (
+          <VersionActions
+            key={`actions-${version.id}`}
+            exam={exam}
+            version={version}
+            role={role}
+            meId={me.id}
+            dirty={dirty}
+            buttonsHost={actionsHost}
+            beforeSubmit={
+              actions.canEdit ? (
+                <Button type="submit" form={formId} variant="boardPrimary" disabled={!dirty || saving}>
+                  {saving ? vi.common.saving : vi.exams.save}
+                </Button>
+              ) : null
+            }
+            onNotApproved={(ids) => setHighlight({ stamp: versionStamp, ids: new Set(ids) })}
+            onVersionCreated={(next) => {
+              setDirty(false);
+              router.replace(`/exams/view/?id=${id}&vid=${next}`);
+            }}
+          />
+        )}
 
-      {version && canExport(version.status) && <ExportLinks examId={id} versionId={version.id} canReadAnswers />}
+        {version?.warnings && version.warnings.length > 0 && (
+          <Notice tone="warn" title={vi.exams.warningsTitle} className="mb-4">
+            <ul className="list-disc pl-5">
+              {version.warnings.map((w, i) => (
+                <li key={`${w.code}-${w.sourceQuestionId ?? i}`}>{w.message}</li>
+              ))}
+            </ul>
+          </Notice>
+        )}
 
-      {versionQuery.isLoading && <p>{vi.common.loading}</p>}
-      {versionQuery.isError && (
-        <p className="text-rose-600">
-          {versionStatus === 403 ? vi.exams.studentSheetOnly : versionStatus === 404 ? vi.exams.notFound : getUiErrorMessage(versionQuery.error)}
-        </p>
-      )}
-      {/* A 403 on the detail means "no answer access": the student sheet may still be exportable. */}
-      {versionStatus === 403 && vid && summary && canExport(summary.status) && (
-        <ExportLinks examId={id} versionId={vid} canReadAnswers={false} />
-      )}
-      {version &&
-        (actions.canEdit && me ? (
-          <ExamComposer key={version.id} exam={exam} version={version} meId={me.id} highlightIds={highlightIds} onDirtyChange={setDirty} />
-        ) : (
-          <VersionReadonly version={version} />
-        ))}
-    </section>
+        {versionQuery.isLoading && <EmptyState busy title={vi.common.loading} />}
+        {versionQuery.isError && (
+          <Notice tone="error" className="mb-4">
+            {versionStatus === 403 ? vi.exams.studentSheetOnly : versionStatus === 404 ? vi.exams.notFound : getUiErrorMessage(versionQuery.error)}
+          </Notice>
+        )}
+        {/* A 403 on the detail means "no answer access": the student sheet may still be exportable. */}
+        {versionStatus === 403 && vid && summary && canExport(summary.status) && (
+          <div className="mb-4 flex flex-wrap gap-2">
+            <ExportLinks examId={id} versionId={vid} canReadAnswers={false} />
+          </div>
+        )}
+        {version &&
+          (actions.canEdit && me ? (
+            <ExamComposer
+              key={`composer-${version.id}`}
+              exam={exam}
+              version={version}
+              meId={me.id}
+              highlightIds={highlightIds}
+              onDirtyChange={setDirty}
+              externalForm={{ formId, onSavingChange: setSaving }}
+            />
+          ) : (
+            <VersionReadonly
+              version={version}
+              actions={canExport(version.status) ? <ExportLinks examId={id} versionId={version.id} canReadAnswers /> : undefined}
+            />
+          ))}
+      </div>
+    </>
   );
 }
 
 function ExamViewRoute() {
   const id = useSearchParams().get("id");
-  if (!id) return <p className="text-red-600">{vi.exams.missingId}</p>;
+  if (!id) {
+    return (
+      <Frame>
+        <Notice tone="error">{vi.exams.missingId}</Notice>
+      </Frame>
+    );
+  }
   return <ExamView id={id} />;
 }
 
 export default function ExamViewPage() {
   return (
-    <Suspense fallback={<p>{vi.common.loading}</p>}>
+    <Suspense
+      fallback={
+        <Frame>
+          <EmptyState busy title={vi.common.loading} />
+        </Frame>
+      }
+    >
       <ExamViewRoute />
     </Suspense>
   );

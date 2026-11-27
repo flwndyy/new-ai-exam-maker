@@ -3,6 +3,13 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Field, Input, Select } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
+import { Pager } from "@/components/ui/pager";
 import { api } from "@/lib/api/client";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import type { components } from "@/lib/api/schema";
@@ -62,115 +69,129 @@ export default function AiUsagePage() {
     },
   });
 
-  if (!me) return null;
-  if (!isAdmin) return <p className="text-sm text-slate-600">{vi.common.forbidden}</p>;
+  const BODY = "px-4 py-5 sm:px-7 sm:py-6";
+
+  if (!me) return <PageHeader title={vi.aiUsage.title} />;
+  if (!isAdmin) {
+    return (
+      <>
+        <PageHeader title={vi.aiUsage.title} />
+        <div className={BODY}>
+          <Notice tone="error">{vi.common.forbidden}</Notice>
+        </div>
+      </>
+    );
+  }
 
   const data = usageQuery.data;
-  const inputClass = "mt-1 rounded border border-slate-300 px-3 py-2 text-sm";
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-2xl font-bold text-slate-900">{vi.aiUsage.title}</h1>
-      <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-        {vi.aiUsage.estimateNotice}
-      </p>
+    <>
+      <PageHeader title={vi.aiUsage.title} description={vi.aiUsage.description} />
+      <div className={`${BODY} space-y-4`}>
+        <form
+          className="flex flex-wrap items-end gap-x-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setApplied(draft);
+            setPage(1);
+          }}
+        >
+          <Field label={vi.aiUsage.user} htmlFor="ai-usage-user" className="min-w-[200px]">
+            <Select
+              id="ai-usage-user"
+              value={draft.userId}
+              onChange={(e) => setDraft({ ...draft, userId: e.target.value })}
+            >
+              <option value="">{vi.common.all}</option>
+              {(usersQuery.data ?? []).map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={vi.aiUsage.from} htmlFor="ai-usage-from">
+            <Input
+              id="ai-usage-from"
+              type="date"
+              value={draft.from}
+              onChange={(e) => setDraft({ ...draft, from: e.target.value })}
+            />
+          </Field>
+          <Field label={vi.aiUsage.to} htmlFor="ai-usage-to">
+            <Input
+              id="ai-usage-to"
+              type="date"
+              value={draft.to}
+              onChange={(e) => setDraft({ ...draft, to: e.target.value })}
+            />
+          </Field>
+          <div className="mb-3.5">
+            <Button type="submit">{vi.aiUsage.filter}</Button>
+          </div>
+        </form>
 
-      <form
-        className="flex flex-wrap items-end gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setApplied(draft);
-          setPage(1);
-        }}
-      >
-        <label className="flex flex-col text-sm text-slate-700">
-          {vi.aiUsage.user}
-          <select
-            value={draft.userId}
-            onChange={(e) => setDraft({ ...draft, userId: e.target.value })}
-            className={inputClass}
-          >
-            <option value="">{vi.common.all}</option>
-            {(usersQuery.data ?? []).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.fullName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col text-sm text-slate-700">
-          {vi.aiUsage.from}
-          <input type="date" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} className={inputClass} />
-        </label>
-        <label className="flex flex-col text-sm text-slate-700">
-          {vi.aiUsage.to}
-          <input type="date" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} className={inputClass} />
-        </label>
-        <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-          {vi.aiUsage.filter}
-        </button>
-      </form>
+        {usageQuery.isLoading && <EmptyState busy title={vi.common.loading} />}
+        {usageQuery.isError && <Notice tone="error">{getUiErrorMessage(usageQuery.error)}</Notice>}
 
-      {usageQuery.isLoading && <p className="text-sm text-slate-500">{vi.common.loading}</p>}
-      {usageQuery.isError && <p className="text-sm text-red-700">{getUiErrorMessage(usageQuery.error)}</p>}
+        {data && (
+          <>
+            <div
+              role="group"
+              aria-label={vi.aiUsage.totals(
+                numberFormat.format(data.totals.jobs),
+                numberFormat.format(data.totals.tokens),
+                formatCost(data.totals.estimatedCostUsd),
+              )}
+              className="grid grid-cols-2 gap-3 lg:grid-cols-4"
+            >
+              {[
+                { label: vi.aiUsage.jobs, value: numberFormat.format(data.totals.jobs) },
+                { label: vi.aiUsage.tokens, value: numberFormat.format(data.totals.tokens) },
+                { label: vi.aiUsage.cost, value: formatCost(data.totals.estimatedCostUsd) },
+                { label: vi.aiUsage.rows, value: numberFormat.format(data.totalItems) },
+              ].map((stat) => (
+                <div key={stat.label} className="rounded-lg border border-line bg-surface px-4 py-3">
+                  <div className="text-[12.5px] text-muted">{stat.label}</div>
+                  <div className="mt-0.5 text-[22px] leading-tight font-semibold tabular-nums">{stat.value}</div>
+                </div>
+              ))}
+            </div>
+            <Notice tone="info">{vi.aiUsage.estimateNotice}</Notice>
 
-      {data && (
-        <>
-          {data.items.length === 0 ? (
-            <p className="text-sm text-slate-500">{vi.common.empty}</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="border-b border-slate-200 text-slate-500">
-                  <tr>
-                    <th className="px-2 py-2">{vi.aiUsage.date}</th>
-                    <th className="px-2 py-2">{vi.aiUsage.user}</th>
-                    <th className="px-2 py-2 text-right">{vi.aiUsage.jobs}</th>
-                    <th className="px-2 py-2 text-right">{vi.aiUsage.tokens}</th>
-                    <th className="px-2 py-2 text-right">{vi.aiUsage.cost}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((row) => (
-                    <tr key={`${row.user.id}-${row.date}`} className="border-b border-slate-100">
-                      <td className="px-2 py-2 whitespace-nowrap">{row.date}</td>
-                      <td className="px-2 py-2">{row.user.fullName}</td>
-                      <td className="px-2 py-2 text-right">{numberFormat.format(row.jobs)}</td>
-                      <td className="px-2 py-2 text-right">{numberFormat.format(row.tokens)}</td>
-                      <td className="px-2 py-2 text-right">{formatCost(row.estimatedCostUsd)}</td>
+            {data.items.length === 0 ? (
+              <EmptyState title={vi.common.empty} />
+            ) : (
+              <DataTable>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{vi.aiUsage.date}</th>
+                      <th>{vi.aiUsage.user}</th>
+                      <th className="num">{vi.aiUsage.jobs}</th>
+                      <th className="num">{vi.aiUsage.tokens}</th>
+                      <th className="num">{vi.aiUsage.cost}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <p className="text-sm font-medium text-slate-700">
-            {vi.aiUsage.totals(
-              numberFormat.format(data.totals.jobs),
-              numberFormat.format(data.totals.tokens),
-              formatCost(data.totals.estimatedCostUsd),
+                  </thead>
+                  <tbody>
+                    {data.items.map((row) => (
+                      <tr key={`${row.user.id}-${row.date}`}>
+                        <td className="whitespace-nowrap">{row.date}</td>
+                        <td>{row.user.fullName}</td>
+                        <td className="num">{numberFormat.format(row.jobs)}</td>
+                        <td className="num">{numberFormat.format(row.tokens)}</td>
+                        <td className="num">{formatCost(row.estimatedCostUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </DataTable>
             )}
-          </p>
-          {data.totalPages > 1 && (
-            <div className="flex items-center gap-3 text-sm">
-              <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="disabled:opacity-50">
-                {vi.common.previousPage}
-              </button>
-              <span>
-                {vi.common.pageLabel} {page}/{data.totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={page >= data.totalPages}
-                onClick={() => setPage((p) => p + 1)}
-                className="disabled:opacity-50"
-              >
-                {vi.common.nextPage}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-    </section>
+            {data.totalPages > 1 && <Pager page={page} totalPages={data.totalPages} onPage={setPage} />}
+          </>
+        )}
+      </div>
+    </>
   );
 }

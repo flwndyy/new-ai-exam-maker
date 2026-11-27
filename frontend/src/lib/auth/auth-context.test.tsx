@@ -4,8 +4,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UserMenu } from "@/components/user-menu";
-import { vi as messages } from "@/messages/vi";
 import { AuthProvider, isPublicPath, useAuth } from "./auth-context";
 
 const m = vi.hoisted(() => {
@@ -365,30 +363,5 @@ describe("AuthProvider", () => {
       await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
       expect(m.clearSession).toHaveBeenCalledWith("signedOut");
     });
-  });
-});
-
-describe("UserMenu", () => {
-  it("shows name, role label and department, and a logout button", async () => {
-    renderApp(<UserMenu />);
-    expect(await screen.findByText("Trần Thị Tổ Trưởng")).toBeTruthy();
-    expect(screen.getByText(`${messages.auth.roles.head} · Tổ Toán`)).toBeTruthy();
-    expect(screen.getByRole("button", { name: messages.auth.logout })).toBeTruthy();
-  });
-
-  it("renders nothing while signed out", async () => {
-    m.restoreSession.mockImplementation(async () => {
-      m.emit("signedOut");
-      return "signedOut";
-    });
-    const { container } = render(
-      <QueryClientProvider client={new QueryClient()}>
-        <AuthProvider>
-          <UserMenu />
-        </AuthProvider>
-      </QueryClientProvider>,
-    );
-    await act(async () => {});
-    expect(container.innerHTML).toBe("");
   });
 });

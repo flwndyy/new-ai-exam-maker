@@ -200,7 +200,7 @@ describe("AuthGate", () => {
     sessionResolves("denied");
     renderGate();
 
-    expect(await screen.findByText(messages.auth.deniedTitle)).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: messages.auth.deniedTitle })).toBeTruthy();
     expect(screen.getByText(messages.auth.deniedBody)).toBeTruthy();
     expect(screen.queryByText("protected")).toBeNull();
     expect(m.startLogin).not.toHaveBeenCalled();

@@ -97,7 +97,22 @@ describe("admin AI usage page", () => {
     expect(screen.getByRole("columnheader", { name: messages.aiUsage.date })).toBeTruthy();
     expect(screen.getByText("31.200")).toBeTruthy();
     expect(screen.getByText("$0,0910")).toBeTruthy();
-    expect(screen.getByText(messages.aiUsage.totals("12", "96.400", "$0,2810"))).toBeTruthy();
+    expect(screen.getByRole("group", { name: messages.aiUsage.totals("12", "96.400", "$0,2810") })).toBeTruthy();
+  });
+
+  it("shows a row of four totals cells with the formatted cost", async () => {
+    setupApi();
+    renderPage();
+    await screen.findByText("2026-11-23");
+    const group = screen.getByRole("group", { name: messages.aiUsage.totals("12", "96.400", "$0,2810") });
+    expect(group.children).toHaveLength(4);
+    const cells = Array.from(group.children).map((cell) => cell.textContent ?? "");
+    expect(cells.some((text) => text.includes(messages.aiUsage.cost) && text.includes("$0,2810"))).toBe(true);
+    expect(cells.some((text) => text.includes(messages.aiUsage.jobs) && text.includes("12"))).toBe(true);
+    expect(cells.some((text) => text.includes(messages.aiUsage.tokens) && text.includes("96.400"))).toBe(true);
+    expect(cells.some((text) => text.includes(messages.aiUsage.rows) && text.includes("41"))).toBe(true);
+    expect(group.querySelector(".tabular-nums")).toBeTruthy();
+    expect(screen.getByText(messages.aiUsage.estimateNotice)).toBeTruthy();
   });
 
   it("sends the userId/from/to filter only when Lọc is pressed, back on page 1", async () => {

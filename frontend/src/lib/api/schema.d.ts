@@ -1431,6 +1431,14 @@ export interface components {
             latestVersionNo: number;
             /**
              * Format: uuid
+             * @description Phiên bản có `versionNo` lớn nhất trong số phiên bản người xem đọc được.
+             */
+            latestVersionId: string;
+            latestVersionStatus: components["schemas"]["ExamVersionStatus"];
+            /** @description Số của phiên bản `Published` người xem đọc được; `null` nếu không có. */
+            publishedVersionNo: number | null;
+            /**
+             * Format: uuid
              * @description Phiên bản đang `Published` (tối đa một).
              */
             publishedVersionId?: string | null;

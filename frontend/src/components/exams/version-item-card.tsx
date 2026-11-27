@@ -22,51 +22,60 @@ export function VersionItemCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasContent = view.stem !== null;
+  const unapproved = view.sourceStatus !== null && view.sourceStatus !== "Approved";
+  const meta = [view.type ? vi.questions.types[view.type] : null, view.difficulty ? vi.questions.difficulties[view.difficulty] : null]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <li
       data-highlighted={highlighted ? "true" : undefined}
-      className={`rounded border p-3 ${highlighted ? "border-rose-400 bg-rose-50" : "border-slate-200 bg-white"}`}
+      data-invalid={highlighted ? "true" : undefined}
+      className={`mb-2 grid grid-cols-[26px_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-md bg-white px-3 py-3 ring-1 sm:grid-cols-[26px_minmax(0,1fr)_auto] ${
+        highlighted ? "ring-rej" : "ring-line"
+      }`}
     >
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-semibold text-slate-900">{`${vi.review.questionItemPrefix} ${index + 1}`}</span>
-        {view.type && <span className="text-slate-500">{vi.questions.types[view.type]}</span>}
-        {view.difficulty && <span className="text-slate-500">{vi.questions.difficulties[view.difficulty]}</span>}
+      <span className="pt-px text-[13.5px] font-bold text-muted tabular-nums">
+        <span className="sr-only">{vi.review.questionItemPrefix} </span>
+        {index + 1}
+      </span>
+
+      <div className="min-w-0 break-words [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto">
+        {hasContent ? (
+          <>
+            <div className={expanded ? "" : "line-clamp-3"}>
+              <MathMarkdown>{view.stem ?? ""}</MathMarkdown>
+            </div>
+            {meta && <p className="mt-0.5 text-[12.5px] text-muted">{meta}</p>}
+            {expanded && view.type && view.payload && (
+              <div className="mt-2 space-y-2">
+                <QuestionPayloadView type={view.type} payload={view.payload} />
+                {view.explanation && (
+                  <div className="text-[13px] text-ink-soft">
+                    <MathMarkdown>{view.explanation}</MathMarkdown>
+                  </div>
+                )}
+              </div>
+            )}
+            <button type="button" onClick={() => setExpanded((e) => !e)} className="mt-1 text-xs text-muted underline">
+              {expanded ? vi.exams.showLess : vi.exams.showMore}
+            </button>
+          </>
+        ) : (
+          <p className="text-[13.5px] text-muted">{vi.exams.contentUnavailable}</p>
+        )}
         {hasRevisionDrift(view) && (
-          <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-800">
+          <p className="mt-1 text-[12.5px] text-wait-text">
             <span aria-hidden="true">⚠ </span>
             <span>{vi.exams.revisionDrift}</span>
-          </span>
+          </p>
         )}
-        {view.sourceStatus && view.sourceStatus !== "Approved" && (
-          <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">{vi.exams.needsApproval}</span>
+        {(unapproved || highlighted) && (
+          <p className={`mt-1 text-[12.5px] ${highlighted ? "text-rej" : "text-wait-text"}`}>{vi.exams.needsApproval}</p>
         )}
       </div>
 
-      {hasContent ? (
-        <>
-          <div className={`prose prose-sm mt-1 max-w-none ${expanded ? "" : "line-clamp-3"}`}>
-            <MathMarkdown>{view.stem ?? ""}</MathMarkdown>
-          </div>
-          {expanded && view.type && view.payload && (
-            <div className="mt-2 space-y-2">
-              <QuestionPayloadView type={view.type} payload={view.payload} />
-              {view.explanation && (
-                <div className="prose prose-sm max-w-none text-slate-600">
-                  <MathMarkdown>{view.explanation}</MathMarkdown>
-                </div>
-              )}
-            </div>
-          )}
-          <button type="button" onClick={() => setExpanded((e) => !e)} className="mt-1 text-xs text-slate-600 underline">
-            {expanded ? vi.exams.showLess : vi.exams.showMore}
-          </button>
-        </>
-      ) : (
-        <p className="mt-1 text-sm italic text-slate-500">{vi.exams.contentUnavailable}</p>
-      )}
-
-      {children && <div className="mt-2 flex flex-wrap items-center gap-2">{children}</div>}
+      {children && <div className="col-start-2 flex flex-wrap items-center gap-1.5 sm:col-start-3 sm:row-start-1">{children}</div>}
     </li>
   );
 }

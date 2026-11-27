@@ -1,5 +1,4 @@
-import Link from "next/link";
-
+import { ButtonLink } from "@/components/ui/button";
 import { printUrl } from "@/lib/exams/print";
 import { vi } from "@/messages/vi";
 
@@ -7,15 +6,15 @@ import { vi } from "@/messages/vi";
 export function ExportLinks({ examId, versionId, canReadAnswers }: { examId: string; versionId: string; canReadAnswers: boolean }) {
   const t = vi.exams.print;
   return (
-    <div className="flex flex-wrap gap-3 text-sm">
-      <Link href={printUrl(examId, versionId, "student")} className="rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-50">
+    <>
+      <ButtonLink href={printUrl(examId, versionId, "student")} variant="secondary" size="sm">
         {t.toStudent}
-      </Link>
+      </ButtonLink>
       {canReadAnswers && (
-        <Link href={printUrl(examId, versionId, "answer")} className="rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-50">
+        <ButtonLink href={printUrl(examId, versionId, "answer")} variant="secondary" size="sm">
           {t.toAnswer}
-        </Link>
+        </ButtonLink>
       )}
-    </div>
+    </>
   );
 }

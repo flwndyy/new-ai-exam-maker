@@ -130,6 +130,19 @@ describe("AI generation page", () => {
   });
   afterEach(cleanup);
 
+  it("shows how many jobs and tokens are left today, never negative", async () => {
+    setupApi();
+    const view = renderPage();
+    const line = await screen.findByText(/^Hôm nay còn 7\/10 lượt/);
+    expect(line.textContent).toMatch(/75\.500\/100\.000 token\. Làm mới lúc /);
+    view.unmount();
+
+    setupApi({ quota: { ...quota, jobsUsed: 12, tokensUsed: 120000 } });
+    renderPage();
+    const over = await screen.findByText(/^Hôm nay còn 0\/10 lượt/);
+    expect(over.textContent).toMatch(/0\/100\.000 token\./);
+  });
+
   it("shows the note warning without focusing the note field", async () => {
     setupApi();
     renderPage();
@@ -276,11 +289,35 @@ describe("AI generation page", () => {
     expect((screen.getByLabelText(messages.ai.note) as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("lists my jobs with status badges and links to the job page", async () => {
-    setupApi({ jobs: [job("Running")] });
-    renderPage();
+  it("puts the quota line on the page header board", async () => {
+    setupApi();
+    const { container } = renderPage();
+    const line = await screen.findByText(/^Hôm nay còn 7\/10 lượt/);
+    expect(line.closest('[data-surface="board"]')).not.toBeNull();
+    const resetsAt = new Intl.DateTimeFormat("vi-VN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      day: "2-digit",
+      month: "2-digit",
+      timeZone: "Asia/Ho_Chi_Minh",
+    }).format(new Date(quota.resetsAt));
+    expect(line.textContent).toBe(messages.ai.quota(7, 10, "75.500", "100.000", resetsAt));
+    expect(container.querySelectorAll("form").length).toBe(1);
+    expect(container.querySelector("form")?.textContent).not.toMatch(/^Hôm nay còn/);
+  });
+
+  it("lists my jobs as rows with a status tone and a link to the job page", async () => {
+    setupApi({ jobs: [job("Running"), { ...job("Failed"), id: "00000000-0000-0000-0000-0000000000a2", errorMessage: "Đã hết token AI trong ngày." }] });
+    const { container } = renderPage();
     expect(await screen.findByText(messages.ai.jobStatuses.Running)).toBeTruthy();
-    const link = screen.getByRole("link", { name: messages.common.view });
-    expect(link.getAttribute("href")).toMatch(new RegExp(`^/ai/job/?\\?id=${JOB}$`));
+    const running = container.querySelector('[data-tone="wait"]');
+    expect(running).not.toBeNull();
+    const link = running!.querySelector("a");
+    expect(link?.getAttribute("href")).toMatch(new RegExp(`^/ai/job/?\\?id=${JOB}$`));
+    expect(running!.querySelector(".motion-safe\\:animate-pulse")?.getAttribute("aria-hidden")).toBe("true");
+    const failed = container.querySelector('[data-tone="rej"]');
+    expect(failed?.textContent).toContain("Đã hết token AI trong ngày.");
+    expect(container.querySelector('[data-tone="ok"]')).toBeNull();
+    expect(screen.queryByText(/Đã rà soát \d/)).toBeNull();
   });
 });

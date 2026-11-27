@@ -8,7 +8,7 @@ import QuestionDetailPage from "@/app/questions/detail/page";
 import QuestionsPage from "@/app/questions/page";
 import ReviewQueuePage from "@/app/review/page";
 import ReviewQuestionPage from "@/app/review/question/page";
-import { RoleNav } from "@/components/role-nav";
+import { SideNav } from "@/components/shell/side-nav";
 import { fetchAllSubjects } from "@/lib/api/catalog";
 import { getApiErrorMessage, getUiErrorMessage } from "@/lib/api/error";
 import { formatDecimalForInput, parseExactDecimal } from "@/lib/format/decimal";
@@ -39,6 +39,7 @@ vi.mock("next/navigation", () => ({
       [mocks.searchId ? `id=${mocks.searchId}` : "", mocks.searchExtra].filter(Boolean).join("&"),
     ),
   useRouter: () => ({ replace: vi.fn() }),
+  usePathname: () => "/",
 }));
 
 vi.mock("@/lib/auth/auth-context", () => ({
@@ -76,22 +77,22 @@ describe("A10 admin, review, and role navigation screens", () => {
 
   it("renders role-specific navigation links for teacher, head, and admin", () => {
     mocks.auth.me.role = "teacher";
-    const { rerender } = render(<RoleNav />);
-    expect(screen.getByText(messages.nav.questions)).toBeTruthy();
-    expect(screen.queryByText(messages.nav.review)).toBeNull();
-    expect(screen.queryByText(messages.nav.admin)).toBeNull();
+    const { rerender } = render(<SideNav />);
+    expect(screen.getByRole("link", { name: messages.nav.questions })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: messages.nav.review })).toBeNull();
+    expect(screen.queryByRole("link", { name: messages.nav.admin })).toBeNull();
 
     mocks.auth.me.role = "head";
-    rerender(<RoleNav />);
-    expect(screen.getByText(messages.nav.questions)).toBeTruthy();
-    expect(screen.getByText(messages.nav.review)).toBeTruthy();
-    expect(screen.queryByText(messages.nav.admin)).toBeNull();
+    rerender(<SideNav />);
+    expect(screen.getByRole("link", { name: messages.nav.questions })).toBeTruthy();
+    expect(screen.getByRole("link", { name: messages.nav.review })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: messages.nav.admin })).toBeNull();
 
     mocks.auth.me.role = "admin";
-    rerender(<RoleNav />);
-    expect(screen.getByText(messages.nav.questions)).toBeTruthy();
-    expect(screen.getByText(messages.nav.review)).toBeTruthy();
-    expect(screen.getByText(messages.nav.admin)).toBeTruthy();
+    rerender(<SideNav />);
+    expect(screen.getByRole("link", { name: messages.nav.questions })).toBeTruthy();
+    expect(screen.getByRole("link", { name: messages.nav.review })).toBeTruthy();
+    expect(screen.getByRole("link", { name: messages.nav.admin })).toBeTruthy();
   });
 
   it("blocks non-admin users from AdminPage and shows 4 tabs for admin", async () => {
@@ -108,6 +109,55 @@ describe("A10 admin, review, and role navigation screens", () => {
     expect(screen.getByText(messages.admin.subjectsTab)).toBeTruthy();
     expect(screen.getByText(messages.admin.topicsTab)).toBeTruthy();
     await waitFor(() => expect(mocks.apiGet).toHaveBeenCalled());
+  });
+
+  it("marks the open admin tab, shows locked users as arch-toned text, and counts the active tab's own list", async () => {
+    mocks.auth.me.role = "admin";
+    const user = (id: string, fullName: string, isActive: boolean) => ({
+      id,
+      cognitoSub: `sub-${id}`,
+      email: `${id}@example.invalid`,
+      fullName,
+      role: "teacher" as const,
+      departmentId: null,
+      isActive,
+      createdAt: "2026-11-22T00:00:00.000Z",
+    });
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/admin/users") {
+        return {
+          data: {
+            page: 1,
+            pageSize: 20,
+            totalItems: 48,
+            totalPages: 1,
+            items: [user("u-on", "Active Person", true), user("u-off", "Locked Person", false)],
+          },
+          error: undefined,
+        };
+      }
+      if (path === "/departments") {
+        return { data: { page: 1, pageSize: 20, totalItems: 4, totalPages: 1, items: [{ id: "d1", name: "Tổ Toán" }] }, error: undefined };
+      }
+      return { data: { page: 1, pageSize: 20, totalItems: 0, totalPages: 1, items: [] }, error: undefined };
+    });
+    renderWithQuery(<AdminPage />);
+
+    expect(screen.getByRole("tab", { name: messages.admin.usersTab }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: messages.admin.topicsTab }).getAttribute("aria-selected")).toBe("false");
+    await waitFor(() => expect(screen.getByText("Locked Person")).toBeTruthy());
+    expect(screen.getByText(messages.admin.totalItems(48))).toBeTruthy();
+    expect(screen.getByText(messages.admin.inactive).className).toContain("text-arch-text");
+    expect(screen.getByText(messages.admin.active).className).toContain("text-ok");
+
+    fireEvent.click(screen.getByRole("tab", { name: messages.admin.departmentsTab }));
+    await waitFor(() => expect(screen.getByText(messages.admin.totalItems(4))).toBeTruthy());
+    expect(screen.getByRole("tab", { name: messages.admin.departmentsTab }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText(messages.admin.totalItems(48))).toBeNull();
+    // The tab content is the labelled tabpanel the selected tab controls.
+    const panel = screen.getByRole("tabpanel", { name: messages.admin.departmentsTab });
+    expect(screen.getByRole("tab", { name: messages.admin.departmentsTab }).getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.textContent).toContain("Tổ Toán");
   });
 
   it("enforces review checklist, rejection note, and sends submittedAt when approving", async () => {
@@ -881,5 +931,240 @@ describe("A10 admin, review, and role navigation screens", () => {
     fireEvent.click(screen.getByText(messages.questions.submit));
     await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
     expect(mocks.apiPut.mock.calls[0][1].body.payload.tolerance).toBe(0.01);
+  });
+  const baseQuestion = {
+    id: "q-base",
+    subjectId: "s1",
+    topicId: "t1",
+    departmentId: "d1",
+    grade: 10,
+    type: "MultipleChoice",
+    difficulty: "Recognition",
+    stem: "Base stem",
+    payload: {
+      options: [
+        { label: "A", text: "1" },
+        { label: "B", text: "2" },
+        { label: "C", text: "3" },
+        { label: "D", text: "4" },
+      ],
+      correctLabel: "A",
+    },
+    explanation: null,
+    status: "Draft",
+    revision: 1,
+    source: "Manual",
+    aiVerification: "NotChecked",
+    aiVerificationNote: null,
+    aiReviewedByAuthor: false,
+    createdBy: { id: "someone", fullName: "Someone" },
+    submittedAt: null,
+    createdAt: "2026-11-22T00:00:00.000Z",
+    updatedAt: "2026-11-22T00:00:00.000Z",
+  };
+
+  it("lists a rejected question with its reason in a rej row and flags AI doubt", async () => {
+    mocks.searchId = "";
+    const page = {
+      page: 1,
+      pageSize: 20,
+      totalItems: 2,
+      totalPages: 1,
+      items: [
+        { ...baseQuestion, id: "q-rej", stem: "Rejected stem", status: "Rejected", reviewNote: "Phương án B và C trùng nhau." },
+        {
+          ...baseQuestion,
+          id: "q-ai",
+          stem: "AI doubtful stem",
+          source: "AI",
+          aiVerification: "Disagree",
+        },
+      ],
+    };
+    mocks.apiGet.mockImplementation(async (path: string) =>
+      path === "/questions" ? { data: page, error: undefined } : { data: { items: [] }, error: undefined },
+    );
+
+    renderWithQuery(<QuestionsPage />);
+    await waitFor(() => expect(screen.getByText("Rejected stem")).toBeTruthy());
+
+    const reason = screen.getByText(new RegExp("Phương án B và C trùng nhau"));
+    expect(reason.closest("[data-tone]")?.getAttribute("data-tone")).toBe("rej");
+    expect(screen.getByText(messages.questions.aiFlags.Disagree)).toBeTruthy();
+  });
+
+  it("shows the rejection notice as an alert before the form on the detail page", async () => {
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") {
+        return {
+          data: {
+            ...baseQuestion,
+            id: mocks.searchId,
+            status: "Rejected",
+            reviewNote: "Đáp án sai hoàn toàn",
+            createdBy: { id: mocks.auth.me.id, fullName: "Teacher" },
+          },
+          error: undefined,
+        };
+      }
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Base stem")).toBeTruthy());
+
+    const alert = screen.getAllByRole("alert").find((el) => el.textContent?.includes("Đáp án sai hoàn toàn"));
+    expect(alert).toBeTruthy();
+    const form = document.querySelector("form") as HTMLElement;
+    expect(alert!.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("disables submit for an unreviewed AI question and explains why", async () => {
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/questions/{id}") {
+        return {
+          data: {
+            ...baseQuestion,
+            id: mocks.searchId,
+            source: "AI",
+            aiVerification: "Agree",
+            aiReviewedByAuthor: false,
+            createdBy: { id: mocks.auth.me.id, fullName: "Teacher" },
+          },
+          error: undefined,
+        };
+      }
+      return { data: { items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<QuestionDetailPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("Base stem")).toBeTruthy());
+
+    const submit = screen.getByRole("button", { name: messages.questions.submit }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const describedBy = submit.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy as string)?.textContent).toBe(
+      messages.questions.aiReviewRequiredNotice,
+    );
+  });
+
+  it("shows the question count on the active queue tab", async () => {
+    mocks.auth.me.role = "head";
+    mocks.searchId = "";
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === "/review/questions") {
+        return {
+          data: {
+            page: 1,
+            pageSize: 20,
+            totalItems: 6,
+            totalPages: 1,
+            items: [
+              {
+                id: "q1",
+                subjectId: "s1",
+                topicId: "t1",
+                departmentId: "d1",
+                grade: 10,
+                type: "MultipleChoice",
+                difficulty: "Recognition",
+                stem: "Queue stem",
+                payload: { options: [], correctLabel: "A" },
+                explanation: null,
+                status: "Submitted",
+                revision: 1,
+                source: "Manual",
+                aiVerification: "NotChecked",
+                aiVerificationNote: null,
+                aiReviewedByAuthor: false,
+                createdBy: { id: "u1", fullName: "Teacher" },
+                submittedAt: "2026-11-22T00:00:00.000Z",
+                createdAt: "2026-11-22T00:00:00.000Z",
+                updatedAt: "2026-11-22T00:00:00.000Z",
+              },
+            ],
+          },
+          error: undefined,
+        };
+      }
+      return { data: { page: 1, pageSize: 100, totalItems: 0, totalPages: 1, items: [] }, error: undefined };
+    });
+
+    renderWithQuery(<ReviewQueuePage />);
+    const tab = await screen.findByRole("tab", {
+      name: messages.review.tabWithCount(messages.review.questionsTab, 6),
+    });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("opens the exams tab of the review queue when the URL asks for it", async () => {
+    mocks.auth.me.role = "head";
+    mocks.searchId = "";
+    mocks.searchExtra = "tab=exams";
+    mocks.apiGet.mockResolvedValue({
+      data: { page: 1, pageSize: 20, totalItems: 0, totalPages: 1, items: [] },
+      error: undefined,
+    });
+
+    renderWithQuery(<ReviewQueuePage />);
+    const tab = await screen.findByRole("tab", { name: messages.review.examsTab });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(tab.getAttribute("aria-controls")).toBe(screen.getByRole("tabpanel", { name: messages.review.examsTab }).id);
+    await waitFor(() => expect(mocks.apiGet.mock.calls.map(([p]) => p)).toContain("/review/exam-versions"));
+    expect(mocks.apiGet.mock.calls.map(([p]) => p)).not.toContain("/review/questions");
+  });
+
+  it("disables approve with a visible reason until the whole checklist is ticked", async () => {
+    mocks.auth.me.role = "head";
+    const submittedAt = "2026-11-22T00:00:00.000Z";
+    mocks.apiGet.mockResolvedValue({
+      data: {
+        id: mocks.searchId,
+        subjectId: "s1",
+        topicId: "t1",
+        departmentId: "d1",
+        grade: 10,
+        type: "MultipleChoice",
+        difficulty: "Recognition",
+        stem: "Checklist stem",
+        payload: {
+          options: [
+            { label: "A", text: "1" },
+            { label: "B", text: "2" },
+            { label: "C", text: "3" },
+            { label: "D", text: "4" },
+          ],
+          correctLabel: "A",
+        },
+        explanation: null,
+        status: "Submitted",
+        revision: 1,
+        source: "Manual",
+        aiVerification: "NotChecked",
+        aiVerificationNote: null,
+        aiReviewedByAuthor: false,
+        createdBy: { id: "other", fullName: "Author" },
+        submittedAt,
+        createdAt: submittedAt,
+        updatedAt: submittedAt,
+      },
+      error: undefined,
+    });
+
+    renderWithQuery(<ReviewQuestionPage />);
+    const approve = (await screen.findByRole("button", { name: messages.review.approve })) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    const describedBy = approve.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const reason = document.getElementById(describedBy as string);
+    expect(reason?.textContent).toBe(messages.review.checklistRequired);
+    expect(reason?.classList.contains("sr-only")).toBe(false);
+
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      fireEvent.click(checkbox);
+    }
+    expect(approve.disabled).toBe(false);
+    expect(approve.getAttribute("aria-describedby")).toBeNull();
   });
 });

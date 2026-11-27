@@ -47,6 +47,22 @@ public sealed class ExamsHttpTests
     }
 
     [Fact]
+    public async Task Exam_summary_serializes_latest_version_fields_and_unpublished_number_as_explicit_null()
+    {
+        using var app = new ExamsTestFactory();
+        using var client = app.CreateClient(); client.DefaultRequestHeaders.Authorization = new("Bearer", app.Token());
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/exams/{app.Management.Exam.Id}");
+        var listed = (await client.GetFromJsonAsync<JsonElement>("/api/v1/exams")).GetProperty("items")[0];
+        foreach (var body in new[] { detail, listed })
+        {
+            Assert.Equal(app.Management.Version.Id, body.GetProperty("latestVersionId").GetGuid());
+            Assert.Equal("Draft", body.GetProperty("latestVersionStatus").GetString());
+            Assert.True(body.TryGetProperty("publishedVersionNo", out var published));
+            Assert.Equal(JsonValueKind.Null, published.ValueKind);
+        }
+    }
+
+    [Fact]
     public async Task Routes_dispatch_actors_inputs_and_review_tokens_with_flat_OpenAPI_response_shapes()
     {
         using var app = new ExamsTestFactory(); using var client = app.CreateClient();
@@ -194,11 +210,16 @@ public sealed class ExamsTestFactory : AuthTestFactory
 
 public sealed class FakeExams : IExamManagement
 {
-    public ExamView Exam { get; } = new(Guid.NewGuid(), "Synthetic exam", Guid.NewGuid(), 10, AuthTestFactory.DepartmentId,
-        new QuestionUser(AuthTestFactory.Teacher.Id, "Synthetic"), 1, null, DateTime.UtcNow, DateTime.UtcNow);
+    private readonly Guid versionId = Guid.NewGuid();
+    public ExamView Exam { get; }
     public ExamVersionView Version { get; }
-    public FakeExams() => Version = new(new(Guid.NewGuid(), Exam.Id, Exam.Title, Exam.SubjectId, Exam.Grade, Exam.DepartmentId,
-        Exam.CreatedBy, 1, "Draft", 45, 0, 0, null, null, null, null, null, null, null, Exam.CreatedAt, Exam.UpdatedAt), [], []);
+    public FakeExams()
+    {
+        Exam = new(Guid.NewGuid(), "Synthetic exam", Guid.NewGuid(), 10, AuthTestFactory.DepartmentId,
+            new QuestionUser(AuthTestFactory.Teacher.Id, "Synthetic"), 1, null, versionId, "Draft", null, DateTime.UtcNow, DateTime.UtcNow);
+        Version = new(new(versionId, Exam.Id, Exam.Title, Exam.SubjectId, Exam.Grade, Exam.DepartmentId,
+            Exam.CreatedBy, 1, "Draft", 45, 0, 0, null, null, null, null, null, null, null, Exam.CreatedAt, Exam.UpdatedAt), [], []);
+    }
     public ExamException? Error { get; set; }
     public int Calls { get; private set; }
     public Guid Actor { get; private set; }

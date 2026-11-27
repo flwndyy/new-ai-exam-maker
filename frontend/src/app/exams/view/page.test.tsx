@@ -95,7 +95,10 @@ function examDetail(createdBy: string, versions: object[]) {
     departmentId: DEPT,
     createdBy: { id: createdBy, fullName: "Tác giả" },
     latestVersionNo: 2,
+    latestVersionId: "V2",
+    latestVersionStatus: "Draft",
     publishedVersionId: null,
+    publishedVersionNo: null,
     createdAt: "2026-11-23T00:00:00Z",
     updatedAt: "2026-11-23T00:00:00Z",
     versions,
@@ -274,6 +277,77 @@ describe("ExamViewPage", () => {
     expect(confirm).toHaveBeenCalledWith(messages.exams.confirmDiscard);
     expect(mocks.replace).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+
+  it("shows the unsaved marker on the board and keeps Save reachable from the board actions", async () => {
+    const v2 = summary("V2", 2, "Draft");
+    setupApi({
+      exam: examDetail(ME, [v2]),
+      versions: { V2: { status: 200, body: { ...v2, items: [versionItem("q1", "Câu một", 1, 1)], warnings: [] } } },
+    });
+    mocks.search = "id=E1&vid=V2";
+    renderPage();
+    const points = await screen.findByLabelText(`${messages.exams.pointsLabel} 1`);
+    expect(screen.queryByText(messages.exams.unsavedChanges)).toBeNull();
+    fireEvent.change(points, { target: { value: "3" } });
+    expect(await screen.findByText(messages.exams.unsavedChanges)).toBeTruthy();
+    const board = document.querySelector("[data-surface='board']") as HTMLElement;
+    expect(within(board).getByRole("button", { name: messages.exams.save })).toBeTruthy();
+    expect(within(board).getByRole("button", { name: messages.exams.submit })).toBeTruthy();
+  });
+
+  it.each([
+    ["Draft", [messages.exams.save, messages.exams.submit]],
+    ["Rejected", [messages.exams.createVersion, messages.exams.archive, messages.exams.save, messages.exams.submit]],
+  ])("board buttons for a %s version follow the visual order in the DOM (keyboard order)", async (status, expected) => {
+    const v1 = summary("V1", 1, status);
+    setupApi({
+      exam: examDetail(ME, [v1]),
+      versions: { V1: { status: 200, body: { ...v1, items: [versionItem("q1", "Câu một", 1, 1)], warnings: [] } } },
+    });
+    mocks.search = "id=E1&vid=V1";
+    renderPage();
+    await screen.findByLabelText(`${messages.exams.pointsLabel} 1`);
+    const board = document.querySelector("[data-surface='board']") as HTMLElement;
+    const names = within(board)
+      .getAllByRole("button")
+      .map((b) => b.textContent ?? "");
+    const positions = expected.map((name) => names.indexOf(name));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(board.innerHTML).not.toMatch(/order-[0-9]/);
+  });
+
+  it("clicking Save on the board sends the PUT", async () => {
+    const v2 = summary("V2", 2, "Draft");
+    setupApi({
+      exam: examDetail(ME, [v2]),
+      versions: { V2: { status: 200, body: { ...v2, items: [versionItem("q1", "Câu một", 1, 1)], warnings: [] } } },
+    });
+    mocks.apiPut.mockReturnValue(ok({ ...v2, items: [versionItem("q1", "Câu một", 1, 1)], warnings: [] }));
+    mocks.search = "id=E1&vid=V2";
+    renderPage();
+    fireEvent.change(await screen.findByLabelText(`${messages.exams.pointsLabel} 1`), { target: { value: "3" } });
+    const board = document.querySelector("[data-surface='board']") as HTMLElement;
+    const save = within(board).getByRole("button", { name: messages.exams.save });
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(mocks.apiPut).toHaveBeenCalledWith("/exam-versions/{vid}", expect.objectContaining({ params: { path: { vid: "V2" } } })),
+    );
+  });
+
+  it("keeps the h1 name equal to the title, also while editing it", async () => {
+    const v1 = summary("V1", 1, "Approved");
+    setupApi({ exam: examDetail(ME, [v1]), versions: { V1: { status: 200, body: { ...v1, items: [], warnings: [] } } } });
+    renderPage();
+    const edit = await screen.findByRole("button", { name: messages.exams.editTitle });
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Đề Hóa");
+    expect(screen.getByRole("heading", { level: 1 }).contains(edit)).toBe(false);
+    fireEvent.click(edit);
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1.textContent).toBe("Đề Hóa");
+    expect(h1.querySelector("form, input, button")).toBeNull();
   });
 
   it("switching version replaces the vid in the URL", async () => {

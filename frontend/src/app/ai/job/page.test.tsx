@@ -210,11 +210,41 @@ describe("AI job page", () => {
       [Q2]: question(Q2),
     });
     renderPage();
-    expect(await screen.findByText(messages.ai.summary(2, 1, 1))).toBeTruthy();
+    expect(await screen.findByText(messages.ai.reviewProgress(1, 2))).toBeTruthy();
     const headings = screen.getAllByText(/^Câu \d$/).map((el) => el.textContent);
     expect(headings).toEqual(["Câu 1", "Câu 2"]);
     expect(screen.getByText(/Stem b1/)).toBeTruthy();
     expect(screen.getByText(/Stem b2/)).toBeTruthy();
+  });
+
+  it("summarises a succeeded job with dropped duplicates and review progress in one success notice", async () => {
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1, Q2], duplicatesDropped: 1 }))], {
+      [Q1]: question(Q1, { aiReviewedByAuthor: true }),
+      [Q2]: question(Q2),
+    });
+    renderPage();
+    const summary = await screen.findByText(messages.ai.summary(2, 1));
+    const notice = summary.closest('[role="status"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain(messages.ai.reviewProgress(1, 2));
+  });
+
+  it("offers regenerate from the header with a crumb back to the AI page", async () => {
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))], { [Q1]: question(Q1) });
+    renderPage();
+    const regenerate = await screen.findByRole("link", { name: messages.ai.regenerate });
+    expect(regenerate.closest('[data-surface="board"]')).not.toBeNull();
+    const crumb = screen.getByRole("link", { name: messages.nav.ai });
+    expect(crumb.getAttribute("href")).toMatch(/^\/ai\/?$/);
+  });
+
+  it("tags a Disagree question and gives its card a red border", async () => {
+    setupApi([() => ok(job("Succeeded", { questionIds: [Q1] }))], {
+      [Q1]: question(Q1, { aiVerification: "Disagree" }),
+    });
+    renderPage();
+    const tag = await screen.findByText(new RegExp(messages.ai.disagreeWarning));
+    expect(tag.closest("article")?.className).toContain("border-rej");
   });
 
   it("flags a Disagree verification with its note", async () => {
@@ -235,7 +265,7 @@ describe("AI job page", () => {
     });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: messages.questions.markReviewed }));
-    await waitFor(() => expect(screen.getByText(messages.ai.summary(1, 0, 1))).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(messages.ai.reviewProgress(1, 1))).toBeTruthy());
     expect(mocks.apiPost).toHaveBeenCalledWith("/questions/{id}/mark-reviewed", { params: { path: { id: Q1 } } });
     expect(screen.getByText(messages.ai.reviewed)).toBeTruthy();
   });
@@ -331,7 +361,7 @@ describe("AI job page", () => {
     renderPage();
     expect(await screen.findByText(messages.ai.questionUnavailable)).toBeTruthy();
     expect(await screen.findByText(/Stem b2/)).toBeTruthy();
-    expect(screen.getByText(messages.ai.summary(1, 0, 0))).toBeTruthy();
+    expect(screen.getByText(messages.ai.reviewProgress(0, 1))).toBeTruthy();
   });
 
   it("shows a retryable error, not 'unavailable', when a question fails to load transiently", async () => {
