@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageFrontendObjects",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "${FRONTEND_BUCKET_OBJECT_ARN}"
+    },
+    {
+      "Sid": "SendFrontendDeployCommand",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}::document/AWS-RunShellScript",
+        "${EC2_INSTANCE_ARN}"
+      ]
+    },
+    {
+      "Sid": "ReadFrontendDeployCommandResult",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
+    }
+  ]
+}

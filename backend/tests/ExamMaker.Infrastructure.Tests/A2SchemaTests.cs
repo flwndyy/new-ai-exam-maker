@@ -1,0 +1,118 @@
+using ExamMaker.Domain.Ai;
+using ExamMaker.Domain.Auditing;
+using ExamMaker.Domain.Exams;
+using ExamMaker.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+
+namespace ExamMaker.Infrastructure.Tests;
+
+public class A2SchemaTests
+{
+    private static ExamMakerDbContext CreateContext() =>
+        new(new DbContextOptionsBuilder<ExamMakerDbContext>()
+            .UseNpgsql("Host=localhost;Database=model_tests").Options);
+
+    [Fact]
+    public void Model_contains_every_table_in_section_eight()
+    {
+        using var context = CreateContext();
+        var tables = context.Model.GetEntityTypes().Select(x => x.GetTableName()).Order().ToArray();
+        string[] expected = ["ai_generation_jobs", "ai_usage_daily", "audit_logs", "departments",
+            "exam_version_questions", "exam_versions", "exams", "question_set_items", "question_sets",
+            "questions", "subjects", "topics", "users"];
+        Assert.Equal(expected.Order(), tables);
+        Assert.All(context.Model.GetEntityTypes().SelectMany(x => x.GetForeignKeys()),
+            key => Assert.Equal(DeleteBehavior.Restrict, key.DeleteBehavior));
+    }
+
+    [Fact]
+    public void Published_versions_have_a_database_unique_filter()
+    {
+        using var context = CreateContext();
+        var entity = context.Model.FindEntityType(typeof(ExamVersion))!;
+        Assert.Contains(entity.GetIndexes(), index => index.IsUnique
+            && index.GetFilter() == "status = 'Published'"
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(ExamVersion.ExamId)]));
+        Assert.Contains(entity.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name)
+                .SequenceEqual([nameof(ExamVersion.ExamId), nameof(ExamVersion.VersionNo)]));
+    }
+
+    [Fact]
+    public void Snapshot_and_usage_keys_preserve_order_and_prevent_duplicates()
+    {
+        using var context = CreateContext();
+        var item = context.Model.FindEntityType(typeof(ExamVersionQuestion))!;
+        Assert.Equal(new[] { "ExamVersionId", "SortOrder" }, item.FindPrimaryKey()!.Properties.Select(x => x.Name));
+        Assert.Contains(item.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual(["ExamVersionId", "SourceQuestionId"]));
+        Assert.Equal("numeric", item.FindProperty(nameof(ExamVersionQuestion.Points))!.GetColumnType());
+        Assert.Equal("jsonb", item.FindProperty(nameof(ExamVersionQuestion.PayloadSnapshot))!.GetColumnType());
+        Assert.True(item.FindProperty(nameof(ExamVersionQuestion.PayloadSnapshot))!.IsNullable);
+        var version = context.Model.FindEntityType(typeof(ExamVersion))!;
+        Assert.Equal("numeric", version.FindProperty(nameof(ExamVersion.TotalPoints))!.GetColumnType());
+        var usage = context.Model.FindEntityType(typeof(AiUsageDaily))!;
+        Assert.Equal(new[] { "UserId", "Date" }, usage.FindPrimaryKey()!.Properties.Select(x => x.Name));
+        Assert.Equal("bigint", usage.FindProperty(nameof(AiUsageDaily.Tokens))!.GetColumnType());
+    }
+
+    [Theory]
+    [InlineData(typeof(Exam), "ck_exams_grade")]
+    [InlineData(typeof(ExamVersion), "ck_exam_versions_status")]
+    [InlineData(typeof(ExamVersionQuestion), "ck_exam_version_questions_points")]
+    [InlineData(typeof(AiUsageDaily), "ck_ai_usage_daily_counters")]
+    [InlineData(typeof(AuditLog), "ck_audit_logs_entity_type")]
+    public void New_tables_keep_their_check_constraints(Type type, string name)
+    {
+        using var context = CreateContext();
+        var model = context.GetService<IDesignTimeModel>().Model;
+        Assert.Contains(model.FindEntityType(type)!.GetCheckConstraints(), check => check.Name == name);
+    }
+
+    [Fact]
+    public void AuditLog_factory_handles_department_snapshots_and_secondary_move_flags()
+    {
+        var deptId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var entityId = Guid.NewGuid();
+        var log = AuditLog.Create(actorId, "Subject", entityId, deptId, "UpdateSubject", note: "Before: A; after: B", isSecondary: true);
+
+        Assert.NotEqual(Guid.Empty, log.Id);
+        Assert.Equal(actorId, log.ActorId);
+        Assert.Equal("Subject", log.EntityType);
+        Assert.Equal(entityId, log.EntityId);
+        Assert.Equal(deptId, log.DepartmentId);
+        Assert.True(log.IsSecondary);
+        Assert.Equal("UpdateSubject", log.Action);
+        Assert.Equal("Before: A; after: B", log.Note);
+
+        // Public constructors and mutable public setters must remain disallowed so writers cannot omit departmentId.
+        Assert.Empty(typeof(AuditLog).GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
+
+        // Verify shared note formatters and cross-department redaction stay in sync.
+        var deptA = Guid.Parse("10000000-0000-0000-0000-000000000001");
+        var deptB = Guid.Parse("10000000-0000-0000-0000-000000000002");
+        var subjA = Guid.Parse("20000000-0000-0000-0000-000000000001");
+        var subjB = Guid.Parse("20000000-0000-0000-0000-000000000002");
+
+        var userNote = $"role teacher->head; {AuditLog.FormatUserDepartmentChange(deptA, deptB)}";
+        var redactedUserForA = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(userNote, deptA);
+        var redactedUserForB = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(userNote, deptB);
+        Assert.Equal($"role teacher->head; department {deptA}->other", redactedUserForA);
+        Assert.Equal($"role teacher->head; department other->{deptB}", redactedUserForB);
+
+        var topicNote = $"Before: Chapter; {AuditLog.FormatCatalogSubject(subjA)}; grade=10; order=1; {AuditLog.FormatCatalogDepartment(deptA)}; after: Chapter; {AuditLog.FormatCatalogSubject(subjB)}; grade=10; order=1; {AuditLog.FormatCatalogDepartment(deptB)}";
+        var redactedTopicForA = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(topicNote, deptA);
+        var redactedTopicForB = ExamMaker.Infrastructure.Auditing.AuditLogReader.RedactCrossDepartmentTokens(topicNote, deptB);
+        Assert.Contains($"subject={subjA}; grade=10; order=1; department={deptA}", redactedTopicForA);
+        Assert.Contains("subject=other; grade=10; order=1; department=other", redactedTopicForA);
+        Assert.DoesNotContain(subjB.ToString(), redactedTopicForA);
+        Assert.DoesNotContain(deptB.ToString(), redactedTopicForA);
+        Assert.Contains("subject=other; grade=10; order=1; department=other", redactedTopicForB);
+        Assert.Contains($"subject={subjB}; grade=10; order=1; department={deptB}", redactedTopicForB);
+        Assert.DoesNotContain(subjA.ToString(), redactedTopicForB);
+        Assert.DoesNotContain(deptA.ToString(), redactedTopicForB);
+    }
+}

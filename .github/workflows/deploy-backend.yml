@@ -1,0 +1,240 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "infra/deploy/deploy-on-ec2.sh"
+      - "infra/deploy/rollback-backend.sh"
+      - "infra/deploy/setup-backend-cd.sh"
+      - "infra/deploy/verify-backend-cd.sh"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+    inputs:
+      create_rds_snapshot:
+        description: "Take a manual RDS snapshot before running EF Core migrations (recommended for large schema changes)"
+        type: boolean
+        required: false
+        default: false
+      skip_migrations:
+        description: "Skip EF Core migration bundle execution (emergency code-only hotfix)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-backend-main
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  AWS_BACKEND_ROLE_ARN: ${{ vars.AWS_BACKEND_ROLE_ARN }}
+  BACKEND_ARTIFACTS_BUCKET: ${{ vars.BACKEND_ARTIFACTS_BUCKET }}
+  EC2_TAG_NAME: aem-exammaker-ec2
+  RDS_INSTANCE_ID: exammaker-dev-pg
+  SSM_PREFIX: /exammaker/dev
+  KEEP_RELEASES: "5"
+
+jobs:
+  deploy:
+    name: Deploy backend
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate deployment configuration
+        run: |
+          test -n "$AWS_BACKEND_ROLE_ARN" || { echo "ERROR: Repository variable AWS_BACKEND_ROLE_ARN is required." >&2; exit 1; }
+          test -n "$BACKEND_ARTIFACTS_BUCKET" || { echo "ERROR: Repository variable BACKEND_ARTIFACTS_BUCKET is required." >&2; exit 1; }
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: backend/global.json
+
+      - name: Restore backend solution for linux-arm64
+        working-directory: backend
+        run: dotnet restore ExamMaker.slnx -r linux-arm64
+
+      - name: Publish API and Worker (self-contained linux-arm64)
+        working-directory: backend
+        run: |
+          rm -rf dist/release
+          mkdir -p dist/release
+          dotnet publish src/ExamMaker.Api/ExamMaker.Api.csproj \
+            -c Release -r linux-arm64 --self-contained true --no-restore \
+            -o dist/release
+          dotnet publish src/ExamMaker.Worker/ExamMaker.Worker.csproj \
+            -c Release -r linux-arm64 --self-contained true --no-restore \
+            -o dist/release
+
+      - name: Build EF Core migration bundle (linux-arm64)
+        working-directory: backend
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.4
+          export PATH="$HOME/.dotnet/tools:$PATH"
+          dotnet ef migrations bundle \
+            --project src/ExamMaker.Infrastructure/ExamMaker.Infrastructure.csproj \
+            --startup-project src/ExamMaker.Infrastructure/ExamMaker.Infrastructure.csproj \
+            --configuration Release \
+            --self-contained \
+            --target-runtime linux-arm64 \
+            --output dist/release/efbundle \
+            --force
+          chmod +x dist/release/efbundle
+
+      - name: Package release archive and checksum
+        id: package
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
+          RELEASE_ID="${TIMESTAMP}-${SHORT_SHA}"
+          ARCHIVE_NAME="exammaker-backend-${RELEASE_ID}.tar.gz"
+          S3_KEY="backend/releases/${ARCHIVE_NAME}"
+
+          cp infra/deploy/deploy-on-ec2.sh backend/dist/release/deploy-on-ec2.sh
+          chmod +x backend/dist/release/deploy-on-ec2.sh
+
+          mkdir -p dist-artifacts
+          tar -czf "dist-artifacts/${ARCHIVE_NAME}" -C backend/dist/release .
+          (cd dist-artifacts && sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256")
+
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+          echo "archive_name=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "s3_key=${S3_KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Save release archive as GitHub artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backend-release-${{ steps.package.outputs.release_id }}
+          path: |
+            dist-artifacts/${{ steps.package.outputs.archive_name }}
+            dist-artifacts/${{ steps.package.outputs.archive_name }}.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_BACKEND_ROLE_ARN }}
+          role-session-name: backend-deploy-${{ github.run_id }}
+
+      - name: Upload release archive and checksum to S3
+        run: |
+          aws s3 cp "dist-artifacts/${{ steps.package.outputs.archive_name }}" \
+            "s3://${BACKEND_ARTIFACTS_BUCKET}/${{ steps.package.outputs.s3_key }}" \
+            --only-show-errors
+          aws s3 cp "dist-artifacts/${{ steps.package.outputs.archive_name }}.sha256" \
+            "s3://${BACKEND_ARTIFACTS_BUCKET}/${{ steps.package.outputs.s3_key }}.sha256" \
+            --only-show-errors
+
+      - name: Optional manual pre-migration RDS snapshot
+        if: github.event_name == 'workflow_dispatch' && inputs.create_rds_snapshot == true
+        run: |
+          SNAP_ID="exammaker-dev-pre-mig-${GITHUB_SHA::8}-$(date -u +%Y%m%d%H%M%S)"
+          echo "==> Creating manual pre-migration RDS snapshot '${SNAP_ID}'..."
+          aws rds create-db-snapshot \
+            --region "$AWS_REGION" \
+            --db-instance-identifier "$RDS_INSTANCE_ID" \
+            --db-snapshot-identifier "$SNAP_ID" >/dev/null
+          echo "==> Waiting for RDS snapshot '${SNAP_ID}' to become available..."
+          aws rds wait db-snapshot-available \
+            --region "$AWS_REGION" \
+            --db-snapshot-identifier "$SNAP_ID"
+          echo "==> Snapshot '${SNAP_ID}' is available."
+
+      - name: Deploy release and run migrations on EC2 via SSM Run Command
+        env:
+          RELEASE_ID: ${{ steps.package.outputs.release_id }}
+          S3_KEY: ${{ steps.package.outputs.s3_key }}
+          SKIP_MIGRATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_migrations == true && '1' || '0' }}
+        run: |
+          EC2_INSTANCE_ID="$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --filters "Name=tag:Name,Values=${EC2_TAG_NAME}" "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[] | sort_by(@, &LaunchTime) | [-1].InstanceId" \
+            --output text | tr -d '\r\n')"
+
+          if [ -z "$EC2_INSTANCE_ID" ] || [ "$EC2_INSTANCE_ID" = "None" ]; then
+            echo "ERROR: No running EC2 instance found with tag Name='${EC2_TAG_NAME}' in ${AWS_REGION}." >&2
+            exit 1
+          fi
+
+          BOOTSTRAP_CMD="$(cat <<EOF
+          set -euo pipefail
+          TMP_WORK=\$(mktemp -d /tmp/exammaker-deploy.XXXXXXXXXX)
+          trap 'rm -rf "\$TMP_WORK"' EXIT
+          aws s3 cp "s3://${BACKEND_ARTIFACTS_BUCKET}/${S3_KEY}" "\$TMP_WORK/release.tar.gz" --region "${AWS_REGION}" --only-show-errors
+          aws s3 cp "s3://${BACKEND_ARTIFACTS_BUCKET}/${S3_KEY}.sha256" "\$TMP_WORK/release.tar.gz.sha256" --region "${AWS_REGION}" --only-show-errors
+          EXPECTED_SHA=\$(awk '{print \$1}' "\$TMP_WORK/release.tar.gz.sha256")
+          ACTUAL_SHA=\$(sha256sum "\$TMP_WORK/release.tar.gz" | awk '{print \$1}')
+          if [ "\$EXPECTED_SHA" != "\$ACTUAL_SHA" ]; then
+            echo "ERROR: SHA256 checksum mismatch for release archive." >&2
+            exit 1
+          fi
+          tar -xzf "\$TMP_WORK/release.tar.gz" -C "\$TMP_WORK" ./deploy-on-ec2.sh
+          chmod +x "\$TMP_WORK/deploy-on-ec2.sh"
+          ARCHIVE_PATH="\$TMP_WORK/release.tar.gz" \
+          RELEASE_ID="${RELEASE_ID}" \
+          AWS_REGION="${AWS_REGION}" \
+          SSM_PREFIX="${SSM_PREFIX}" \
+          SKIP_MIGRATIONS="${SKIP_MIGRATIONS}" \
+          KEEP_RELEASES="${KEEP_RELEASES}" \
+            "\$TMP_WORK/deploy-on-ec2.sh"
+          EOF
+          )"
+
+          PARAMS_JSON="$(jq -nc --arg cmd "$BOOTSTRAP_CMD" '{commands: [$cmd]}')"
+          COMMAND_ID="$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --comment "Deploy backend release ${RELEASE_ID}" \
+            --timeout-seconds 600 \
+            --parameters "$PARAMS_JSON" \
+            --query "Command.CommandId" \
+            --output text | tr -d '\r\n')"
+
+          echo "==> Dispatched SSM Run Command (Release: ${RELEASE_ID}). Polling status..."
+          STATUS="Pending"
+          for _ in $(seq 1 120); do
+            sleep 5
+            INV_JSON="$(aws ssm get-command-invocation \
+              --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --output json 2>/dev/null || echo '{"Status":"Pending"}')"
+            STATUS="$(jq -r '.Status // "Pending"' <<<"$INV_JSON")"
+            case "$STATUS" in
+              Pending|InProgress|Delayed)
+                continue
+                ;;
+              *)
+                break
+                ;;
+            esac
+          done
+
+          echo "==> SSM Command finished with status: ${STATUS}"
+          echo "--- STDOUT ---"
+          jq -r '.StandardOutputContent // ""' <<<"$INV_JSON"
+          STDERR_CONTENT="$(jq -r '.StandardErrorContent // ""' <<<"$INV_JSON")"
+          if [ -n "$STDERR_CONTENT" ]; then
+            echo "--- STDERR ---" >&2
+            printf '%s\n' "$STDERR_CONTENT" >&2
+          fi
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "ERROR: Backend deployment failed on EC2 (SSM status=${STATUS})." >&2
+            exit 1
+          fi

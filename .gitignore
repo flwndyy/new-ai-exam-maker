@@ -449,6 +449,10 @@ secrets.json
 .terraform/
 cdk.out/
 .aws-sam/
+.worktrees/
+
+# Codex/Superpowers local session state; never commit generated metadata.
+.superpowers/
 
 # ---- Khác ----
 .DS_Store
@@ -457,3 +461,8 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# ---- Agent skills installed per developer (not project source) ----
+.agents/skills/
+.claude/skills/
+skills-lock.json

@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ExamMaker.Domain/ExamMaker.Domain.csproj" />
+    <Project Path="src/ExamMaker.Application/ExamMaker.Application.csproj" />
+    <Project Path="src/ExamMaker.Infrastructure/ExamMaker.Infrastructure.csproj" />
+    <Project Path="src/ExamMaker.Api/ExamMaker.Api.csproj" />
+    <Project Path="src/ExamMaker.Worker/ExamMaker.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ExamMaker.Api.Tests/ExamMaker.Api.Tests.csproj" />
+    <Project Path="tests/ExamMaker.Application.Tests/ExamMaker.Application.Tests.csproj" />
+    <Project Path="tests/ExamMaker.Infrastructure.Tests/ExamMaker.Infrastructure.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/ExamMaker.Bootstrap/ExamMaker.Bootstrap.csproj" />
+  </Folder>
+</Solution>

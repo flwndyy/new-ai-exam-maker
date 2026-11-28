@@ -13,7 +13,7 @@ Tài liệu ngữ cảnh gốc của dự án: @docs/context.md — đọc trư�
 
 - Không commit key, connection string, `.env`, `.pem`, account ID/ARN thật, Elastic IP, dữ liệu đề thi/giáo viên thật, tài liệu có bản quyền (SGK...).
 - Lộ secret → phải thu hồi key, không chỉ xoá commit.
-- Không push thẳng vào `main`; làm trên nhánh `feat/...`, `fix/...`, `infra/...` rồi mở PR (chỉ Squash merge).
+- Không push thẳng vào `main`; làm trên nhánh `feat/...`, `fix/...`, `infra/...` tách từ `dev`, mở PR vào `dev` (Squash). Từ `dev` lên `main` bằng PR **Merge commit** (xem `CONTRIBUTING.md`).
 - Không tự commit/push khi chưa được yêu cầu.
 - Code, tên biến/bảng, commit message, tên nhánh: tiếng Anh. Tài liệu trong `docs/` và giao diện: tiếng Việt.
 - Đổi quy tắc nghiệp vụ/kiến trúc → sửa `docs/context.md` trước rồi mới code.

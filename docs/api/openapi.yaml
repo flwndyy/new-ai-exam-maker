@@ -1,0 +1,2466 @@
+openapi: 3.1.0
+
+info:
+  title: AI Exam Maker API
+  version: 0.1.0
+  summary: Hợp đồng API v1 — frontend và backend cùng bám file này.
+  description: |
+    Nguồn nghiệp vụ: `docs/context.md` (mục 3 phân quyền, mục 4 state machine, mục 8 dữ liệu, mục 9 API).
+    Mâu thuẫn giữa file này và `context.md` → sửa `context.md` trước, rồi cập nhật file này trong cùng PR.
+
+    ## Quy ước chung
+    - Base path `/api/v1`, cùng domain với frontend (không cần CORS).
+    - Xác thực: `Authorization: Bearer <Cognito access token>`. Quyền thật được kiểm ở backend theo **user trong DB**
+      (role, tổ, `is_active`, ownership), không chỉ theo claim token (context 3.1, 3.3).
+    - ID là GUID; thời gian là UTC ISO-8601 (`2026-11-18T09:30:00Z`); frontend tự đổi sang múi giờ Việt Nam.
+    - Tên trường JSON dùng `camelCase`; giá trị enum dùng `PascalCase`, riêng `Role` dùng chữ thường (trùng nhóm Cognito).
+    - Thao tác chuyển trạng thái là `POST /{resource}/{id}/{action}` (không có `PUT status`); trả về tài nguyên sau khi đổi.
+      Mọi chuyển trạng thái đều ghi `audit_logs` và đi qua state machine ở backend.
+    - Điểm (`points`, `totalPoints`) là số thập phân; backend lưu `numeric`, không dùng float để cộng dồn.
+
+    ## Lỗi (`application/problem+json`, RFC 9457)
+    Mọi phản hồi lỗi (4xx/5xx) đều là `Problem`. Frontend phân nhánh theo `code` (ổn định), không theo `title`/`detail`
+    (có thể đổi lời). Lỗi validate (400) có thêm `errors` theo tên trường.
+
+    | HTTP | Khi nào |
+    |---|---|
+    | 400 | Body/query sai định dạng hoặc không qua validate (`ValidationFailed`) |
+    | 401 | Thiếu/sai/hết hạn token; hoặc `sub` chưa có trong `users`; hoặc user bị vô hiệu hóa |
+    | 403 | Đúng người dùng nhưng sai vai trò / tổ / ownership, hoặc tự duyệt nội dung của mình |
+    | 404 | Không tồn tại **hoặc** người gọi không được phép biết là tồn tại |
+    | 409 | Sai trạng thái (state machine), xung đột ràng buộc (vd đã có bản `Published`) |
+    | 429 | Rate limit hoặc hết quota AI (kèm `Retry-After`) |
+    | 5xx | Lỗi hệ thống; `traceId` dùng để tra log |
+
+    ## Phân trang
+    Danh sách dùng `page` (từ 1, mặc định 1) và `pageSize` (mặc định 20, tối đa 100). Phản hồi là
+    `{ items, page, pageSize, totalItems, totalPages }`. Sắp xếp mặc định cố định theo từng endpoint (ghi ở mô tả);
+    chưa hỗ trợ tham số `sort` trong MVP.
+
+    ## Đã tự đặt khi soạn (cần DEV-A review)
+    Những điểm context.md chưa nói rõ, được đánh dấu `[GIẢ ĐỊNH]` trong mô tả để dễ tìm.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+
+servers:
+  - url: /api/v1
+    description: Cùng origin với frontend (CloudFront `/api/*` → EC2)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Me
+  - name: Catalog
+    description: Danh mục môn/chương/tổ — mọi vai trò đã đăng nhập, chỉ đọc.
+  - name: Questions
+  - name: Review
+    description: Hàng đợi duyệt của Head/Admin.
+  - name: QuestionSets
+  - name: AI
+  - name: Exams
+  - name: ExamVersions
+  - name: Publishing
+  - name: Export
+  - name: Audit
+  - name: Admin
+
+paths:
+  # ───────────────────────────── Me ─────────────────────────────
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      summary: Thông tin người dùng hiện tại
+      description: Đọc từ DB theo `sub` của token. Frontend dùng `role`/`departmentId` chỉ để ẩn/hiện UI.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ───────────────────────────── Catalog ─────────────────────────────
+  /departments:
+    get:
+      tags: [Catalog]
+      operationId: listDepartments
+      summary: Danh sách tổ chuyên môn
+      description: Sắp xếp theo `name`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepartmentPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /subjects:
+    get:
+      tags: [Catalog]
+      operationId: listSubjects
+      summary: Danh sách môn học
+      description: Sắp xếp theo `name`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: departmentId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubjectPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /topics:
+    get:
+      tags: [Catalog]
+      operationId: listTopics
+      summary: Danh sách chương
+      description: Sắp xếp theo `grade`, rồi `sortOrder`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: subjectId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: grade
+          in: query
+          schema: { $ref: '#/components/schemas/Grade' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ───────────────────────────── Questions ─────────────────────────────
+  /questions:
+    get:
+      tags: [Questions]
+      operationId: listQuestions
+      summary: Danh sách câu hỏi
+      description: |
+        Phạm vi nhìn thấy (context 3.2): câu `Draft`/`Rejected`/`Submitted` của chính mình; câu `Approved` cùng tổ;
+        Admin xem tất cả. Sắp xếp `createdAt` giảm dần.
+        Dùng `mine=true` cho "Ngân hàng của tôi".
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/QuestionStatus' }
+        - name: subjectId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: topicId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: grade
+          in: query
+          schema: { $ref: '#/components/schemas/Grade' }
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/QuestionType' }
+        - name: difficulty
+          in: query
+          schema: { $ref: '#/components/schemas/Difficulty' }
+        - name: mine
+          in: query
+          description: Chỉ câu do chính người gọi tạo.
+          schema: { type: boolean, default: false }
+        - name: aiJobId
+          in: query
+          description: '[GIẢ ĐỊNH] Lọc câu do một job AI sinh ra — để rà soát kết quả job.'
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Questions]
+      operationId: createQuestion
+      summary: Tạo câu hỏi thủ công
+      description: |
+        Tạo câu `source=Manual`, trạng thái `Draft`, `revision=1`; `departmentId` lấy từ môn học và cố định từ lúc tạo.
+        Câu do AI sinh được tạo bởi worker, không qua endpoint này. Admin không tạo nội dung (403).
+        `payload` phải khớp `type` (context 8.2), sai → 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Question' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /questions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Questions]
+      operationId: getQuestion
+      summary: Chi tiết câu hỏi
+      description: Tác giả xem câu của mình; câu Approved dùng chung trong tổ; Head được xem Submitted cùng tổ để duyệt; Admin xem tất cả. Ngoài phạm vi hoặc không tồn tại trả 404.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Question' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Questions]
+      operationId: updateQuestion
+      summary: Sửa câu hỏi
+      description: |
+        Chỉ người tạo; chỉ khi `Draft`, `Rejected` hoặc `Approved`.
+        - `Draft`/`Rejected`: sửa tại chỗ (giữ trạng thái).
+        - `Approved`: sửa nội dung → quay về `Draft` và `revision + 1`; đề đã snapshot không bị ảnh hưởng.
+          Nếu còn đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; PUT không đổi nội dung vẫn thành công.
+        - `Submitted`: 409 (`InvalidStateTransition`) — phải `withdraw` trước.
+        Không đổi môn/chương/khối khi câu nằm trong phiên bản đề Draft/Rejected/Submitted (409 QuestionReferenced).
+        Sửa nội dung câu AI làm `aiReviewedByAuthor` về `false` và `aiVerification` về `NotChecked`. [GIẢ ĐỊNH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Question' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Questions]
+      operationId: deleteQuestion
+      summary: Xóa câu hỏi
+      description: |
+        Chỉ người tạo, chỉ câu `Draft`/`Rejected` và **chưa được đề nào tham chiếu**
+        (`409 QuestionReferenced`). Liên kết question_set_items được xóa trong cùng transaction trước khi xóa câu,
+        kể cả bộ của người khác. Câu đã `Approved` dùng `archive`.
+      responses:
+        '204': { description: Đã xóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/submit:
+    post:
+      tags: [Questions]
+      operationId: submitQuestion
+      summary: Gửi duyệt câu hỏi
+      description: |
+        `Draft`/`Rejected` → `Submitted`; chỉ người tạo.
+        Câu `source=AI` bắt buộc đã `mark-reviewed`, nếu chưa → 409 `AiReviewRequired`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/withdraw:
+    post:
+      tags: [Questions]
+      operationId: withdrawQuestion
+      summary: Rút lại câu hỏi đã gửi duyệt
+      description: '`Submitted` → `Draft`; chỉ người tạo, trước khi có quyết định.'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/approve:
+    post:
+      tags: [Questions]
+      operationId: approveQuestion
+      summary: Duyệt câu hỏi
+      description: |
+        `Submitted` → `Approved`. Head: cùng tổ và không phải câu của mình. Admin: không phải câu của mình.
+        Duyệt câu của chính mình → 403 `SelfReview`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionApproveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/reject:
+    post:
+      tags: [Questions]
+      operationId: rejectQuestion
+      summary: Từ chối câu hỏi
+      description: '`Submitted` → `Rejected`; `note` (lý do) bắt buộc. Cùng quy tắc ai được duyệt với `approve`.'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionRejectRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/archive:
+    post:
+      tags: [Questions]
+      operationId: archiveQuestion
+      summary: Lưu trữ câu hỏi
+      description: |
+        `Approved` → `Archived` (không khôi phục trong MVP). Teacher: câu của mình; Head: của mình hoặc cùng tổ; Admin: tất cả.
+        Còn phiên bản đề Draft/Rejected/Submitted tham chiếu thì trả 409 QuestionReferenced; snapshot Approved/Published/Archived không chặn archive nguồn.
+        Các đề đã snapshot không bị ảnh hưởng.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /questions/{id}/mark-reviewed:
+    post:
+      tags: [Questions]
+      operationId: markQuestionReviewed
+      summary: Đánh dấu "Đã rà soát" câu do AI sinh
+      description: |
+        Đặt `aiReviewedByAuthor=true`. Chỉ người tạo, chỉ câu `source=AI` đang `Draft`/`Rejected`.
+        Nếu cờ đã true thì trả nguyên dữ liệu, không thêm audit hoặc đổi updatedAt.
+        Điều kiện bắt buộc trước khi `submit` (context 4.1.2).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200': { $ref: '#/components/responses/QuestionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Review queue ─────────────────────────────
+  /review/questions:
+    get:
+      tags: [Review]
+      operationId: listReviewQuestions
+      summary: Hàng đợi duyệt câu hỏi
+      description: |
+        Câu `Submitted` trong tổ của Head (tất cả với Admin), **loại trừ câu do chính người xem tạo**.
+        Teacher gọi → 403. Sắp xếp `submittedAt` tăng dần (gửi trước, duyệt trước).
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: subjectId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: topicId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /review/exam-versions:
+    get:
+      tags: [Review]
+      operationId: listReviewExamVersions
+      summary: Hàng đợi duyệt phiên bản đề
+      description: Cùng quy tắc với `/review/questions`, áp cho phiên bản đề `Submitted`. Sắp xếp `submittedAt` tăng dần.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: subjectId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ───────────────────────────── Question sets ─────────────────────────────
+  /question-sets:
+    get:
+      tags: [QuestionSets]
+      operationId: listQuestionSets
+      summary: Danh sách bộ câu hỏi của tôi
+      description: Chỉ bộ do người gọi tạo. Sắp xếp `updatedAt` giảm dần.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionSetPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [QuestionSets]
+      operationId: createQuestionSet
+      summary: Tạo bộ câu hỏi
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionSetInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionSet' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /question-sets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [QuestionSets]
+      operationId: getQuestionSet
+      summary: Chi tiết bộ câu hỏi (kèm các câu)
+      description: |
+        Câu hỏi trong bộ chỉ hiện nếu người gọi vẫn được xem câu đó theo quyền hiện tại
+        (vd câu `Approved` của tổ khác sẽ bị ẩn khỏi `items`).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionSetDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [QuestionSets]
+      operationId: updateQuestionSet
+      summary: Đổi tên bộ câu hỏi
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionSetInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionSet' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [QuestionSets]
+      operationId: deleteQuestionSet
+      summary: Xóa bộ câu hỏi
+      description: Chỉ xóa bộ và liên kết, **không** xóa câu hỏi.
+      responses:
+        '204': { description: Đã xóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /question-sets/{id}/items:
+    post:
+      tags: [QuestionSets]
+      operationId: addQuestionSetItem
+      summary: Thêm câu hỏi vào bộ
+      description: |
+        Câu phải là câu của mình hoặc `Approved` cùng tổ. Thêm câu đã có trong bộ → 409 `Conflict` (không lỗi âm thầm).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionSetItemInput' }
+      responses:
+        '200':
+          description: Bộ sau khi thêm
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuestionSetDetail' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /question-sets/{id}/items/{questionId}:
+    delete:
+      tags: [QuestionSets]
+      operationId: removeQuestionSetItem
+      summary: Bỏ câu hỏi khỏi bộ
+      description: >-
+        [GIẢ ĐỊNH] context 9.1 ghi `DELETE /question-sets/{id}/items`; ở đây đặt `questionId` vào path
+        vì DELETE kèm body không đáng tin qua proxy/CloudFront. Cập nhật context.md cùng PR.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: questionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Đã bỏ }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── AI ─────────────────────────────
+  /ai/generate:
+    post:
+      tags: [AI]
+      operationId: generateQuestions
+      summary: Yêu cầu AI sinh câu hỏi (bất đồng bộ)
+      description: |
+        Kiểm rate limit + quota **trước** khi tạo job; tạo `ai_generation_jobs(Queued)` rồi gửi SQS.
+        Trả `202` ngay; frontend polling `GET /ai/jobs/{id}`. Chỉ Teacher/Head (Admin → 403).
+        Vượt quota/rate limit → 429 với `code` = `QuotaExceeded` hoặc `RateLimited`.
+        `note` được coi là dữ liệu không tin cậy (context 4.1.1), giới hạn độ dài.
+        Môn không thuộc tổ chuyên môn của người gửi → 400 với `errors.subjectId`, không tiêu quota.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiGenerateRequest' }
+      responses:
+        '202':
+          description: Đã nhận, job ở trạng thái `Queued`
+          headers:
+            Location:
+              description: URL của job
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiJob' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /ai/jobs:
+    get:
+      tags: [AI]
+      operationId: listAiJobs
+      summary: Danh sách job AI của tôi
+      description: "Teacher/Head: job do mình yêu cầu. Admin: tất cả. Sắp xếp `createdAt` giảm dần."
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/AiJobStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiJobPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /ai/jobs/{id}:
+    get:
+      tags: [AI]
+      operationId: getAiJob
+      summary: Trạng thái một job AI
+      description: |
+        Dùng để polling (backoff phía client). Khi `Succeeded`, `questionIds` liệt kê các câu `Draft` đã sinh;
+        khi `Failed`, `errorCode`/`errorMessage` giải thích lý do. Có thể rời trang và quay lại xem.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ai/quota:
+    get:
+      tags: [AI]
+      operationId: getAiQuota
+      summary: Quota AI còn lại của tôi hôm nay
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiQuota' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ───────────────────────────── Exams ─────────────────────────────
+  /exams:
+    get:
+      tags: [Exams]
+      operationId: listExams
+      summary: Danh sách đề
+      description: |
+        Đề của mình, đề trong tổ (Head), đề có phiên bản `Published` cùng tổ (xem thêm 3.2); Admin tất cả.
+        Sắp xếp `updatedAt` giảm dần.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: subjectId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: grade
+          in: query
+          schema: { $ref: '#/components/schemas/Grade' }
+        - name: mine
+          in: query
+          schema: { type: boolean, default: false }
+        - name: hasPublished
+          in: query
+          description: '[GIẢ ĐỊNH] Chỉ đề đang có một phiên bản `Published`.'
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Exams]
+      operationId: createExam
+      summary: Tạo đề mới
+      description: |
+        [GIẢ ĐỊNH] Tạo `Exam` **kèm phiên bản 1 ở trạng thái `Draft`** (rỗng, `durationMinutes` mặc định 45);
+        frontend không phải gọi thêm bước tạo phiên bản đầu. `departmentId` lấy từ môn học.
+        Admin không tạo nội dung (403).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamCreate' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamDetail' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exams/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Exams]
+      operationId: getExam
+      summary: Chi tiết đề (metadata + tóm tắt các phiên bản)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Exams]
+      operationId: updateExam
+      summary: Sửa metadata của đề
+      description: |
+        [GIẢ ĐỊNH] Chỉ đổi `title`. Môn/khối cố định sau khi tạo vì ràng buộc ghép câu (context 8.3) phụ thuộc chúng.
+        Chỉ người tạo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamDetail' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exams/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [ExamVersions]
+      operationId: listExamVersions
+      summary: Các phiên bản của một đề
+      description: Sắp xếp `versionNo` giảm dần. Không kèm danh sách câu (dùng `GET /exam-versions/{vid}`).
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamVersionSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [ExamVersions]
+      operationId: createExamVersion
+      summary: Tạo phiên bản mới từ phiên bản cũ
+      description: |
+        Sao chép từ `fromVersionId` (mặc định: phiên bản mới nhất) thành phiên bản `Draft` với `versionNo` kế tiếp.
+        Chỉ người tạo đề. Nếu đề đang có phiên bản `Draft` chưa gửi → 409 `Conflict` [GIẢ ĐỊNH, tránh nhiều bản nháp song song].
+        Nội dung sao chép là nội dung **hiện tại** của câu nguồn (không phải snapshot cũ); câu nguồn đã `Archived` bị loại và báo trong `warnings`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamVersionCreate' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamVersion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}:
+    parameters:
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [ExamVersions]
+      operationId: getExamVersion
+      summary: Chi tiết phiên bản đề (kèm câu hỏi)
+      description: |
+        - `Draft`/`Rejected`: `items` là nội dung **hiện tại** của câu nguồn;
+          `currentSourceRevision` khác `sourceRevision` → frontend cảnh báo "câu nguồn đã đổi".
+        - Từ `Submitted` trở đi: `items` là **snapshot** bất biến (`currentSourceRevision = null`).
+        Response này chứa đáp án; chỉ trả cho người được phép xem đáp án (3.2). Người chỉ được xem đề học sinh
+        (vd Teacher xem đề `Published` của tổ) dùng `student-sheet`, gọi endpoint này → 403.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamVersion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [ExamVersions]
+      operationId: updateExamVersion
+      summary: Chọn/sắp xếp câu, đặt điểm, thời gian
+      description: |
+        Chỉ khi `Draft`/`Rejected`, chỉ người tạo; trạng thái khác → 409 `InvalidStateTransition`.
+        Body **thay toàn bộ** danh sách câu; thứ tự mảng = `sortOrder` (bắt đầu từ 1). `Rejected` được mở khóa khi sửa [giữ trạng thái đến khi `submit`].
+        Mỗi câu phải là câu của mình hoặc `Approved` cùng tổ, cùng môn/khối với đề (context 8.3) → sai thì 400 `ValidationFailed`.
+        `totalPoints` do server tính (tổng `points`); không nhận từ client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamVersionUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamVersion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/submit:
+    post:
+      tags: [ExamVersions]
+      operationId: submitExamVersion
+      summary: Gửi duyệt phiên bản đề (chụp snapshot)
+      description: |
+        `Draft`/`Rejected` → `Submitted`. Mọi câu phải đang `Approved`, nếu không → 409 `QuestionsNotApproved`
+        kèm `invalidQuestionIds`. Đề phải có ít nhất 1 câu và `points > 0`.
+        Server sao chép nội dung/đáp án/lời giải/điểm vào snapshot và tính `contentHash`; mỗi lần submit lại chụp snapshot mới.
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/withdraw:
+    post:
+      tags: [ExamVersions]
+      operationId: withdrawExamVersion
+      summary: Rút lại phiên bản đã gửi duyệt
+      description: '`Submitted` → `Draft` (mở khóa); chỉ người tạo, trước khi có quyết định.'
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/approve:
+    post:
+      tags: [ExamVersions]
+      operationId: approveExamVersion
+      summary: Duyệt phiên bản đề
+      description: '`Submitted` → `Approved`. Quy tắc ai duyệt như câu hỏi (cùng tổ, không phải của mình; Admin duyệt thay).'
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/reject:
+    post:
+      tags: [ExamVersions]
+      operationId: rejectExamVersion
+      summary: Từ chối phiên bản đề
+      description: '`Submitted` → `Rejected`; `note` bắt buộc.'
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/archive:
+    post:
+      tags: [ExamVersions]
+      operationId: archiveExamVersion
+      summary: Lưu trữ phiên bản đề
+      description: '`Approved`/`Rejected` → `Archived` (không khôi phục). Teacher: của mình; Head: cùng tổ; Admin: tất cả.'
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Publishing ─────────────────────────────
+  /exam-versions/{vid}/publish:
+    post:
+      tags: [Publishing]
+      operationId: publishExamVersion
+      summary: Publish phiên bản đề (Admin)
+      description: |
+        `Approved` → `Published` (bất biến). Nếu đề đã có phiên bản `Published` khác → 409 `PublishedVersionExists`
+        (phải `unpublish` bản cũ trước). Chỉ Admin.
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/unpublish:
+    post:
+      tags: [Publishing]
+      operationId: unpublishExamVersion
+      summary: Thu hồi phiên bản đã publish (Admin)
+      description: '`Published` → `Approved` (không có trạng thái `Unpublished`; lịch sử nằm ở `audit_logs`). Chỉ Admin.'
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': { $ref: '#/components/responses/ExamVersionOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Export ─────────────────────────────
+  /exam-versions/{vid}/student-sheet:
+    get:
+      tags: [Export]
+      operationId: getStudentSheet
+      summary: Dữ liệu đề học sinh (không đáp án)
+      description: |
+        Đọc từ **snapshot**; chỉ phiên bản `Submitted`/`Approved`/`Published`. Trạng thái khác (`Draft`/`Rejected` chưa có snapshot,
+        `Archived` có thể thiếu snapshot hoặc chưa từng được duyệt) hoặc snapshot thiếu → 409 `ExportUnavailable`.
+        Schema `StudentSheet` **không có** trường đáp án/lời giải — server chỉ chép trường được phép theo từng dạng câu (whitelist),
+        tách hẳn khỏi `AnswerKey` để đáp án không lọt vào đề học sinh.
+        Quyền: Admin tất cả; tác giả đề của mình; Head mọi đề cùng tổ; Teacher phiên bản `Published` cùng tổ.
+        Không thấy phiên bản → 404 (không lộ phiên bản riêng tư).
+        Frontend dựng trang xem trước có CSS in + KaTeX và xuất PDF bằng trình duyệt; tên trường (header) do frontend cấu hình.
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentSheet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /exam-versions/{vid}/answer-key:
+    get:
+      tags: [Export]
+      operationId: getAnswerKey
+      summary: Dữ liệu đáp án/lời giải cho giáo viên
+      description: |
+        Đọc từ snapshot, quyền chặt hơn: đề của mình (Teacher), đề trong tổ hoặc của mình (Head), tất cả (Admin).
+        Không thấy phiên bản → 404; người chỉ được xem đề học sinh → 403.
+        Chỉ phiên bản `Submitted`/`Approved`/`Published`; trạng thái khác hoặc snapshot thiếu → 409 `ExportUnavailable`.
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnswerKey' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Audit ─────────────────────────────
+  /audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAuditLogs
+      summary: Nhật ký audit
+      description: |
+        Head: giới hạn trong tổ của mình theo snapshot `departmentId` tại thời điểm sự kiện (lịch sử cũ trước migration của `User`, `Subject`, `Topic`, `QuestionSet`, `AiJob` và thực thể đã xóa trước migration có `departmentId = null` nên chỉ Admin xem được; `actor.fullName` luôn giữ tên người thực hiện sự kiện dù sau đó người đó chuyển tổ). Admin: tất cả. Teacher → 403. Sắp xếp `createdAt` giảm dần.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: entityType
+          in: query
+          schema: { $ref: '#/components/schemas/AuditEntityType' }
+        - name: entityId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: actorId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          description: Từ thời điểm (UTC, gồm `>=`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính từ `00:00:00Z`).
+          schema:
+            oneOf:
+              - { type: string, format: date-time }
+              - { type: string, format: date }
+        - name: to
+          in: query
+          description: Đến thời điểm (UTC, gồm `<=`, cho phép `from == to`; chỉ nhận timestamp ISO-8601 `YYYY-MM-DDTHH:mm[:ss[.fffffff]][Z|±HH:mm]` — dấu `+` của offset phải URL-encode thành `%2B` — hoặc ngày `YYYY-MM-DD` tính đến `23:59:59.9999999Z`).
+          schema:
+            oneOf:
+              - { type: string, format: date-time }
+              - { type: string, format: date }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ───────────────────────────── Admin ─────────────────────────────
+  /admin/users:
+    get:
+      tags: [Admin]
+      operationId: adminListUsers
+      summary: Danh sách người dùng
+      description: Chỉ Admin. Sắp xếp `fullName`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: role
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: departmentId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: isActive
+          in: query
+          schema: { type: boolean }
+        - name: q
+          in: query
+          description: Tìm theo email hoặc họ tên (chứa, không phân biệt hoa thường).
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      operationId: adminCreateUser
+      summary: Tạo người dùng
+      description: |
+        Gọi Cognito `AdminCreateUser` + `AdminAddUserToGroup` rồi ghi bảng `users`; lỗi giữa chừng thì đền bù bước đã làm (3.3).
+        [GIẢ ĐỊNH] **API không nhận/trả mật khẩu**: Cognito sinh mật khẩu tạm và gửi email mời; người dùng đổi mật khẩu
+        ở lần đăng nhập đầu qua Managed Login. Email đã tồn tại → 409 `Conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUserCreate' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/users/reconcile:
+    post:
+      tags: [Admin]
+      operationId: adminReconcileUsers
+      summary: Đối soát nhóm Cognito với `users.role`
+      description: Chỉ đọc và báo lệch, **không tự sửa**. Chỉ Admin.
+      responses:
+        '200':
+          description: Kết quả đối soát
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconcileReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Admin]
+      operationId: adminGetUser
+      summary: Chi tiết người dùng
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Admin]
+      operationId: adminUpdateUser
+      summary: Sửa người dùng
+      description: |
+        Đổi `role`/`departmentId`/`email` cập nhật DB **và** Cognito (group/thuộc tính); có hiệu lực ngay ở API.
+        `isActive=false` → `AdminDisableUser` + `AdminUserGlobalSignOut`; `true` → `AdminEnableUser`.
+        Admin không tự hạ vai trò/vô hiệu hóa chính mình (409 `Conflict`). [GIẢ ĐỊNH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUserUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin]
+      operationId: adminDeactivateUser
+      summary: Vô hiệu hóa người dùng
+      description: |
+        [GIẢ ĐỊNH] **Xóa mềm**: tương đương `PUT isActive=false` (không xóa hàng, vì còn tham chiếu từ câu hỏi/đề/audit).
+        Idempotent.
+      responses:
+        '204': { description: Đã vô hiệu hóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/departments:
+    post:
+      tags: [Admin]
+      operationId: adminCreateDepartment
+      summary: Tạo tổ chuyên môn
+      description: Đọc danh sách qua `GET /departments` (Catalog).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/departments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [Admin]
+      operationId: adminUpdateDepartment
+      summary: Sửa tổ chuyên môn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin]
+      operationId: adminDeleteDepartment
+      summary: Xóa tổ chuyên môn
+      description: Chỉ khi chưa có user/môn/câu hỏi/đề nào tham chiếu, nếu không → 409 `Conflict`.
+      responses:
+        '204': { description: Đã xóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/subjects:
+    post:
+      tags: [Admin]
+      operationId: adminCreateSubject
+      summary: Tạo môn học
+      description: Đọc danh sách qua `GET /subjects` (Catalog).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subject' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/subjects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [Admin]
+      operationId: adminUpdateSubject
+      summary: Sửa môn học
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subject' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin]
+      operationId: adminDeleteSubject
+      summary: Xóa môn học
+      description: Chỉ khi chưa có chương/câu hỏi/đề nào tham chiếu, nếu không → 409 `Conflict`.
+      responses:
+        '204': { description: Đã xóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/topics:
+    post:
+      tags: [Admin]
+      operationId: adminCreateTopic
+      summary: Tạo chương
+      description: Đọc danh sách qua `GET /topics` (Catalog).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TopicInput' }
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Topic' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/topics/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [Admin]
+      operationId: adminUpdateTopic
+      summary: Sửa chương
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TopicInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Topic' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Admin]
+      operationId: adminDeleteTopic
+      summary: Xóa chương
+      description: Chỉ khi chưa có câu hỏi nào tham chiếu, nếu không → 409 `Conflict`.
+      responses:
+        '204': { description: Đã xóa }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/ai-usage:
+    get:
+      tags: [Admin]
+      operationId: adminGetAiUsage
+      summary: Thống kê sử dụng AI
+      description: |
+        Từ `ai_usage_daily`, một dòng cho mỗi (user, ngày). Sắp xếp `date` giảm dần.
+        `from`/`to` là cận gồm, định dạng `YYYY-MM-DD` (UTC). `estimatedCostUsd` = tổng chi phí các job của user
+        theo `model_id` (bảng giá cấu hình `AiPricing:Models`, USD/1M token input/output), gom vào ngày UTC của
+        `COALESCE(finished_at, started_at, created_at)`; model không có giá tính 0.
+        `estimatedCostUsd` là ước tính theo bảng giá cấu hình, **không phải hóa đơn AWS**.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: userId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiUsagePage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito access token (Authorization Code + PKCE).
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: Trang, bắt đầu từ 1.
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      description: Số phần tử mỗi trang.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VersionId:
+      name: vid
+      in: path
+      required: true
+      description: ID của phiên bản đề (`ExamVersion.id`).
+      schema: { type: string, format: uuid }
+
+  responses:
+    QuestionOk:
+      description: Câu hỏi sau khi chuyển trạng thái
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Question' }
+    ExamVersionOk:
+      description: Phiên bản đề sau khi chuyển trạng thái
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ExamVersion' }
+    ValidationError:
+      description: 400 — dữ liệu không hợp lệ
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/validation-failed
+            title: Dữ liệu không hợp lệ
+            status: 400
+            code: ValidationFailed
+            traceId: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00
+            errors:
+              stem: ['Nội dung câu hỏi không được để trống']
+              payload.correctLabel: ['Phải khớp một nhãn trong options']
+    Unauthorized:
+      description: 401 — chưa đăng nhập, token sai/hết hạn, user chưa có trong hệ thống hoặc bị vô hiệu hóa
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/unauthorized
+            title: Chưa xác thực
+            status: 401
+            code: Unauthorized
+    Forbidden:
+      description: 403 — không đủ quyền (vai trò, tổ, ownership, tự duyệt nội dung của mình)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/self-review
+            title: Không thể duyệt nội dung do chính mình tạo
+            status: 403
+            code: SelfReview
+    NotFound:
+      description: 404 — không tồn tại hoặc người gọi không được biết là tồn tại
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/not-found
+            title: Không tìm thấy
+            status: 404
+            code: NotFound
+    Conflict:
+      description: 409 — sai trạng thái hoặc vi phạm ràng buộc
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/questions-not-approved
+            title: Có câu hỏi chưa được duyệt
+            status: 409
+            code: QuestionsNotApproved
+            invalidQuestionIds: ['3fa85f64-5717-4562-b3fc-2c963f66afa6']
+    TooManyRequests:
+      description: 429 — rate limit hoặc hết quota AI
+      headers:
+        Retry-After:
+          description: Số giây nên chờ trước khi thử lại.
+          schema: { type: integer, minimum: 0 }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://exammaker.example/problems/quota-exceeded
+            title: Đã hết quota AI hôm nay
+            status: 429
+            code: QuotaExceeded
+
+  schemas:
+    # ───────────── Lỗi & phân trang ─────────────
+    Problem:
+      type: object
+      description: RFC 9457 `application/problem+json`, có thêm các trường mở rộng của dự án.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: URI định danh loại lỗi (không cần truy cập được).
+        title:
+          type: string
+          description: Tóm tắt ngắn, tiếng Việt, hiển thị được cho người dùng.
+        status:
+          type: integer
+          description: Trùng mã HTTP.
+        detail:
+          type: string
+          description: Giải thích cụ thể cho lần gặp này.
+        instance:
+          type: string
+          description: Đường dẫn request gây lỗi.
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        traceId:
+          type: string
+          description: Dùng để tra log; không chứa dữ liệu nhạy cảm.
+        errors:
+          type: object
+          description: Chỉ có khi `code=ValidationFailed`. Mọi controller dùng tên JSON camelCase và bỏ tiền tố $. (ví dụ subjectId hoặc payload), gồm cả catalog, admin user và AI. Lỗi nội dung payload câu hỏi dùng chung key payload, không trả đường dẫn từng phần tử.
+          additionalProperties:
+            type: array
+            items: { type: string }
+        references:
+          $ref: '#/components/schemas/QuestionReferencePage'
+        invalidQuestionIds:
+          type: array
+          description: Chỉ có khi `code=QuestionsNotApproved`.
+          items: { type: string, format: uuid }
+      additionalProperties: true
+
+    QuestionReferencePage:
+      type: object
+      description: Chỉ có cho 409 QuestionReferenced do sửa/archive; metadata liên hệ chủ đề, không trả nội dung hoặc tiêu đề đề.
+      required: [totalItems, items]
+      properties:
+        totalItems: { type: integer, minimum: 1 }
+        items:
+          type: array
+          maxItems: 20
+          minItems: 1
+          items:
+            type: object
+            required: [examId, versionId, status, createdBy]
+            properties:
+              examId: { type: string, format: uuid }
+              versionId: { type: string, format: uuid }
+              status: { type: string, enum: [Draft, Rejected, Submitted] }
+              createdBy: { $ref: '#/components/schemas/UserRef' }
+
+    ErrorCode:
+      type: string
+      description: |
+        Mã lỗi máy đọc được, ổn định. Có thể **thêm** mã mới; client phải xử lý mã lạ như lỗi chung theo HTTP status.
+        - `ValidationFailed` (400) · `Unauthorized` (401) · `Forbidden` (403) · `NotFound` (404) · `Conflict` (409)
+        - `SelfReview` (403): tự duyệt nội dung của mình
+        - `InvalidStateTransition` (409): thao tác không hợp lệ ở trạng thái hiện tại
+        - `AiReviewRequired` (409): câu AI chưa bấm "Đã rà soát"
+        - `QuestionReferenced` (409): tham chiếu đề chặn sửa/archive/xóa; lỗi sửa/archive kèm references để liên hệ chủ đề.
+        - `QuestionsNotApproved` (409): gửi duyệt đề khi còn câu chưa `Approved`
+        - `PublishedVersionExists` (409): đề đã có phiên bản `Published` khác
+        - `ExportUnavailable` (409): phiên bản không xuất được (chỉ `Submitted`/`Approved`/`Published` có snapshot đầy đủ)
+        - `QuotaExceeded` (429) · `RateLimited` (429)
+        - `InternalError` (500)
+      enum:
+        - ValidationFailed
+        - Unauthorized
+        - Forbidden
+        - NotFound
+        - Conflict
+        - SelfReview
+        - InvalidStateTransition
+        - AiReviewRequired
+        - QuestionReferenced
+        - QuestionsNotApproved
+        - PublishedVersionExists
+        - ExportUnavailable
+        - QuotaExceeded
+        - RateLimited
+        - InternalError
+
+    PageMeta:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        totalItems: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+
+    # ───────────── Kiểu dùng chung ─────────────
+    Role:
+      type: string
+      enum: [teacher, head, admin]
+    Grade:
+      type: integer
+      enum: [10, 11, 12]
+    QuestionType:
+      type: string
+      enum: [MultipleChoice, TrueFalse, ShortAnswer, Essay]
+      description: MVP bắt buộc `MultipleChoice`; model dữ liệu hỗ trợ đủ 4 dạng.
+    Difficulty:
+      type: string
+      enum: [Recognition, Understanding, Application, HighApplication]
+    QuestionStatus:
+      type: string
+      enum: [Draft, Submitted, Approved, Rejected, Archived]
+    QuestionSource:
+      type: string
+      enum: [AI, Manual]
+    AiVerification:
+      type: string
+      enum: [NotChecked, Agree, Disagree]
+    ExamVersionStatus:
+      type: string
+      enum: [Draft, Submitted, Approved, Rejected, Published, Archived]
+    AiJobStatus:
+      type: string
+      enum: [Queued, Running, Succeeded, Failed]
+    AuditEntityType:
+      type: string
+      enum: [Question, Exam, ExamVersion, QuestionSet, User, AiJob, Department, Subject, Topic]
+
+    UserRef:
+      type: object
+      required: [id, fullName]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+
+    # ───────────── Me & Catalog ─────────────
+    Me:
+      type: object
+      required: [id, email, fullName, role, departmentId, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        departmentId:
+          type: [string, 'null']
+          format: uuid
+          description: '`null` chỉ với Admin không thuộc tổ.'
+        departmentName: { type: [string, 'null'] }
+        isActive: { type: boolean }
+
+    Department:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    DepartmentInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+    DepartmentPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Department' }
+
+    Subject:
+      type: object
+      required: [id, name, departmentId]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        departmentId: { type: string, format: uuid }
+    SubjectInput:
+      type: object
+      required: [name, departmentId]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        departmentId: { type: string, format: uuid }
+    SubjectPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Subject' }
+
+    Topic:
+      type: object
+      required: [id, subjectId, grade, name, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        name: { type: string }
+        sortOrder: { type: integer }
+    TopicInput:
+      type: object
+      required: [subjectId, grade, name, sortOrder]
+      properties:
+        subjectId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        name: { type: string, minLength: 1, maxLength: 300 }
+        sortOrder: { type: integer, minimum: 0 }
+    TopicPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Topic' }
+
+    # ───────────── Payload theo dạng câu (context 8.2) ─────────────
+    MultipleChoicePayload:
+      type: object
+      description: Đúng 4 phương án theo thứ tự A, B, C, D; đúng 1 đáp án đúng.
+      required: [options, correctLabel]
+      additionalProperties: false
+      properties:
+        options:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: object
+            required: [label, text]
+            additionalProperties: false
+            properties:
+              label: { type: string, enum: [A, B, C, D] }
+              text: { type: string, minLength: 1, maxLength: 10000 }
+        correctLabel: { type: string, enum: [A, B, C, D] }
+    TrueFalsePayload:
+      type: object
+      description: Đúng 4 ý theo thứ tự a, b, c, d; mỗi ý có đúng/sai.
+      required: [statements]
+      additionalProperties: false
+      properties:
+        statements:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: object
+            required: [label, text, isTrue]
+            additionalProperties: false
+            properties:
+              label: { type: string, enum: [a, b, c, d] }
+              text: { type: string, minLength: 1, maxLength: 10000 }
+              isTrue: { type: boolean }
+    ShortAnswerPayload:
+      type: object
+      description: 1–20 đáp án chấp nhận; `tolerance` chỉ cho `answerType=number`. Đáp án number là chuỗi thập phân hữu hạn theo dạng -?[0-9]+([.,][0-9]+)?, không khoảng trắng, dấu cộng, số mũ hoặc phân cách hàng nghìn.
+      required: [answerType, acceptedAnswers]
+      additionalProperties: false
+      properties:
+        answerType: { type: string, enum: [number, text] }
+        acceptedAnswers:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 10000 }
+        unit: { type: [string, 'null'], maxLength: 10000 }
+        tolerance:
+          type: [number, 'null']
+          minimum: 0
+          description: Dùng chung quy tắc lưu số với points; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Không làm tròn qua decimal.
+    EssayPayload:
+      type: object
+      description: Tổng điểm rubric = điểm câu (khi đưa vào đề).
+      required: [modelAnswer, rubric]
+      additionalProperties: false
+      properties:
+        modelAnswer: { type: string, maxLength: 10000 }
+        rubric:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            required: [criterion, points]
+            additionalProperties: false
+            properties:
+              criterion: { type: string, minLength: 1, maxLength: 10000 }
+              points:
+                type: number
+                exclusiveMinimum: 0
+                description: Điểm dương theo JSON gốc; số mũ tường minh trong [-1000, 1000], dạng thập phân sau jsonb chuẩn hóa tối đa 1024 ký tự. Kiểm cùng quy tắc với tolerance, không giới hạn riêng độ dài token khoa học hoặc làm tròn qua decimal.
+    QuestionPayload:
+      description: |
+        Cấu trúc theo `type` của câu chứa nó. Backend validate `payload` khớp `type`
+        (sai → 400 `ValidationFailed` với `errors["payload"]`). Khác với `oneOf` thuần, client nên
+        chọn schema theo `type`, không đoán theo hình dạng.
+      oneOf:
+        - $ref: '#/components/schemas/MultipleChoicePayload'
+        - $ref: '#/components/schemas/TrueFalsePayload'
+        - $ref: '#/components/schemas/ShortAnswerPayload'
+        - $ref: '#/components/schemas/EssayPayload'
+
+    # ───────────── Questions ─────────────
+    QuestionInput:
+      type: object
+      additionalProperties: false
+      required: [subjectId, topicId, grade, type, difficulty, stem, payload]
+      properties:
+        subjectId: { type: string, format: uuid }
+        topicId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        stem:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          description: Markdown + LaTeX. Là dữ liệu không tin cậy — frontend sanitize khi hiển thị.
+        payload: { $ref: '#/components/schemas/QuestionPayload' }
+        explanation:
+          type: [string, 'null']
+          maxLength: 10000
+          description: Lời giải (Markdown + LaTeX).
+
+    Question:
+      type: object
+      required:
+        - id
+        - subjectId
+        - topicId
+        - departmentId
+        - grade
+        - type
+        - difficulty
+        - stem
+        - payload
+        - status
+        - revision
+        - source
+        - aiVerification
+        - aiReviewedByAuthor
+        - createdBy
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        subjectId: { type: string, format: uuid }
+        topicId: { type: string, format: uuid }
+        departmentId:
+          type: string
+          format: uuid
+          description: Cố định lúc tạo; dùng cho quyền "cùng tổ".
+        grade: { $ref: '#/components/schemas/Grade' }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        stem: { type: string }
+        payload: { $ref: '#/components/schemas/QuestionPayload' }
+        explanation: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/QuestionStatus' }
+        revision:
+          type: integer
+          minimum: 1
+          description: Tăng khi sửa nội dung câu `Approved`.
+        source: { $ref: '#/components/schemas/QuestionSource' }
+        aiJobId: { type: [string, 'null'], format: uuid }
+        aiOrdinal: { type: [integer, 'null'], minimum: 1 }
+        aiVerification: { $ref: '#/components/schemas/AiVerification' }
+        aiVerificationNote: { type: [string, 'null'] }
+        aiReviewedByAuthor:
+          type: boolean
+          description: Đã bấm "Đã rà soát" (chỉ có nghĩa với `source=AI`).
+        createdBy: { $ref: '#/components/schemas/UserRef' }
+        submittedAt: { type: [string, 'null'], format: date-time }
+        reviewedBy:
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        reviewedAt: { type: [string, 'null'], format: date-time }
+        reviewNote: { type: [string, 'null'], description: 'Lý do từ chối (khi `Rejected`).' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    QuestionPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Question' }
+
+    QuestionApproveRequest:
+      type: object
+      required: [submittedAt]
+      additionalProperties: false
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note: { type: [string, 'null'], maxLength: 2000 }
+    QuestionRejectRequest:
+      type: object
+      additionalProperties: false
+      required: [note, submittedAt]
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Lý do từ chối — bắt buộc.
+
+    ApproveRequest:
+      type: object
+      required: [submittedAt]
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note: { type: [string, 'null'], maxLength: 2000 }
+    RejectRequest:
+      type: object
+      required: [note, submittedAt]
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+          description: Thời điểm gửi duyệt đã đọc; so UTC tới mili giây, hỗ trợ JavaScript Date/toISOString. Lượt gửi khác trả 409 Conflict.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Lý do từ chối — bắt buộc.
+
+    # ───────────── Question sets ─────────────
+    QuestionSetInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+    QuestionSet:
+      type: object
+      required: [id, name, itemCount, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        itemCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    QuestionSetDetail:
+      allOf:
+        - $ref: '#/components/schemas/QuestionSet'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Question' }
+    QuestionSetItemInput:
+      type: object
+      required: [questionId]
+      properties:
+        questionId: { type: string, format: uuid }
+    QuestionSetPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/QuestionSet' }
+
+    # ───────────── AI ─────────────
+    AiGenerateRequest:
+      type: object
+      required: [subjectId, topicId, grade, type, difficulty, count]
+      properties:
+        subjectId: { type: string, format: uuid }
+        topicId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        count:
+          type: integer
+          minimum: 1
+          description: Số câu muốn sinh; tối đa theo `AiQuota.maxQuestionsPerJob` (vượt → 400 hoặc 429 `QuotaExceeded`).
+        note:
+          type: [string, 'null']
+          maxLength: 1000
+          description: Ghi chú yêu cầu thêm dạng văn bản ngắn. Dữ liệu không tin cậy (prompt injection).
+    AiJobParams:
+      description: Tham số đã dùng để tạo job (bản sao của `AiGenerateRequest`).
+      allOf:
+        - $ref: '#/components/schemas/AiGenerateRequest'
+    AiJob:
+      type: object
+      required: [id, status, params, attempt, maxAttempts, inputTokens, outputTokens, duplicatesDropped, createdAt, requestedBy]
+      properties:
+        id: { type: string, format: uuid }
+        requestedBy: { $ref: '#/components/schemas/UserRef' }
+        status: { $ref: '#/components/schemas/AiJobStatus' }
+        params: { $ref: '#/components/schemas/AiJobParams' }
+        attempt: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        errorCode:
+          type: [string, 'null']
+          description: Mã lỗi nghiệp vụ của job (vd `InvalidModelOutput`, `ContentRefused`, `Throttled`), khi `Failed`.
+        errorMessage: { type: [string, 'null'] }
+        modelId: { type: [string, 'null'] }
+        promptVersion: { type: [string, 'null'] }
+        inputTokens: { type: integer, minimum: 0 }
+        outputTokens: { type: integer, minimum: 0 }
+        duplicatesDropped:
+          type: integer
+          minimum: 0
+          description: Số câu AI sinh ra bị bỏ vì trùng (trong lô hoặc với ngân hàng cùng môn + chương).
+        questionIds:
+          type: array
+          description: Các câu `Draft` đã sinh, theo `aiOrdinal`; rỗng nếu chưa `Succeeded`.
+          items: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: [string, 'null'], format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    AiJobPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AiJob' }
+    AiQuota:
+      type: object
+      required: [date, jobsLimit, jobsUsed, tokensLimit, tokensUsed, maxQuestionsPerJob, resetsAt]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Ngày tính quota (UTC). [GIẢ ĐỊNH]
+        jobsLimit: { type: integer, minimum: 0 }
+        jobsUsed: { type: integer, minimum: 0 }
+        tokensLimit: { type: integer, minimum: 0 }
+        tokensUsed: { type: integer, minimum: 0 }
+        maxQuestionsPerJob: { type: integer, minimum: 1 }
+        resetsAt: { type: string, format: date-time }
+
+    # ───────────── Exams ─────────────
+    ExamCreate:
+      type: object
+      required: [title, subjectId, grade]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        subjectId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+    ExamUpdate:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+    Exam:
+      type: object
+      required: [id, title, subjectId, grade, departmentId, createdBy, latestVersionNo, latestVersionId, latestVersionStatus, publishedVersionNo, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        subjectId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        departmentId: { type: string, format: uuid }
+        createdBy: { $ref: '#/components/schemas/UserRef' }
+        latestVersionNo: { type: integer, minimum: 1 }
+        latestVersionId:
+          type: string
+          format: uuid
+          description: Phiên bản có `versionNo` lớn nhất trong số phiên bản người xem đọc được.
+        latestVersionStatus: { $ref: '#/components/schemas/ExamVersionStatus' }
+        publishedVersionNo:
+          type: [integer, 'null']
+          minimum: 1
+          description: Số của phiên bản `Published` người xem đọc được; `null` nếu không có.
+        publishedVersionId:
+          type: [string, 'null']
+          format: uuid
+          description: Phiên bản đang `Published` (tối đa một).
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ExamDetail:
+      allOf:
+        - $ref: '#/components/schemas/Exam'
+        - type: object
+          required: [versions]
+          properties:
+            versions:
+              type: array
+              description: Tất cả phiên bản, `versionNo` giảm dần.
+              items: { $ref: '#/components/schemas/ExamVersionSummary' }
+    ExamPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Exam' }
+
+    # ───────────── Exam versions ─────────────
+    ExamVersionCreate:
+      type: object
+      properties:
+        fromVersionId:
+          type: [string, 'null']
+          format: uuid
+          description: Mặc định phiên bản mới nhất của đề.
+    ExamVersionItemInput:
+      type: object
+      required: [sourceQuestionId, points]
+      properties:
+        sourceQuestionId: { type: string, format: uuid }
+        points: { type: number, exclusiveMinimum: 0 }
+    ExamVersionUpdate:
+      type: object
+      required: [durationMinutes, items]
+      properties:
+        durationMinutes: { type: integer, minimum: 1, maximum: 600 }
+        items:
+          type: array
+          maxItems: 200
+          description: Thứ tự mảng = `sortOrder`. Không trùng `sourceQuestionId`.
+          items: { $ref: '#/components/schemas/ExamVersionItemInput' }
+    ExamVersionItem:
+      type: object
+      description: Item giữ metadata liên kết/điểm; nội dung trả null khi người xem không có quyền đọc nguồn Draft/Rejected hoặc bản Archived không có snapshot đầy đủ. Xem warnings của phiên bản.
+      required: [sortOrder, points, sourceQuestionId, sourceRevision, type, difficulty, stem, payload]
+      properties:
+        sortOrder: { type: integer, minimum: 1 }
+        points: { type: number, exclusiveMinimum: 0 }
+        sourceQuestionId: { type: string, format: uuid }
+        sourceRevision:
+          type: integer
+          description: '`revision` của câu nguồn tại thời điểm chọn (Draft) hoặc chụp snapshot (từ Submitted).'
+        currentSourceRevision:
+          type: [integer, 'null']
+          description: |
+            Chỉ có khi `Draft`/`Rejected`: `revision` hiện tại của câu nguồn; khác `sourceRevision` → cảnh báo.
+            Null khi nội dung nguồn không được phép xem, hoặc khi dùng snapshot.
+        type:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionType'
+            - type: 'null'
+        difficulty:
+          oneOf:
+            - $ref: '#/components/schemas/Difficulty'
+            - type: 'null'
+        stem: { type: [string, 'null'], description: 'Nội dung được phép đọc hiện tại hoặc snapshot; null nếu không khả dụng.' }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/QuestionPayload'
+            - type: 'null'
+        explanation: { type: [string, 'null'] }
+    ExamVersionSummary:
+      type: object
+      required: [id, examId, examTitle, subjectId, grade, departmentId, createdBy, versionNo, status, durationMinutes, totalPoints, questionCount, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        examId: { type: string, format: uuid }
+        examTitle: { type: string }
+        subjectId: { type: string, format: uuid }
+        grade: { $ref: '#/components/schemas/Grade' }
+        departmentId: { type: string, format: uuid }
+        createdBy: { $ref: '#/components/schemas/UserRef' }
+        versionNo:
+          type: integer
+          minimum: 1
+          description: Trong MVP, đây cũng là mã đề.
+        status: { $ref: '#/components/schemas/ExamVersionStatus' }
+        durationMinutes: { type: integer, minimum: 1 }
+        totalPoints: { type: number, minimum: 0 }
+        questionCount: { type: integer, minimum: 0 }
+        contentHash:
+          type: [string, 'null']
+          description: Null khi Draft/Rejected hoặc snapshot chưa đầy đủ; các trạng thái còn lại trả hash của snapshot được trả về.
+        submittedAt: { type: [string, 'null'], format: date-time }
+        reviewedBy:
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        reviewedAt: { type: [string, 'null'], format: date-time }
+        reviewNote: { type: [string, 'null'] }
+        publishedBy:
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        publishedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ExamVersion:
+      allOf:
+        - $ref: '#/components/schemas/ExamVersionSummary'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/ExamVersionItem' }
+            warnings:
+              type: array
+              description: Cảnh báo không chặn (vd câu nguồn đã đổi `revision`, hoặc câu bị loại khi tạo phiên bản mới).
+              items:
+                type: object
+                required: [code, message]
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+                  sourceQuestionId: { type: [string, 'null'], format: uuid }
+    ExamVersionSummaryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/ExamVersionSummary' }
+
+    # ───────────── Export (tách riêng đề học sinh và đáp án) ─────────────
+    SheetHeader:
+      type: object
+      required: [examTitle, subjectName, grade, versionNo, durationMinutes, totalPoints]
+      properties:
+        examTitle: { type: string }
+        subjectName: { type: string }
+        departmentName: { type: [string, 'null'] }
+        grade: { $ref: '#/components/schemas/Grade' }
+        versionNo:
+          type: integer
+          description: Mã đề (= `exam_versions.version_no` trong MVP).
+        durationMinutes: { type: integer }
+        totalPoints: { type: number }
+    StudentMultipleChoicePayload:
+      type: object
+      description: Không có `correctLabel`.
+      required: [options]
+      additionalProperties: false
+      properties:
+        options:
+          type: array
+          items:
+            type: object
+            required: [label, text]
+            additionalProperties: false
+            properties:
+              label: { type: string }
+              text: { type: string }
+    StudentTrueFalsePayload:
+      type: object
+      description: Không có `isTrue`.
+      required: [statements]
+      additionalProperties: false
+      properties:
+        statements:
+          type: array
+          items:
+            type: object
+            required: [label, text]
+            additionalProperties: false
+            properties:
+              label: { type: string }
+              text: { type: string }
+    StudentShortAnswerPayload:
+      type: object
+      description: Không có `acceptedAnswers`/`tolerance`.
+      required: [answerType]
+      additionalProperties: false
+      properties:
+        answerType: { type: string, enum: [number, text] }
+        unit: { type: [string, 'null'] }
+    StudentEssayPayload:
+      type: object
+      description: Không có `modelAnswer`/`rubric`.
+      additionalProperties: false
+    StudentSheetItem:
+      type: object
+      required: [number, points, type, stem, payload]
+      additionalProperties: false
+      properties:
+        number: { type: integer, minimum: 1, description: Số thứ tự câu (= `sortOrder`). }
+        points: { type: number }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        stem: { type: string }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/StudentMultipleChoicePayload'
+            - $ref: '#/components/schemas/StudentTrueFalsePayload'
+            - $ref: '#/components/schemas/StudentShortAnswerPayload'
+            - $ref: '#/components/schemas/StudentEssayPayload'
+    StudentSheet:
+      type: object
+      description: Đề học sinh — **không có** đáp án, lời giải, mức độ, `difficulty`, hay thông tin người tạo.
+      required: [header, items]
+      additionalProperties: false
+      properties:
+        header: { $ref: '#/components/schemas/SheetHeader' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StudentSheetItem' }
+    AnswerKeyItem:
+      type: object
+      required: [number, points, type, difficulty, stem, payload]
+      properties:
+        number: { type: integer, minimum: 1 }
+        points: { type: number }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        stem: { type: string }
+        payload: { $ref: '#/components/schemas/QuestionPayload' }
+        explanation: { type: [string, 'null'] }
+    AnswerKey:
+      type: object
+      description: Đáp án/lời giải/thang điểm cho giáo viên. Không bao giờ gộp vào file học sinh.
+      required: [header, items]
+      properties:
+        header: { $ref: '#/components/schemas/SheetHeader' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AnswerKeyItem' }
+
+    # ───────────── Audit ─────────────
+    AuditLog:
+      type: object
+      required: [id, actor, entityType, entityId, action, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        actor:
+          description: Người thao tác; null cho tác vụ hệ thống, note nêu rõ tác vụ.
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        entityType: { $ref: '#/components/schemas/AuditEntityType' }
+        entityId: { type: string, format: uuid }
+        action:
+          type: string
+          description: Vd `submit`, `approve`, `reject`, `publish`, `unpublish`, `archive`, `create`, `update`.
+        fromStatus: { type: [string, 'null'] }
+        toStatus: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    AuditLogPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AuditLog' }
+
+    # ───────────── Admin ─────────────
+    AdminUser:
+      type: object
+      required: [id, cognitoSub, email, fullName, role, isActive, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        cognitoSub: { type: string }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        departmentId: { type: [string, 'null'], format: uuid }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    AdminUserCreate:
+      type: object
+      required: [email, fullName, role]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        role: { $ref: '#/components/schemas/Role' }
+        departmentId:
+          type: [string, 'null']
+          format: uuid
+          description: Bắt buộc với `teacher`/`head`; tùy chọn với `admin`.
+    AdminUserUpdate:
+      type: object
+      required: [email, fullName, role, isActive]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        role: { $ref: '#/components/schemas/Role' }
+        departmentId: { type: [string, 'null'], format: uuid }
+        isActive: { type: boolean }
+    AdminUserPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AdminUser' }
+    ReconcileReport:
+      type: object
+      required: [checkedAt, totalUsers, mismatches]
+      properties:
+        checkedAt: { type: string, format: date-time }
+        totalUsers: { type: integer, minimum: 0 }
+        mismatches:
+          type: array
+          items:
+            type: object
+            required: [userId, email, issue]
+            properties:
+              userId: { type: [string, 'null'], format: uuid }
+              email: { type: string }
+              dbRole: { oneOf: [{ $ref: '#/components/schemas/Role' }, { type: 'null' }] }
+              cognitoGroups:
+                type: array
+                items: { type: string }
+              issue:
+                type: string
+                enum: [RoleMismatch, MissingInCognito, MissingInDb, DisabledMismatch]
+    AiUsageRow:
+      type: object
+      required: [user, date, jobs, tokens, estimatedCostUsd]
+      properties:
+        user: { $ref: '#/components/schemas/UserRef' }
+        date: { type: string, format: date }
+        jobs: { type: integer, minimum: 0 }
+        tokens: { type: integer, minimum: 0 }
+        estimatedCostUsd: { type: number, minimum: 0 }
+    AiUsagePage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items, totals]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AiUsageRow' }
+            totals:
+              type: object
+              description: Tổng trên **toàn bộ** kết quả lọc (không chỉ trang hiện tại).
+              required: [jobs, tokens, estimatedCostUsd]
+              properties:
+                jobs: { type: integer, minimum: 0 }
+                tokens: { type: integer, minimum: 0 }
+                estimatedCostUsd: { type: number, minimum: 0 }
